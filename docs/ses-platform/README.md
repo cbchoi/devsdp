@@ -9,6 +9,7 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | 03_oo_design_and_representation.md | 객체지향과 설계 패턴 연계 개선 방안, 메타모델, 작성 패턴 카탈로그, 정준 표현(YAML, DSL, Python API, PES, FPES) |
 | 04_data_structures.md | 시뮬레이터 독립적 자료구조 제안: 식별자 체계, 7개 계층(타입, 결정, 기록, 인스턴스, 경계, 바인딩), 시뮬레이터별 대응표 |
 | 05_research_directions.md | 학술적 확장 가능 요소 평가: 기여가 아닌 것, 연구 후보 8개, 우선순위, 확인 필요 사항 |
+| references.md | 검토 문헌 링크 목록 (열람 상태 표기) |
 | schema/ses.schema.json | 정준 YAML/JSON 표현의 JSON Schema 초안 |
 | examples/processing_system.ses.yaml | 처리 시스템 예시 SES (타입 수준) |
 | examples/processing_system.config.yaml | 가지치기 구성 예시 |
