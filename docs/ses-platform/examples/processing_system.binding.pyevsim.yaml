@@ -1,0 +1,38 @@
+# 모델베이스(Model Base, MB) 바인딩 예시
+# 엔티티 정의를 특정 실행 백엔드의 구현체에 연결한다. 백엔드마다 별도 파일을 둔다.
+
+binding: "1.0"
+target: pyevsim
+ses:
+  name: ProcessingSystem
+  version: "0.1.0"
+
+defaults:
+  module_prefix: processing_mb
+
+# 엔티티 이름 기준 매핑. 포트 이름과 속성 이름은 SES 정의와 일치해야 하며
+# 빌더가 구현체의 생성자 시그니처와 대조하여 검증한다.
+map:
+  Generator:
+    module: processing_mb.generators
+    class: PoissonGenerator
+    ctor_args: {interarrival: interarrival, seed: seed}
+  FifoBuffer:
+    module: processing_mb.buffers
+    class: FifoBuffer
+    ctor_args: {capacity: capacity}
+  PriorityBuffer:
+    module: processing_mb.buffers
+    class: PriorityBuffer
+    ctor_args: {capacity: capacity, levels: levels}
+  Server:
+    module: processing_mb.servers
+    class: ExpServer
+    ctor_args: {service_time: service_time}
+  Collector:
+    module: processing_mb.sinks
+    class: CsvCollector
+    ctor_args: {log_path: log_path}
+
+# 결합(coupled) 모델은 별도 구현 없이 빌더가 PES 구조로부터 생성한다.
+coupled_builder: pyevsim.default

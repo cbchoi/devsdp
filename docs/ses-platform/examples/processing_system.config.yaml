@@ -1,0 +1,28 @@
+# 가지치기 구성(configuration) 예시
+# SES(타입 수준)와 분리된 "결정" 아티팩트. 같은 SES에 여러 구성이 대응한다.
+
+configuration: "1.0"
+name: priority_4servers
+ses:
+  name: ProcessingSystem
+  version: "0.1.0"
+
+# SES 변수 값
+values:
+  num_servers: 4
+  policy: priority
+
+# 명시적 결정. 규칙으로 자동 결정되는 지점은 생략할 수 있고,
+# 명시하면 규칙 결과보다 우선한다(충돌 시 검증 단계에서 오류로 보고).
+decisions:
+  - at: Buffer/policySpec
+    choose: PriorityBuffer
+  - at: ServerPool/serversMAsp
+    cardinality: 4
+
+# 속성 재정의(오버라이드). 경로는 PES 상의 인스턴스 경로.
+overrides:
+  - at: ProcessingSystem/Generator.interarrival
+    value: 0.5
+  - at: ProcessingSystem/ServerPool/server_0.service_time
+    value: 1.5

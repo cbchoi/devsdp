@@ -1,0 +1,122 @@
+# 정준(canonical) SES 표현 예시
+# 큐와 서버 풀로 구성된 처리 시스템의 변이 공간(variability space)을 기술한다.
+# 이 파일은 "타입 수준" 명세다. 가지치기 결정값은 configuration 파일에,
+# 실행 모델 바인딩은 binding 파일에 분리하여 둔다 (03_oo_design_and_representation.md 참고).
+
+ses: "1.0"
+name: ProcessingSystem
+version: "0.1.0"
+description: 생성기, 버퍼, 서버 풀, 수집기로 구성된 처리 시스템의 구조 변이 공간
+
+# SES 변수(SESvar). 가지치기 시점에 값이 정해지며 규칙과 제약에서 참조한다.
+variables:
+  num_servers:
+    type: int
+    default: 2
+    range: [1, 8]
+    doc: 서버 풀의 서버 개수
+  policy:
+    type: enum
+    values: [fifo, priority]
+    default: fifo
+    doc: 버퍼의 서비스 정책
+
+# 포트 타입(메시지 타입) 정의. 결합(coupling)은 타입이 맞는 포트 사이에서만 허용한다.
+port_types:
+  Job:
+    fields: {id: int, priority: int, created_at: float}
+  Ack:
+    fields: {job_id: int}
+
+# 엔티티 정의 테이블. 같은 이름의 엔티티는 하나의 정의만 가진다(uniformity 공리의 참조 의미론).
+entities:
+
+  ProcessingSystem:
+    root: true
+    aspects:
+      pipelineDec:
+        parts: [Generator, Buffer, ServerPool, Collector]
+        couplings:
+          - {from: Generator.out, to: Buffer.in}
+          - {from: Buffer.out, to: ServerPool.in}
+          - {from: ServerPool.out, to: Collector.in}
+          - {from: ServerPool.done, to: Buffer.ack}
+
+  Generator:
+    ports:
+      out: {type: Job, direction: out}
+    attributes:
+      interarrival: {type: float, default: 1.0, unit: s}
+      seed: {type: int, default: 0}
+    stereotype: atomic
+
+  Buffer:
+    ports:
+      in: {type: Job, direction: in}
+      ack: {type: Ack, direction: in}
+      out: {type: Job, direction: out}
+    attributes:
+      capacity: {type: int, default: 100}
+    specializations:
+      policySpec:
+        alternatives: [FifoBuffer, PriorityBuffer]
+        select:
+          when: {var: policy, eq: fifo}
+          then: FifoBuffer
+          else: PriorityBuffer
+
+  FifoBuffer:
+    extends: Buffer
+    stereotype: atomic
+
+  PriorityBuffer:
+    extends: Buffer
+    attributes:
+      levels: {type: int, default: 3}
+    stereotype: atomic
+
+  ServerPool:
+    ports:
+      in: {type: Job, direction: in}
+      out: {type: Job, direction: out}
+      done: {type: Ack, direction: out}
+    multi_aspects:
+      serversMAsp:
+        part: Server
+        cardinality: {var: num_servers}
+        naming: "server_{i}"
+        couplings:
+          # 결합 패턴: 외부 입력을 각 복제본에 분배하고 복제본 출력을 외부 출력으로 모은다.
+          pattern: fan_out_fan_in
+          fan_out: [{from: in, to: "{part}.in"}]
+          fan_in:
+            - {from: "{part}.out", to: out}
+            - {from: "{part}.done", to: done}
+
+  Server:
+    ports:
+      in: {type: Job, direction: in}
+      out: {type: Job, direction: out}
+      done: {type: Ack, direction: out}
+    attributes:
+      service_time: {type: float, default: 2.0, unit: s}
+    stereotype: atomic
+
+  Collector:
+    ports:
+      in: {type: Job, direction: in}
+    attributes:
+      log_path: {type: str, default: "results/jobs.csv"}
+    stereotype: atomic
+
+# 선택 제약(selection constraint). 트리 경로를 가로지르는 의존성을 기술한다.
+constraints:
+  - name: priority_needs_pool
+    doc: 우선순위 정책은 서버가 2대 이상일 때만 의미가 있다.
+    when: {var: policy, eq: priority}
+    require: {var: num_servers, ge: 2}
+
+# 실험 프레임(experimental frame)을 별도 SES로 두고 합성할 수 있다.
+experimental_frames:
+  - ref: frames/throughput_frame.ses.yaml
+    attach_to: ProcessingSystem

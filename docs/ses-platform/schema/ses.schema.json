@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cbchoi/devsdp/docs/ses-platform/schema/ses.schema.json",
+  "title": "SES canonical representation (draft 0.1)",
+  "description": "System Entity Structure의 타입 수준 명세. 가지치기 결정과 모델베이스 바인딩은 별도 스키마로 둔다.",
+  "type": "object",
+  "required": ["ses", "name", "entities"],
+  "additionalProperties": false,
+  "properties": {
+    "ses": {"type": "string", "description": "표현 형식 버전", "pattern": "^[0-9]+\\.[0-9]+$"},
+    "name": {"$ref": "#/$defs/identifier"},
+    "version": {"type": "string"},
+    "description": {"type": "string"},
+    "variables": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/identifier"},
+      "additionalProperties": {"$ref": "#/$defs/variable"}
+    },
+    "port_types": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/identifier"},
+      "additionalProperties": {"$ref": "#/$defs/portType"}
+    },
+    "entities": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/identifier"},
+      "additionalProperties": {"$ref": "#/$defs/entity"}
+    },
+    "constraints": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/constraint"}
+    },
+    "experimental_frames": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ref"],
+        "additionalProperties": false,
+        "properties": {
+          "ref": {"type": "string"},
+          "attach_to": {"$ref": "#/$defs/identifier"}
+        }
+      }
+    },
+    "metadata": {"type": "object", "description": "플러그인 확장용 네임스페이스. 코어는 해석하지 않는다."}
+  },
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+    "scalarType": {"type": "string", "enum": ["int", "float", "str", "bool", "enum"]},
+    "variable": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"$ref": "#/$defs/scalarType"},
+        "default": {},
+        "range": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}},
+        "values": {"type": "array", "minItems": 1, "items": {"type": ["string", "number"]}},
+        "doc": {"type": "string"}
+      }
+    },
+    "portType": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/scalarType"}
+        },
+        "doc": {"type": "string"}
+      }
+    },
+    "port": {
+      "type": "object",
+      "required": ["type", "direction"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"$ref": "#/$defs/identifier"},
+        "direction": {"type": "string", "enum": ["in", "out"]},
+        "doc": {"type": "string"}
+      }
+    },
+    "attribute": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"$ref": "#/$defs/scalarType"},
+        "default": {},
+        "unit": {"type": "string"},
+        "values": {"type": "array", "items": {"type": ["string", "number"]}},
+        "expr": {"$ref": "#/$defs/expression", "description": "SES 변수나 함수에서 유도되는 값"},
+        "doc": {"type": "string"}
+      }
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "root": {"type": "boolean"},
+        "extends": {"$ref": "#/$defs/identifier", "description": "전문화 부모 엔티티. 속성과 포트를 상속한다."},
+        "stereotype": {"type": "string", "enum": ["atomic", "coupled", "abstract", "frame"]},
+        "doc": {"type": "string"},
+        "ports": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/identifier"},
+          "additionalProperties": {"$ref": "#/$defs/port"}
+        },
+        "attributes": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/identifier"},
+          "additionalProperties": {"$ref": "#/$defs/attribute"}
+        },
+        "aspects": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/identifier"},
+          "additionalProperties": {"$ref": "#/$defs/aspect"}
+        },
+        "multi_aspects": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/identifier"},
+          "additionalProperties": {"$ref": "#/$defs/multiAspect"}
+        },
+        "specializations": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/identifier"},
+          "additionalProperties": {"$ref": "#/$defs/specialization"}
+        },
+        "metadata": {"type": "object"}
+      }
+    },
+    "aspect": {
+      "type": "object",
+      "required": ["parts"],
+      "additionalProperties": false,
+      "properties": {
+        "parts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/identifier"}},
+        "couplings": {"type": "array", "items": {"$ref": "#/$defs/coupling"}},
+        "priority": {"type": "integer", "description": "형제 aspect 간 자동 선택 우선순위. 작을수록 우선."},
+        "rule": {"$ref": "#/$defs/expression", "description": "참일 때 이 aspect가 선택된다."},
+        "doc": {"type": "string"}
+      }
+    },
+    "multiAspect": {
+      "type": "object",
+      "required": ["part", "cardinality"],
+      "additionalProperties": false,
+      "properties": {
+        "part": {"$ref": "#/$defs/identifier"},
+        "cardinality": {
+          "oneOf": [
+            {"type": "integer", "minimum": 0},
+            {"type": "object", "required": ["var"], "additionalProperties": false,
+             "properties": {"var": {"$ref": "#/$defs/identifier"}}},
+            {"type": "object", "required": ["min"], "additionalProperties": false,
+             "properties": {"min": {"type": "integer"}, "max": {"type": "integer"}}}
+          ]
+        },
+        "naming": {"type": "string", "description": "복제본 이름 템플릿. {i}가 인덱스로 치환된다."},
+        "couplings": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pattern": {"type": "string", "enum": ["fan_out_fan_in", "chain", "ring", "broadcast", "custom"]},
+            "fan_out": {"type": "array", "items": {"$ref": "#/$defs/coupling"}},
+            "fan_in": {"type": "array", "items": {"$ref": "#/$defs/coupling"}},
+            "between": {"type": "array", "items": {"$ref": "#/$defs/coupling"},
+                        "description": "복제본 사이의 결합. {i}, {next}, {prev} 자리표시자를 쓴다."},
+            "custom": {"type": "array", "items": {"$ref": "#/$defs/coupling"}}
+          }
+        },
+        "priority": {"type": "integer"},
+        "rule": {"$ref": "#/$defs/expression"},
+        "doc": {"type": "string"}
+      }
+    },
+    "specialization": {
+      "type": "object",
+      "required": ["alternatives"],
+      "additionalProperties": false,
+      "properties": {
+        "alternatives": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/identifier"}},
+        "select": {"$ref": "#/$defs/selectRule"},
+        "default": {"$ref": "#/$defs/identifier"},
+        "doc": {"type": "string"}
+      }
+    },
+    "selectRule": {
+      "type": "object",
+      "required": ["when", "then"],
+      "additionalProperties": false,
+      "properties": {
+        "when": {"$ref": "#/$defs/expression"},
+        "then": {"$ref": "#/$defs/identifier"},
+        "else": {
+          "oneOf": [
+            {"$ref": "#/$defs/identifier"},
+            {"$ref": "#/$defs/selectRule"}
+          ]
+        }
+      }
+    },
+    "coupling": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "from": {"type": "string", "description": "port 또는 part.port. 자리표시자 {part}, {i} 허용"},
+        "to": {"type": "string"},
+        "doc": {"type": "string"}
+      }
+    },
+    "constraint": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "doc": {"type": "string"},
+        "when": {"$ref": "#/$defs/expression"},
+        "require": {"$ref": "#/$defs/expression"},
+        "forbid": {"$ref": "#/$defs/expression"}
+      }
+    },
+    "expression": {
+      "description": "작은 선언적 표현식 언어. eval 문자열 대신 구조화된 AST를 쓴다.",
+      "type": "object",
+      "oneOf": [
+        {"required": ["var", "eq"], "additionalProperties": false,
+         "properties": {"var": {"$ref": "#/$defs/identifier"}, "eq": {}}},
+        {"required": ["var", "ne"], "additionalProperties": false,
+         "properties": {"var": {"$ref": "#/$defs/identifier"}, "ne": {}}},
+        {"required": ["var", "ge"], "additionalProperties": false,
+         "properties": {"var": {"$ref": "#/$defs/identifier"}, "ge": {"type": "number"}}},
+        {"required": ["var", "gt"], "additionalProperties": false,
+         "properties": {"var": {"$ref": "#/$defs/identifier"}, "gt": {"type": "number"}}},
+        {"required": ["var", "le"], "additionalProperties": false,
+         "properties": {"var": {"$ref": "#/$defs/identifier"}, "le": {"type": "number"}}},
+        {"required": ["var", "lt"], "additionalProperties": false,
+         "properties": {"var": {"$ref": "#/$defs/identifier"}, "lt": {"type": "number"}}},
+        {"required": ["var", "in"], "additionalProperties": false,
+         "properties": {"var": {"$ref": "#/$defs/identifier"}, "in": {"type": "array"}}},
+        {"required": ["all"], "additionalProperties": false,
+         "properties": {"all": {"type": "array", "items": {"$ref": "#/$defs/expression"}}}},
+        {"required": ["any"], "additionalProperties": false,
+         "properties": {"any": {"type": "array", "items": {"$ref": "#/$defs/expression"}}}},
+        {"required": ["not"], "additionalProperties": false,
+         "properties": {"not": {"$ref": "#/$defs/expression"}}},
+        {"required": ["selected"], "additionalProperties": false,
+         "properties": {"selected": {"type": "string", "description": "경로/전문화 노드가 특정 대안을 선택했는지. 예: Buffer/policySpec=PriorityBuffer"}}},
+        {"required": ["call"], "additionalProperties": false,
+         "properties": {"call": {"$ref": "#/$defs/identifier"},
+                        "args": {"type": "array"}},
+         "description": "이름으로 등록된 SES 함수 호출. 함수 본문은 코드(플러그인)에 있고 명세에는 이름만 둔다."}
+      ]
+    }
+  }
+}
