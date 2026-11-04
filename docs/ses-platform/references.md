@@ -1,15 +1,33 @@
 # 참고 문헌 링크
 
-작성일: 2026-11-03. 링크는 검색 결과에 나타난 URL이며 본 세션에서 본문을 직접 열어 확인하지는 못했다. 열람 상태 열의 "미열람"은 그 뜻이다.
+작성일: 2026-11-03. 갱신: 2026-11-04. 링크는 검색 결과에 나타난 URL이다. 11월 4일에 저장소 reference 디렉터리의 PDF 13편은 원문 전체를 읽었다(0절). 그 밖의 문헌은 본문을 열어 보지 못했다.
+
+## 0. 원문을 읽은 문헌 (reference 디렉터리)
+
+| 파일 | 문헌 |
+|---|---|
+| reference/sne.33.1.10633.tn.OA.pdf | Folkerts, Pawletta, Durak (2023). SNE 33(1):17-25 |
+| reference/sne.29.3.10482.tn.OA.pdf | Deatcu, Folkerts, Pawletta, Durak (2019). How to Define SES Trees. SNE 29(3):117-126 |
+| reference/sne.29.4.10497.tn.OA.pdf | Folkerts, Deatcu, Pawletta, Hartmann (2019). Python-based eSES/MB. SNE 29(4):207-215 |
+| reference/a59003.arep.59_OA.pdf | Folkerts, Pawletta, Deatcu (2021). SES/MB and FMI. ARGESIM Report 59:13-20 |
+| reference/information-14-00022-v2.pdf | Zeigler (2023). MetaSES. Information 14(1):22 |
+| reference/computers-14-00258.pdf | Capocchi, Zeigler, Santucci (2025). IoCT. Computers 14(7):258 |
+| reference/information-14-00023-v2.pdf | Xie, Zhang, Li, Gu, Chen (2023). SES-X. Information 14(1):23 |
+| reference/sensors-21-06771.pdf | Lee, Bae, Paik (2021). GO-DEVS. Sensors 21(20):6771 |
+| reference/satwcon104.pdf | Carreira-Munich, Paz-Marcolla, Castro (2024). DEVS Copilot. WSC 2024:2785-2796 |
+| reference/2608.14956v1.pdf | Vasa, Sarjoughian, Yellig (2026). PDEVS statechart 생성과 검증. arXiv |
+| reference/2503.06422v1.pdf | Zhang et al. (2025). GenAI for Simulation Model in MBSE. arXiv |
+| reference/2603.03784v2.pdf | Chen, Zhuang, Li, Li (2026). DEVS-Gen 세계 모델. arXiv |
+| reference/2609.11122v2.pdf | Lektauers et al. (2026). DEVS 기반 디지털 트윈 DevOps, SMDL. arXiv |
 
 ## 1. 신규성 판단에 직접 영향을 주는 문헌 (05 문서 4절)
 
 | 문헌 | 링크 | 열람 상태 |
 |---|---|---|
-| Folkerts, Pawletta, Durak (2023). An Extension for the Specification and Automated Selection of System Variants Based on the SES Using a Problem from Process Industry. SNE 33(1) | https://www.sne-journal.org/fileadmin/user_upload_sne/SNE_Issues_OA/SNE_33_1/articles/sne.33.1.10633.tn.OA.pdf | 미열람 (공개 PDF) |
-| (저자 미확인) (2025). Simulation-Based Development of Internet of Cyber-Things Using DEVS. Computers 14(7):258 | https://www.mdpi.com/2073-431x/14/7/258 | 미열람 (공개) |
-| Zeigler (2023). Extending the Hierarchy of System Specifications and Morphisms with SES Abstraction. Information 14(1):22 | https://www.mdpi.com/2078-2489/14/1/22 (사본: http://www.sce.carleton.ca/faculty/wainer/papers/information-14-00022-v2.pdf) | 미열람 (공개) |
-| Lee, Bae, Paik (2021). GO-DEVS. Sensors 21(20):6771 | https://doi.org/10.3390/s21206771 (PMC: https://pmc.ncbi.nlm.nih.gov/articles/PMC8541595/) | 미열람 (공개) |
+| Folkerts, Pawletta, Durak (2023). An Extension for the Specification and Automated Selection of System Variants Based on the SES Using a Problem from Process Industry. SNE 33(1) | https://www.sne-journal.org/fileadmin/user_upload_sne/SNE_Issues_OA/SNE_33_1/articles/sne.33.1.10633.tn.OA.pdf | 열람 완료 |
+| Capocchi, Zeigler, Santucci (2025). Simulation-Based Development of Internet of Cyber-Things Using DEVS. Computers 14(7):258 | https://www.mdpi.com/2073-431x/14/7/258 | 열람 완료 |
+| Zeigler (2023). Extending the Hierarchy of System Specifications and Morphisms with SES Abstraction. Information 14(1):22 | https://www.mdpi.com/2078-2489/14/1/22 (사본: http://www.sce.carleton.ca/faculty/wainer/papers/information-14-00022-v2.pdf) | 열람 완료 |
+| Lee, Bae, Paik (2021). GO-DEVS. Sensors 21(20):6771 | https://doi.org/10.3390/s21206771 (PMC: https://pmc.ncbi.nlm.nih.gov/articles/PMC8541595/) | 열람 완료 |
 
 ## 2. Zeigler 계열
 
@@ -58,7 +76,7 @@
 
 | 문헌 | 링크 |
 |---|---|
-| Carreira-Munich, Paz-Marcolla, Castro (2024). DEVS Copilot. WSC 2024. DOI 10.1109/WSC63780.2024.10838994 | https://informs-sim.org/wsc24papers/satwcon104.pdf (검색 결과 URL. 해당 논문인지 접속하여 확인 필요) |
+| Carreira-Munich, Paz-Marcolla, Castro (2024). DEVS Copilot. WSC 2024. DOI 10.1109/WSC63780.2024.10838994 | https://informs-sim.org/wsc24papers/satwcon104.pdf (해당 논문임을 원문으로 확인) |
 | WSC 2025 PDEVS 텍스트 기반 생성 (Vasa, Sarjoughian 외) | https://www.informs-sim.org/wsc25papers/con178.pdf (확인 필요) |
 | LLM-based Framework for Generating and Verifying Parallel DEVS Statecharts (2026) | https://arxiv.org/abs/2608.14956 |
 | GenAI for Simulation Model in Model-Based Systems Engineering (2025) | https://arxiv.org/abs/2503.06422 |

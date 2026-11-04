@@ -211,7 +211,7 @@ PortRef 는 저장 시 문자열이고 메모리에서는 {part: Name?, port: Na
 
 저장 형식에서는 {var: x, eq: 3} 처럼 Compare 를 축약한다(스키마 참조). 적재기가 축약형을 위 AST 로 펼친다.
 
-평가 환경(Env): 변수 값 사전, 지금까지의 결정 사전, 함수 레지스트리, 현재 복제 인덱스(multi-aspect 안에서 {i}).
+평가 환경(Env): 변수 값 사전, 지금까지의 결정 사전, 함수 레지스트리, 현재 인스턴스 경로, 부모와 자식 인스턴스 참조, 현재 복제 인덱스(multi-aspect 안에서 {i}). 부모와 자식 참조는 Folkerts, Pawletta, Durak (2023)의 SESfcn 암묵 변수 PARENT, CHILDREN과 복제 인덱스 밑줄 속성이 하던 역할을 대신한다.
 
 ### 4.11 Constraint
 
@@ -284,7 +284,7 @@ InstanceNode
 | children | List<InstanceNode> | |
 | couplings | List<Coupling> | 이 노드의 분해 안에서 확정된 결합(자리표시자 치환 완료). 정의 수준 PortRef 형식 유지 |
 
-PES 는 트리이며 모든 변이성이 사라진 상태다. 규칙, 제약, 변수는 없다.
+PES 는 트리이며 모든 변이성이 사라진 상태다. 규칙, 제약, 변수는 없다. 같은 정의(resolved_def)의 인스턴스가 서로 다른 값과 다른 하위 구조를 가질 수 있다. 즉 uniformity 공리는 타입 계층(정의 테이블)에서만 성립하고 PES 에서는 성립하지 않는다. Folkerts, Pawletta, Durak (2023)이 PES 에서 uniformity 를 완화한 것과 같은 결정이며, 플랫폼은 이를 InstancePath 로 자연스럽게 표현한다.
 
 ## 8. 경계 계층: FPES 와 ComponentContract
 

@@ -196,6 +196,23 @@ Deatcu et al. (2018, 2019)의 패턴을 플랫폼 표현으로 다시 쓰고 객
 
 린트 예: specialization의 대안이 부모의 포트를 삭제하면 위반(P3, Liskov). multi_aspect에 결합 패턴이 없고 외부 포트가 있으면 경고(P9). 같은 하위 구조를 두 정의로 중복 기술하면 경고(P8).
 
+Deatcu et al. (2019) 원문의 패턴 14개와의 대응 (2026-11-04 원문 확인 후 추가). 원문 패턴은 플랫폼의 적합성 테스트 묶음으로 쓴다.
+
+| 원문 패턴 | 플랫폼 패턴 | 플랫폼에서 달라지는 점 |
+|---|---|---|
+| 1 aspect 노드 | P1 | 동일 |
+| 2 multi-aspect 노드 | P2, P9 | numRep은 cardinality, 결합 SESfcn은 coupling pattern 선언으로 대체 |
+| 3 specialization 형제 | P3 | 평가 순서를 결정 기록에 남겨 상속 속성 충돌을 보고 |
+| 4 specialization 노드 | P3 | 동일 |
+| 5, 6, 7 aspect, multi-aspect 형제 | P5 | aspectrule 대신 rule과 priority |
+| 8 선택적 구성요소(NONE 리프) | P4 | NONE을 사용자가 만들지 않고 플랫폼이 Null 대안을 생성 |
+| 9 OR 구성요소 | P4와 P7의 조합 | 전부 NONE 금지를 constraint로 표현 |
+| 10 한 경로에 두 specialization | P3, P12 | extends 사슬로 상속을 명시 |
+| 11 specialization 뒤의 aspect | P3, P1 | 동일 |
+| 12 specialization과 aspect 형제 | P5 | priority |
+| 13 한 경로에 여러 multi-aspect | P2, P9 | 이름 변경은 naming 템플릿, 가변 결합은 pattern |
+| 14 선택 제약과 의미 조건 | P7 | require, forbid, 변수 domain |
+
 ## 6. 구조 표현
 
 ### 6.1 정준 YAML 표현
