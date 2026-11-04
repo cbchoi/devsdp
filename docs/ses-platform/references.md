@@ -20,6 +20,19 @@
 | reference/2603.03784v2.pdf | Chen, Zhuang, Li, Li (2026). DEVS-Gen 세계 모델. arXiv |
 | reference/2609.11122v2.pdf | Lektauers et al. (2026). DEVS 기반 디지털 트윈 DevOps, SMDL. arXiv |
 
+## 0a. 미열람 문헌의 대안 다운로드 경로 (2026-11-04 검색)
+
+| 문헌 | 대안 경로 | 비고 |
+|---|---|---|
+| Folkerts, Pawletta, Deatcu, Zeigler (2020). Automated, Reactive Pruning of SES. SpringSim 2020 | https://ieeexplore.ieee.org/document/9185442 (IEEE, 기관 접근 필요). 대체: Folkerts (2024) 박사학위논문 ASIM FBS 42 "An Architecture for Model Behavior Generation for Multiple Simulators", 공개 PDF https://fiw.hs-wismar.de/storages/hs-wismar/_FIW/Forschungsgruppen/CEA/PhD_Projects/FBS_42_Folkerts_OA.pdf (DOI 10.11128/fbs.42, 151쪽). 반응형 가지치기가 학위논문에 통합되어 있을 가능성이 높다 | 학위논문이 2020 논문의 상위 집합일 가능성. 원문 확인 필요 |
+| Deatcu, Folkerts, Pawletta, Durak (2018). Design Patterns for Variability Modeling Using SES Ontology. Mod4Sim | ResearchGate 전문 https://www.researchgate.net/publication/324593915_Design_Patterns_for_Variability_Modeling_Using_SES_Ontology (로그인 필요). ACM DL (DBLP 경유) https://dblp.org/db/conf/springsim/mod4sim2018.html . DLR elib는 내부 전용 | 2019 SNE 판(열람 완료)이 같은 패턴을 확장 서술하므로 급하지 않음 |
+| Nam, Kim (2021). WSN-SES/MB. Sensors 21(2):430 | MDPI 공개 https://www.mdpi.com/1424-8220/21/2/430 (PDF 버튼), PMC https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7827288/ | 저자 확인: Su Man Nam, Hyung Jong Kim |
+| Zeigler (2026). EFSUT. Digital Engineering and Digital Twin 4(1):1-26 | 공개(CC BY) https://www.techscience.com/dedt/v4n1/67567 (DOI 10.32604/dedt.2026.082492). 동반 논문: "Specifying Simulation Commitments Early in System Design: Introduction to the EFSUT Methodology", Systems 14(6):691, https://doi.org/10.3390/systems14060691 (MDPI 공개) | 저자 Zeigler 확인됨. 2026년 논문이므로 R6과 관련이 큼 |
+| Schmidt, Durak, Pawletta (2016). Simulation 92(8):729-746 | SAGE 유료 https://journals.sagepub.com/doi/10.1177/0037549716656791 . ResearchGate https://www.researchgate.net/publication/305039939 . 선행 학회판(2015) DLR elib 공개 PDF https://elib.dlr.de/96045/ "Model-Based Testing Approach for MATLAB/Simulink using System Entity Structure and Experimental Frames" | 2015 학회판이 공개이며 핵심 내용이 같다 |
+| Risco-Martín et al. eUDEVS | arXiv 공개 PDF https://arxiv.org/pdf/2407.08281 | |
+| Zeigler, Sarjoughian (2013). Guide to M&S of SoS. Springer | 유료. 대체 공개 자료: Zeigler, Hammonds (2007) MS-Based Data Engineering 책 역시 유료. SES 기초는 Deatcu 2019 SNE(공개)와 SESTools README에 요약되어 있음 | |
+| Wismar CEA 그룹 출판물 목록 | https://fiw.hs-wismar.de/en/fakultaet/laboratories-research/research-groups/research-group-cea/forschung/publications | 일부 항목에 PDF 링크 |
+
 ## 1. 신규성 판단에 직접 영향을 주는 문헌 (05 문서 4절)
 
 | 문헌 | 링크 | 열람 상태 |
