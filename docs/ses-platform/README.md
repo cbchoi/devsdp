@@ -10,6 +10,8 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | 04_data_structures.md | 시뮬레이터 독립적 자료구조 제안: 식별자 체계, 7개 계층(타입, 결정, 기록, 인스턴스, 경계, 바인딩), 시뮬레이터별 대응표 |
 | 05_research_directions.md | 학술적 확장 가능 요소 평가: 기여가 아닌 것, 연구 후보 8개, 우선순위, 확인 필요 사항 |
 | 06_core_concept.md | 연구의 핵심 개념 제안: SES의 의미를 절차에서 제약으로, 정의 4개, 파생 개선점, 반증 가능한 주장, 예상 반론 |
+| 07_pruning_algebra.md | 가지치기 대수: 가지치기 관계, 가지치기 SES, 가지치기 연산, 정리 6개와 명제 1개, 예제, 검증 상태 |
+| examples/processing_system.pruning.ses.yaml | 가지치기 SES 예시 (대상 SES와 같은 스키마) |
 | references.md | 검토 문헌 링크 목록 (열람 상태 표기) |
 | schema/ses.schema.json | 정준 YAML/JSON 표현의 JSON Schema 초안 |
 | examples/processing_system.ses.yaml | 처리 시스템 예시 SES (타입 수준) |
