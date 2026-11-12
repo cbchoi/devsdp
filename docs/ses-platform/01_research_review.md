@@ -6,8 +6,8 @@
 
 - 대상: System Entity Structure(SES, 시스템 엔티티 구조) 및 SES/MB(SES와 Model Base, 모델베이스) 관련 연구. 2018년 이후를 중심으로 하되, 플랫폼 설계에 직접 영향을 주는 고전 문헌은 포함했다.
 - 방법: 1차 검토(11월 3일)는 웹 검색 요약과 GitHub 공개 소스(SESToPy, SESMoPy, SESTools) 열람으로 수행했다. 2차 검토(11월 4일)는 저장소 reference 디렉터리에 넣어 둔 논문 13편의 원문 전체를 읽고 1차 검토의 초록 수준 기술을 교정했다.
-- 원문을 읽은 13편: Zeigler (2023), Capocchi, Zeigler, Santucci (2025), Xie et al. (2023), Lee, Bae, Paik (2021), Folkerts, Pawletta, Durak (2023), Deatcu et al. (2019), Folkerts et al. (2019), Folkerts et al. (2021), Carreira-Munich et al. (2024), Vasa et al. (2026), Zhang et al. (2025), Chen et al. (2026), Lektauers et al. (2026).
-- 여전히 원문을 읽지 못한 것: Deatcu et al. (2018) 설계 패턴 원 논문(2019 SNE 판으로 대체), Folkerts et al. (2020) 반응형 가지치기, eUDEVS, WSN-SES/MB, EFSUT, Schmidt et al. (2016). 이 항목은 [미열람]으로 표기했다.
+- 원문을 읽은 19편(11월 4일 13편, 11월 12일 6편 추가): Zeigler (2023), Capocchi, Zeigler, Santucci (2025), Xie et al. (2023), Lee, Bae, Paik (2021), Folkerts, Pawletta, Durak (2023), Deatcu et al. (2019), Folkerts et al. (2019), Folkerts et al. (2021), Carreira-Munich et al. (2024), Vasa et al. (2026), Zhang et al. (2025), Chen et al. (2026), Lektauers et al. (2026), Folkerts et al. (2020), Folkerts (2024) 박사학위논문, Risco-Martín et al. eUDEVS, Nam, Kim (2021), Zeigler (2026) EFSUT 2편.
+- 여전히 원문을 읽지 못한 것: Deatcu et al. (2018) 설계 패턴 원 논문(2019 SNE 판으로 대체), Schmidt et al. (2016), Zeigler, Sarjoughian (2013). 이 항목은 [미열람]으로 표기했다.
 
 ## 1. 연구 흐름 요약
 
@@ -40,11 +40,19 @@ Capocchi, Zeigler, Santucci (2025), "Simulation-Based Development of Internet of
 - LLM, 디지털 트윈 언급 없음. 실험 프레임은 그림의 라벨로만 등장한다.
 - 시사점: SES 주도의 실행 중 재구성은 아직 아무도 하지 않았다.
 
-Risco-Martín, Mittal, de la Cruz, Zeigler, eUDEVS (2009 논문, arXiv 2407.08281로 2024 재게시). [미열람, 초록 수준]
-- SES를 UML과 DEVS를 잇는 온톨로지로 쓰며, SES로 생성한 모델에 행위 명세가 없다는 점을 명시한다.
+Risco-Martín, Mittal, de la Cruz, Zeigler, eUDEVS (2009년경 작성, arXiv 2407.08281로 2024 재게시. PDF에 학술지와 연도 표기 없음). [원문 확인]
+- SES는 시스템의 변이 모델이 아니라 메타모델 표기법으로 쓰인다. UML 메타모델(4쪽), DEVS 메타모델(7 ~ 8쪽), eUDEVS 메타모델(9쪽)을 SES 막대 표기(aspect, specialization, multi-aspect)로 그린다. 예를 들어 Couplings는 Coupling의 multi-aspect, Coupling은 Internal, ExternalInput, ExternalOutput으로 specialization된다.
+- 대응표: 표 1(11쪽) UML 컴포넌트 다이어그램과 DEVS(원자 모델은 상태 기계를 가진 컴포넌트, 결합 모델의 EIC와 EOC는 위임 커넥터, IC는 조립 커넥터). 표 2 시퀀스 다이어그램, 표 3 타이밍 다이어그램, 표 4 상태 기계 다이어그램(X는 이벤트, S는 phase와 sigma, Y는 활동).
+- 행위는 UML 상태 기계에서 SCXML을 거쳐 XSLT로 XFD-DEVS(유한 결정적 DEVS) XML로 변환되고, 구조는 컴포넌트 다이어그램에서 Digraph XML로 변환되어 TUDEVS 도구가 결합한다(18 ~ 19쪽). 부록에 Atomic과 Coupled의 XSD가 있다(24 ~ 27쪽).
+- 변이와 가지치기 규칙은 없다. 단일 구성 예(EF-P)뿐이다.
+- 시사점: XFD-DEVS XSD(포트, 상태, 전이, 결합의 src, dest, outport, inport)는 타입 있는 포트의 정준 모델과 백엔드 빌더 출력 설계의 참고가 된다. 사용자 모델 수준에서 UML 일반화와 다중성을 SES specialization과 multi-aspect에 대응시키는 부분은 없다.
 
-EFSUT(Experimental Frame-System Under Test) 관련 논문 (2026, 저자 미확인). [미열람, 출처 불확실]
-- 질문마다 실험 프레임을 유도하고 SES가 대안 구성을 생성한다고 소개된다. 참고 수준으로만 둔다.
+Zeigler (2026), "Experimental Frame-System Under Test (EFSUT): A Principled Foundation for Model Choice and Lifecycle Management in Digital Twins", Digital Engineering and Digital Twin 4(1):1-26. Zeigler (2026), "Specifying Simulation Commitments Early in System Design: Introduction to the EFSUT Methodology", Systems 14(6):691. 둘 다 단독 저자. [원문 확인]
+- 핵심 구성: 이해관계자 질문이 실험 프레임(EF)을 유도하고, EF 사이의 유도 가능성(derivability, 비교 변수 선택, 허용 입출력 행위 제한, 관측량 거칠게 하기의 유한 합성)이 반순서를 이루며(Systems 7쪽 정리 1, 증명 없음), EF와 모델 사이의 적용 가능성(applicability, 입출력 포트 호환과 EF 의미의 해석 가능)이 정의되고, 모델 사이 사상(morphism)은 DEVS 모델 사이의 구조 보존 사상으로 정의된다(DEDT 3쪽, Systems 8쪽). 적용 가능성은 프레임 반순서를 따라 아래로 전파되며, Hasse 다이어그램과 그래프 알고리즘으로 최소 충분 모델을 고른다(Systems 9쪽 표 2).
+- SES의 역할: "SES는 모델의 공간을 조직하고, EFSUT는 테스트의 공간과 테스트와 모델의 관계를 조직한다"(Systems 15쪽). DEDT 표 2(20쪽)는 SES가 "변이를 생성하지만 평가나 구성의 관련성에 대한 지침이 없다"고 적는다. 실험 프레임을 SES로 표현하거나 시스템 SES와 합성하지 않으며, 가지치기는 두 논문 어디에도 나오지 않는다.
+- 수명주기: DEDT 7절의 디지털 트윈 아키텍처(SensorIngest, TwinModel, DriftMonitor, RecalibrationController, TestHarness, ModelRepository, EFS_Repository, TwinUpdater)는 "감독되는 폐루프"이며 피드백은 파라미터(new_params)뿐이다(24쪽). "구조적 수정이 필요할 수 있다"(18쪽)는 서술만 있고 메커니즘은 없다. 적응적 실험 설계는 없다.
+- 향후 과제(두 논문 공통): 요구 산출물에서 실험 프레임 자동 유도, MBSE 도구 연계, 프레임과 모델 적용 가능성의 형식 검증, 확장 가능한 시뮬레이션 기반 의사결정 파이프라인. Systems 17쪽: 질문을 1급 수명주기 산출물로 형식화.
+- 시사점: 프레임 공간(유도 가능성 반순서)과 프레임 대 모델 적용 가능성 표는 플랫폼 L4 실험 계층의 형식 기반이 된다. 실험 프레임을 SES로 두고 시스템 SES와 합성하는 "실험 변이 공간"과 가지치기의 실험 설계 해석은 Zeigler가 명시적으로 비워 둔 자리다.
 
 ### 2.2 공학적 확장과 도구: Wismar와 DLR
 
@@ -73,8 +81,17 @@ Folkerts, Pawletta, Durak (2023), "An Extension for the Specification and Automa
 - 평가(22쪽): "경로에 multi-aspect가 많아질수록 SESfcn의 복잡도가 크게 증가한다."
 - 시사점: 복제 인덱스 속성과 중간 PES 단계는 플랫폼의 InstancePath와 naming 템플릿이 같은 문제를 더 단순하게 푼다. 솔버 기반 자동 분석과 가지치기 형식화는 완전히 비어 있다.
 
-Deatcu et al. (2018) 설계 패턴 원 논문, Folkerts et al. (2020) 반응형 가지치기. [미열람]
-- 2020 논문의 가지치기 분류(대화형, 자동, 열거형, 선택형)는 2023 논문 18쪽에서 재인용된 것으로 확인했다. 반응형의 세부는 미확인이다.
+Folkerts, Pawletta, Deatcu, Zeigler (2020), "Automated, Reactive Pruning of System Entity Structures for Simulation Engineering", SpringSim 2020. [원문 확인]
+- 가지치기 분류는 번호 목록이 아니라 산문이다. 대화형과 자동으로 나누고, 자동 안에서 열거형(모든 PES를 한 번에 생성, 목표 지향이 아님)과 목표 지향 자동화(스크립트 규칙 또는 Pawletta 2016의 SES 확장)를 구분한다(2쪽).
+- "반응형"의 정의는 프레임워크 수준이다(3 ~ 4쪽). 실험 제어(EC)가 SESvar 값을 배정하고, 모델 생성이 가지치기와 조립을 하며, 실행 유닛이 실행하고, "결과가 EC로 돌아와 평가되며, 평가 결과에 따라 EC가 다음 실험 주기를 시작할지 종료할지를 반응적으로 결정한다"(4쪽). 즉 재가지치기는 실행 사이에 일어나며 실행 중 구조 변경은 아니다. 되돌아오는 정보는 시뮬레이션 결과이고, 이것이 EC의 목표 평가를 거쳐 새 SESvar 배정이 된다.
+- 형식 알고리즘, 가지치기 기록, 되돌리기, 재현성, 제약 해결, 변이 열거나 계수, 최적화는 없다. 단계별 중간 PES 그림(5 ~ 8쪽)과 의미 조건(SESvar 값 형태에 대한 선언적 제약)만 있다. 밑줄 속성(_entity, 복제 인덱스)과 path() 함수가 이 논문에서 처음 제안되며, PES에서 uniformity 공리를 완화한다(7쪽).
+- 사례(7 ~ 10쪽): 화학 공정의 밸브 수와 제어기 종류(PID, MPC, FUZZY). 실험 SES = 시스템(밸브, 플랜트)과 실험 프레임(생성기, 변환기, 수용기). 변이 개수, 정량 결과, EC 결정 논리는 없다.
+- 한계(11쪽): "multi-aspect와 specialization의 계층 깊이가 커질수록 SES 변수 명세가 복잡하고 오류가 나기 쉽다."
+- 시사점: 반응형 가지치기는 "실행 사이의 재가지치기"이며 플랫폼의 PruningStrategy 조합(자동 전략과 ResultObserver)으로 표현된다. 실행 중 PES 차분에 의한 구조 변경(R3)과는 다른 문제다.
+
+Folkerts (2024), "An Architecture for Model Behavior Generation for Multiple Simulators", 박사학위논문, ASIM FBS 42, 174쪽. [원문 확인 진행 중. 결과 도착 후 이 항목을 갱신한다]
+
+Deatcu et al. (2018) 설계 패턴 원 논문. [미열람. 2019 SNE 판으로 대체]
 
 DLR SESTools (GitHub). Java, XML, XPath 선택 제약. 공리 여섯 가지와 가지치기 4단계를 README에 명시.
 
@@ -98,7 +115,16 @@ Lee, Bae, Paik (2021), "GO-DEVS", Sensors 21(20):6771. [원문 확인]
 - 구현: MariaDB 10.5, SQL 번역(알고리즘 1 ~ 3), 조상 검사는 전이 폐포 테이블 또는 XML 구간 번호. 합성 데이터 3만 개 모델, 질의 14개. 구조 질의는 3만 모델에서 약 6초. 복잡도 분석 없음.
 - 시사점: 블록 단위 그래프 분해(수준마다 EIC, EOC, IC 간선 유형)와 분류 체계 기반 IO 호환 정의는 플랫폼의 FPES hierarchy와 PortType 설계에 그대로 대응한다. GO-DEVS가 요청한 "결합 구조를 가진 SES의 저장과 질의"는 플랫폼이 채울 공백이다.
 
-WSN-SES/MB (Sensors 2021), 전차 취약성 분석 (2015), 미국 특허 11922102와 12265763, Cheon, Kim (2008). [미열람, 1차 검토 내용 유지]
+Nam, Kim (2021), "WSN-SES/MB: System Entity Structure and Model Base Framework for Large-Scale Wireless Sensor Networks", Sensors 21(2):430. 서울여자대학교 정보보호학과, DUDU IT. [원문 확인]
+- SES를 RASES 식 튜플 (Item, Relation, Attribute)로 적는다. Item = E 합 A 합 S, Asp는 E 곱 A 곱 2^E의 부분집합, Spec은 E 곱 S 곱 2^E의 부분집합, Coup는 A에서 2^(E.IO 곱 E.IO)로의 함수, Rules는 S에서 2^R로의 함수이며 규칙은 (조건이면 E) 쌍이다(6쪽).
+- WSN 트리(8쪽): EF-WSN이 WSN과 EF로 분해되고, WSN은 BS와 SENSORS로, SENSORS는 multi-aspect로 SENSOR를 복제하며, EF는 GENR과 TRANSD로 분해된다. specialization은 쓰이지 않는다. 결합은 aspect마다 명시 목록이다(9쪽). multi-aspect에 규칙으로 커널 하위 모델 선택, 개체 수, 센서장 크기, 기지국 위치 파라미터가 붙고 PES의 Asp 튜플에 그대로 들어간다.
+- 가지치기 알고리즘(9쪽 알고리즘 1): 15줄 의사코드가 있으나 완전히 대화형이다. specialization에서는 사용자가 선택하고, multi-aspect에서는 사용자가 커널 하위 모델과 개수를 입력하며, broadcast-model이면 센서장 크기와 기지국 위치를 입력한다. 무작위화, 열거, 자동 다양화는 없다.
+- 복제 노드 사이 결합 생성은 알고리즘에 없다. DEVS-C++ 커널의 "broadcast-model" 하위 모델이 이벤트 위치에 따라 SENSOR를 고르는 방식으로 숨겨져 있다(13쪽).
+- 모델베이스: 원자 모델 4개(SENSOR, BS, GENR, TRANSD)를 상태도와 의사코드로 제시, 시뮬레이터는 저자들의 DEVS-C++. 실험(13 ~ 16쪽): 센서 50에서 1,000개, 수작업 DEVS-C++ 대비 합성 시간 최대 19% 개선(초록은 8%), CPU 평균 7.6% 대 11.6%(초록은 23% 절감, 본문은 약 4%). 수치가 일관되지 않고 반복 측정이 없다.
+- GO-DEVS, 그래프 질의, 동적 구조, 제약 검사, SESvar와 SESfcn, MetaSES 언급 없음. 향후 과제는 라우팅과 보안 프로토콜 적용뿐이다.
+- 시사점: 복제 노드 결합을 커널에 숨기지 않고 선언적 패턴(fan_out_fan_in 등)으로 두는 것이 실질적 추가가 된다. 센서, 기지국, 생성기, 변환기 4개 모델과 50에서 1,000개 cardinality는 플랫폼 벤치마크 고정 자료로 쓸 수 있다.
+
+전차 취약성 분석 (2015), 미국 특허 11922102와 12265763, Cheon, Kim (2008). [미열람, 1차 검토 내용 유지]
 
 ### 2.5 LLM 기반 DEVS 모델 생성 (SES 미사용)
 
