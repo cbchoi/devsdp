@@ -20,7 +20,7 @@
 | reference/2603.03784v2.pdf | Chen, Zhuang, Li, Li (2026). DEVS-Gen 세계 모델. arXiv |
 | reference/2609.11122v2.pdf | Lektauers et al. (2026). DEVS 기반 디지털 트윈 DevOps, SMDL. arXiv |
 | reference/Automated_Reactive_Pruning_of_System_Entity_Structures_for_Simulation_Engineering.pdf | Folkerts, Pawletta, Deatcu, Zeigler (2020). SpringSim 2020 (11월 12일 열람) |
-| reference/FBS_42_Folkerts_OA.pdf | Folkerts (2024). 박사학위논문 ASIM FBS 42 (11월 12일 열람 진행 중) |
+| reference/FBS_42_Folkerts_OA.pdf | Folkerts (2024). 박사학위논문 ASIM FBS 42 (11월 12일 열람 완료) |
 | reference/2407.08281v1.pdf | Risco-Martín, Mittal, de la Cruz, Zeigler. eUDEVS (11월 12일 열람) |
 | reference/sensors-21-00430-v2.pdf | Nam, Kim (2021). WSN-SES/MB. Sensors 21(2):430 (11월 12일 열람) |
 | reference/TSP_DEDT_82492.pdf | Zeigler (2026). EFSUT. Digital Engineering and Digital Twin 4(1) (11월 12일 열람) |

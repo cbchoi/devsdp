@@ -89,7 +89,19 @@ Folkerts, Pawletta, Deatcu, Zeigler (2020), "Automated, Reactive Pruning of Syst
 - 한계(11쪽): "multi-aspect와 specialization의 계층 깊이가 커질수록 SES 변수 명세가 복잡하고 오류가 나기 쉽다."
 - 시사점: 반응형 가지치기는 "실행 사이의 재가지치기"이며 플랫폼의 PruningStrategy 조합(자동 전략과 ResultObserver)으로 표현된다. 실행 중 PES 차분에 의한 구조 변경(R3)과는 다른 문제다.
 
-Folkerts (2024), "An Architecture for Model Behavior Generation for Multiple Simulators", 박사학위논문, ASIM FBS 42, 174쪽. [원문 확인 진행 중. 결과 도착 후 이 항목을 갱신한다]
+Folkerts (2024), "An Architecture for Model Behavior Generation for Multiple Simulators", 박사학위논문(TU Clausthal, HS Wismar, 2024년 1월 심사), ASIM FBS 42, 본문 95쪽과 부록. [원문 확인. 쪽 번호는 인쇄 쪽 기준]
+- 구성: 2장 모델 공학(FMI, 변이 모델링, feature model과 고전 SES/MB), 3장 SES/MB 확장과 실험 연계, 4장 아키텍처(SES/MB, 실험 제어 EC, 실행 유닛 EU), 5장 사례, 6장 결론. 부록 B에 가지치기 설계 패턴 B.1에서 B.14, 부록 D에 SES의 XML 구체 구문, 부록 E에 EC 스크립트.
+- 기여 주장(93 ~ 94쪽): (a) 자동 구성 도출을 위한 가지치기 방법의 확장 알고리즘, (b) 계층적 multi-aspect 평가 방식(밑줄 생성 변수), (c) 포트 타입을 포함하도록 재정의한 결합 명세(출발 엔티티, 포트, 포트 타입, 도착 엔티티, 포트, 포트 타입의 튜플, 32쪽), (d) 시뮬레이터 독립 모델베이스의 두 방식(네이티브 확장 함수, FMI와 중간 시뮬레이터), (e) 아키텍처와 Python 도구군. Corsica 대학과 Arizona 대학의 외부 사용을 근거로 든다.
+- SES의 형식 정의는 없다. 노드 종류와 공리는 Zeigler를 따라 산문으로 기술하고, 형식화는 SESfcn 의사코드(그림 3.1), 결합 함수 의사코드(목록 3.1, 39쪽), 가지치기 활동도(그림 3.2, 35쪽), XML 구체 구문(부록 D)뿐이다. 부록 A는 PDEVS를 형식화하지 SES를 형식화하지 않는다.
+- 확장 요소(31 ~ 33쪽, 41 ~ 45쪽): specrule, aspectrule, 전역 SESvar, 의미 조건(SESvar 값 범위), SESfcn(가지치기 중 평가되는 Python 함수, children과 parent 암묵 변수), priority, mb 속성, NumRep, NONE 노드, 특수 간선으로서의 선택 제약, 계층적 multi-aspect용 밑줄 생성 변수. 모두 SESToPy 편집기에서 작성하고 XML 또는 JSON으로 저장한다.
+- 가지치기(33 ~ 36쪽, 52 ~ 53쪽): 형식 알고리즘 없음. 종류는 대화형, 자동, 열거형(30쪽). 반응형은 EC가 이전 결과에서 SESvar를 계산하여 가지치기와 조립을 다시 호출하는 방식으로만 정의된다(부록 E 목록 E.1에서 E.3: while stop == 0 루프). 변이는 PES 그림의 "Pruned with: WSLevel=1, ..." 주석으로만 기록되며 가지치기 기록, 되돌리기, 결정성과 재현성 논의는 없다.
+- 자동 분석은 전혀 없다. 변이 계수, 죽은 대안 탐지, 제약 일관성, 충족 가능성, SAT, SMT, CSP, 변이 공간 최적화 어느 것도 나오지 않는다. 의미 조건은 가지치기 시점의 값 범위 검사뿐이다. Hagendorf의 시뮬레이션 기반 구조 최적화는 관련 연구로만 인용된다(101쪽).
+- "모델 행위 생성"의 실체: 생성되는 것은 결합 모델 구조, 파라미터, 포트 결합이며 원자 모델 행위는 생성하지 않고 모델베이스의 기본 모델(DEVS 원자 모델, Modelica와 Simulink 블록, FMU)에서 가져온다. 파이프라인은 SES, 가지치기, PES, 평탄화(최소 3계층, 36쪽), FPES, 조립, SMR 또는 SME와 구성 파일, SESEuPy 실행이다. 시뮬레이터는 MATLAB/Simulink, OpenModelica, Dymola, DEVSimPy(78쪽). FMI 방식은 OpenModelica를 중간 시뮬레이터로 두어 파라미터 변이마다 모델 FMU를 내보낸다.
+- 실험 프레임: 생성기, 변환기, 수용기를 시스템과 분리하여 시뮬레이션 모델 안에 둔다(그림 3.13, 5.7). expMethod와 simMethod 노드는 EC와 EU로 "외주"되며, 그 때문에 SES가 "완전히 시뮬레이터 독립적이지 않다"(77쪽)고 저자가 인정한다.
+- 동적 구조는 실행 사이에만 가능하다. "서로 다른 모델 구조에 대한 변이 연구는 변이가 SES에 미리 명세되어 있어야 한다"(95쪽). 디지털 트윈, LLM, SES 사상, 그래프 질의는 언급 없음. feature model과 pure::variants는 2.5.2절에서 배경으로 다룬다.
+- 평가: 피드백 제어 시스템(구조 변이 2개, 파라미터 변이 2개), DEVSimPy 유역(watershed) 다해상도 모델(SESvar 4개, 허용 구조 약 6개, 논문은 개수를 적지 않음), FMI 기반 RC 공정 제어(SESvar 조합 2 곱 3 곱 2), HTML/JavaScript 시계 소프트웨어 생성. 실행 시간, 확장성, 변이 개수 등 정량 수치는 없다.
+- 한계와 향후 과제(77 ~ 78쪽, 94 ~ 95쪽): 네이티브 방식은 비용이 크고 오류가 나기 쉬움, FMU는 블랙박스라 구성요소별 디버깅이 어려움, 소규모 모델 연구에는 부적합, EU가 상용 이산 사건 시뮬레이터를 지원하지 않음. 향후: 시뮬레이터 횡단 모델베이스 조직, FMI 3.0과 SSP 표준의 적용 가능성, 이산 사건 시스템을 위한 표준 부재 대응, DEVS를 모델 교환의 범용 기반으로.
+- 시사점: Wismar 그룹의 모든 확장을 한곳에 모은 문서이며, R1의 선행 연구 범위를 확정한다. 자동 분석과 형식화는 학위논문 수준에서도 비어 있다. 포트 타입을 가진 결합 튜플과 3계층 평탄화는 플랫폼의 Coupling과 FPES 설계와 일치한다. SES가 시뮬레이터 독립적이지 않다는 자인은 플랫폼이 실험 명세를 SES 밖(구성과 실험 계층)으로 빼는 결정의 근거다.
 
 Deatcu et al. (2018) 설계 패턴 원 논문. [미열람. 2019 SNE 판으로 대체]
 
