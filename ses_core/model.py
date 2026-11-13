@@ -37,6 +37,7 @@ class Stereotype(str, Enum):
     COUPLED = "coupled"
     ABSTRACT = "abstract"
     FRAME = "frame"
+    VOID = "void"        # 없음 대안. 선택되면 구성요소가 모델에서 빠진다
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +129,7 @@ class Port:
     type: Name                   # PortType 이름
     direction: Direction
     doc: Optional[str] = None
+    required: bool = False       # 필수 포트 (08 문서의 조건 C4)
 
 
 @dataclass(frozen=True)
@@ -219,6 +221,8 @@ class CouplingPattern:
     fan_in: tuple[Coupling, ...] = ()
     between: tuple[Coupling, ...] = ()
     custom: tuple[Coupling, ...] = ()
+    first: tuple[Coupling, ...] = ()     # 첫째 복제본에만
+    last: tuple[Coupling, ...] = ()      # 마지막 복제본에만
 
 
 @dataclass(frozen=True)
@@ -337,7 +341,8 @@ class SesDocument:
         return ComponentContract(
             def_name=def_name,
             ancestors=self.ancestors(def_name),
-            ports={n: ContractPort(n, self.port_types[p.type], p.direction) for n, p in ports.items()},
+            ports={n: ContractPort(n, self.port_types[p.type], p.direction, p.required)
+                   for n, p in ports.items()},
             parameters={n: ContractParam(n, a.type, a.default, a.unit, a.values)
                         for n, a in self.all_attributes(def_name).items()},
             doc=self.entities[def_name].doc,
@@ -525,6 +530,7 @@ class ContractPort:
     name: Name
     type: PortType               # 펼친 포트 타입
     direction: Direction
+    required: bool = False
 
 
 @dataclass(frozen=True)

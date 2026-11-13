@@ -1,8 +1,10 @@
-"""정준 SES 문서(SesDocument)와 가지치기 대수(algebra) 사이의 다리.
+"""정준 SES 문서(SesDocument)와 가지치기 대수(algebra, coupling) 사이의 다리.
 
-- unfold(doc): 정의 테이블을 뿌리에서 펼쳐 SES 트리와 제약식을 만든다.
-  multi-aspect는 개수별 aspect로 전개하고, 변수는 뿌리의 specialization으로,
-  선택 규칙과 선택 제약은 제약식으로 부호화한다.
+- unfold_annotated(doc): 정의 테이블을 뿌리에서 펼쳐 SES 트리, 제약식, 주석
+  (포트, 없음 대안, 결합)을 만든다. multi-aspect는 개수별 aspect로 전개하고
+  결합 틀을 개수마다 사례화한다. 변수는 뿌리의 specialization으로, 선택 규칙과
+  선택 제약은 제약식으로 부호화한다.
+- unfold(doc): 주석 없이 SES만 돌려준다.
 - pruning_patterns(doc): 접힌 형태의 가지치기 SES를 정의별 높이 2 패턴의
   모음으로 바꾼다. 각 패턴은 그 정의의 모든 출현에 적용된다.
 
@@ -17,6 +19,7 @@ import operator
 from . import model as m
 from .algebra import (ASP, ENT, SPEC, SES, TRUE, AlgebraError, Tree,
                       f_and, f_imp, f_not, f_or, sel)
+from .coupling import SELF, Ann, PortDecl, validate
 
 _OPS = {"eq": operator.eq, "ne": operator.ne, "lt": operator.lt, "le": operator.le,
         "gt": operator.gt, "ge": operator.ge, "in": lambda v, c: v in c}
@@ -52,10 +55,61 @@ def _replica_name(ma: m.MultiAspect, i: int, n: int) -> str:
     return ma.naming.format(i=i, n=n, part=ma.part.part_name)
 
 
-def unfold(doc: m.SesDocument) -> SES:
+def _end(ref: m.PortRef, table: dict) -> tuple:
+    who = table.get(ref.part, ref.part) if ref.part is not None else SELF
+    return (who, ref.port)
+
+
+def _plain(couplings) -> tuple:
+    return tuple((_end(c.src, {}), _end(c.dst, {})) for c in couplings)
+
+
+def _instantiate_pattern(ma: m.MultiAspect, names: list) -> tuple:
+    """multi-aspect의 결합 틀을 복제본 이름 열에 대해 사례화한다."""
+    p = ma.pattern
+    if p is None:
+        return ()
+    out: list = []
+
+    def add(c: m.Coupling, table: dict) -> None:
+        out.append((_end(c.src, table), _end(c.dst, table)))
+
+    for c in p.fan_out + p.fan_in + p.custom:
+        if "{part}" in (c.src.part, c.dst.part):
+            for x in names:
+                add(c, {"{part}": x})
+        else:
+            add(c, {})
+    for c in p.first:
+        for x in names[:1]:
+            add(c, {"{part}": x})
+    for c in p.last:
+        for x in names[-1:]:
+            add(c, {"{part}": x})
+    for c in p.between:
+        holes = {c.src.part, c.dst.part}
+        if holes == {"{i}", "{next}"}:
+            for i in range(len(names) - 1):
+                add(c, {"{i}": names[i], "{next}": names[i + 1]})
+            if p.kind == m.PatternKind.RING and names:
+                add(c, {"{i}": names[-1], "{next}": names[0]})
+        elif holes == {"{i}", "{j}"}:
+            for x in names:
+                for y in names:
+                    if x != y:
+                        add(c, {"{i}": x, "{j}": y})
+        else:
+            raise AlgebraError(f"{ma.name}: between 결합은 {{i}}와 {{next}} 또는 {{i}}와 {{j}}를 써야 한다")
+    return tuple(dict.fromkeys(out))
+
+
+def unfold_annotated(doc: m.SesDocument) -> tuple:
     root = (doc.root.name,)
     kinds: dict = {}
     clauses: list = []
+    ports: dict = {}
+    void: set = set()
+    coup: dict = {}
 
     def value(name: str, v) -> tuple:
         return root + (var_node(name), str(v))
@@ -86,6 +140,11 @@ def unfold(doc: m.SesDocument) -> SES:
     def rec(def_name: str, path: tuple) -> None:
         kinds[path] = ENT
         e = doc.entities[def_name]
+        if e.ports:
+            ports[path] = {n: PortDecl(p.type, p.direction.value, p.required)
+                           for n, p in e.ports.items()}
+        if e.stereotype == m.Stereotype.VOID:
+            void.add(path)
         for sp in e.specializations.values():
             sp_path = path + (sp.name,)
             kinds[sp_path] = SPEC
@@ -98,14 +157,20 @@ def unfold(doc: m.SesDocument) -> SES:
             kinds[a_path] = ASP
             for part in a.parts:
                 rec(part.def_name, a_path + (part.part_name,))
+            if a.couplings:
+                coup[a_path] = _plain(a.couplings)
             if a.rule is not None:
                 clauses.append(f_imp(f_and(sel(path), tr(a.rule)), sel(a_path)))
         for ma in e.multi_aspects.values():
             for n in _card_set(doc, ma):
                 a_path = path + (f"{ma.name}[{n}]",)
                 kinds[a_path] = ASP
-                for i in range(n):
-                    rec(ma.part.def_name, a_path + (_replica_name(ma, i, n),))
+                names = [_replica_name(ma, i, n) for i in range(n)]
+                for name in names:
+                    rec(ma.part.def_name, a_path + (name,))
+                ks = _instantiate_pattern(ma, names)
+                if ks:
+                    coup[a_path] = ks
                 if isinstance(ma.cardinality, m.VarCard):
                     clauses.append(f_imp(sel(a_path), sel(value(ma.cardinality.var, n))))
 
@@ -119,11 +184,21 @@ def unfold(doc: m.SesDocument) -> SES:
         body = f_and(*([tr(c.require)] if c.require is not None else []),
                      *([f_not(tr(c.forbid))] if c.forbid is not None else []))
         clauses.append(f_imp(tr(c.when), body) if c.when is not None else body)
-    return SES(Tree(kinds), f_and(*clauses))
+    tree = Tree(kinds)
+    ann = Ann(ports, frozenset(void), coup)
+    validate(tree, ann)
+    return SES(tree, f_and(*clauses)), ann
+
+
+def unfold(doc: m.SesDocument) -> SES:
+    return unfold_annotated(doc)[0]
 
 
 def pruning_patterns(doc: m.SesDocument) -> list:
-    """접힌 형태의 가지치기 SES를 정의별 패턴으로 바꾼다."""
+    """접힌 형태의 가지치기 SES를 정의별 패턴으로 바꾼다.
+
+    가지치기 SES의 포트와 결합은 연산에 참여하지 않으므로 읽지 않는다.
+    """
     if doc.variables or doc.constraints:
         raise AlgebraError("접힌 가지치기 SES의 변수와 제약은 아직 지원하지 않는다")
     out = []

@@ -73,7 +73,8 @@ def _port_type(name: str, d: dict) -> m.PortType:
 
 
 def _port(name: str, d: dict) -> m.Port:
-    return m.Port(name, d["type"], m.Direction(d["direction"]), d.get("doc"))
+    return m.Port(name, d["type"], m.Direction(d["direction"]), d.get("doc"),
+                  bool(d.get("required", False)))
 
 
 def _attribute(name: str, d: dict) -> m.Attribute:
@@ -112,7 +113,8 @@ def _cardinality(x: Any) -> m.Cardinality:
 def _pattern(d: dict) -> m.CouplingPattern:
     cp = lambda key: tuple(_coupling(c) for c in d.get(key, []))  # noqa: E731
     return m.CouplingPattern(m.PatternKind(d.get("pattern", "custom")),
-                             cp("fan_out"), cp("fan_in"), cp("between"), cp("custom"))
+                             cp("fan_out"), cp("fan_in"), cp("between"), cp("custom"),
+                             cp("first"), cp("last"))
 
 
 def _multi_aspect(name: str, d: dict) -> m.MultiAspect:
@@ -256,7 +258,8 @@ def check_integrity(doc: m.SesDocument) -> None:
             if ma.pattern is not None and ma.part.def_name in ents:
                 # 자리표시자 {part} 를 실제 부분 이름으로 치환한 뒤 결합을 검사한다
                 part = m.PartRef(ma.part.def_name, ma.part.alias or "{part}")
-                all_c = ma.pattern.fan_out + ma.pattern.fan_in + ma.pattern.custom
+                all_c = (ma.pattern.fan_out + ma.pattern.fan_in + ma.pattern.custom
+                         + ma.pattern.first + ma.pattern.last)
                 _check_couplings(doc, ent, (part,), all_c, f"{name}/{ma.name}", errors)
         # specialization
         for sp in ent.specializations.values():
@@ -278,6 +281,15 @@ def check_integrity(doc: m.SesDocument) -> None:
         # 스테레오타입 일관성
         if ent.stereotype == m.Stereotype.ATOMIC and not ent.is_leaf:
             errors.append(f"{name}: atomic 인데 분해를 가진다")
+        if ent.stereotype == m.Stereotype.VOID:
+            if ent.ports or ent.attributes or ent.decomposition_names:
+                errors.append(f"{name}: 없음 대안은 포트, 속성, 분해를 가질 수 없다")
+            if ent.root:
+                errors.append(f"{name}: 없음 대안은 뿌리가 될 수 없다")
+        for asp in ent.aspects.values():
+            for p in asp.parts:
+                if p.def_name in ents and ents[p.def_name].stereotype == m.Stereotype.VOID:
+                    errors.append(f"{name}/{asp.name}: 없음 대안 {p.def_name} 은 부분이 될 수 없다")
 
     for c in doc.constraints:
         for e in (c.when, c.require, c.forbid):

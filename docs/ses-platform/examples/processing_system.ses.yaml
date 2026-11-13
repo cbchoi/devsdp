@@ -22,6 +22,7 @@ variables:
     doc: 버퍼의 서비스 정책
 
 # 포트 타입(메시지 타입) 정의. 결합(coupling)은 타입이 맞는 포트 사이에서만 허용한다.
+# required: true 인 포트는 어떤 변이에서도 결합으로 구동되어야 한다 (08 문서의 족 수준 적격성).
 port_types:
   Job:
     fields: {id: int, priority: int, created_at: float}
@@ -52,7 +53,7 @@ entities:
 
   Buffer:
     ports:
-      in: {type: Job, direction: in}
+      in: {type: Job, direction: in, required: true}
       ack: {type: Ack, direction: in}
       out: {type: Job, direction: out}
     attributes:
@@ -77,8 +78,8 @@ entities:
 
   ServerPool:
     ports:
-      in: {type: Job, direction: in}
-      out: {type: Job, direction: out}
+      in: {type: Job, direction: in, required: true}
+      out: {type: Job, direction: out, required: true}
       done: {type: Ack, direction: out}
     multi_aspects:
       serversMAsp:
@@ -95,7 +96,7 @@ entities:
 
   Server:
     ports:
-      in: {type: Job, direction: in}
+      in: {type: Job, direction: in, required: true}
       out: {type: Job, direction: out}
       done: {type: Ack, direction: out}
     attributes:
@@ -104,7 +105,7 @@ entities:
 
   Collector:
     ports:
-      in: {type: Job, direction: in}
+      in: {type: Job, direction: in, required: true}
     attributes:
       log_path: {type: str, default: "results/jobs.csv"}
     stereotype: atomic

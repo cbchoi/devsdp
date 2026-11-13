@@ -94,7 +94,7 @@
 | name | DefName | 예 | |
 | root | bool | | 기본 false |
 | extends | DefName? | | specialization 부모. 포트와 속성을 상속 |
-| stereotype | Stereotype? | | atomic, coupled, abstract, frame. 없으면 구조로 추론 |
+| stereotype | Stereotype? | | atomic, coupled, abstract, frame, void. 없으면 구조로 추론. void는 없음 대안(08 문서) |
 | ports | Map<Name, Port> | | 자기 선언 포트. 상속 포트는 포함하지 않음 |
 | attributes | Map<Name, Attribute> | | 자기 선언 속성 |
 | aspects | Map<Name, Aspect> | | |
@@ -119,6 +119,7 @@ Port
 | name | Name | 예 |
 | type | Name (PortType) | 예 |
 | direction | in 또는 out | 예 |
+| required | bool | 아니오. 필수 포트. 08 문서의 조건 C4에서 쓴다 |
 
 Attribute
 
@@ -169,7 +170,8 @@ CouplingPattern
 | kind | fan_out_fan_in, chain, ring, broadcast, custom | |
 | fan_out | List<Coupling> | 외부 in 에서 각 복제본으로. {part} 자리표시자 |
 | fan_in | List<Coupling> | 각 복제본에서 외부 out 으로 |
-| between | List<Coupling> | 복제본 사이. {i}, {next}, {prev} |
+| between | List<Coupling> | 복제본 사이. {i}와 {next}는 i번째에서 i+1번째로(ring이면 마지막에서 첫째로도), {i}와 {j}는 서로 다른 모든 쌍 |
+| first, last | List<Coupling> | 첫째 복제본, 마지막 복제본에만. {part} 자리표시자 |
 | custom | List<Coupling> | kind 가 custom 일 때 전체 목록 |
 
 ### 4.8 Specialization
