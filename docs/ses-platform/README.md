@@ -13,6 +13,7 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | 07_pruning_algebra.md | 가지치기 대수: 가지치기 관계, 가지치기 SES, 가지치기 연산, 정리 6개와 명제 1개, 예제, 검증 상태 |
 | 08_coupling_wellformedness.md | 결합을 가진 가지치기 대수와 족 수준 적격성: 변이 적격성, 특성식, 적격 핵, 정적 규율, 결합 틀의 절단 정리 |
 | 09_review.md | 전체 검토: 재현된 결함, 이론과 검증의 빈 곳, 연구 주장의 빈 곳, 정합성, 우선순위 권고 |
+| 10_theory_extensions.md | 새로운 이론으로 확장할 여지: 후보 9개의 핵심 추측, 선행 연구 위험, 비교와 권고 |
 | examples/processing_system.pruning.ses.yaml | 가지치기 SES 예시 (대상 SES와 같은 스키마) |
 | references.md | 검토 문헌 링크 목록 (열람 상태 표기) |
 | schema/ses.schema.json | 정준 YAML/JSON 표현의 JSON Schema 초안 |
