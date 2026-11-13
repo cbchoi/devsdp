@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 from itertools import product
 from typing import Iterable, Mapping, Optional
@@ -32,8 +32,14 @@ class AlgebraError(ValueError):
 
 @dataclass(frozen=True)
 class Tree:
-    """이름 경로의 접두사 닫힌 집합과 종류 함수."""
+    """이름 경로의 접두사 닫힌 집합과 종류 함수.
+
+    labels는 엔티티 노드의 정의 표지다. 노드의 이름(경로의 마지막 요소)과 별개로
+    그 노드가 어느 정의의 사례인지를 기록한다. 복제본 server_0과 별칭 부분
+    primary는 이름이 달라도 표지는 Server다. 표지가 없으면 이름을 표지로 본다.
+    """
     kinds: Mapping[Path, str]
+    labels: Mapping[Path, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         roots = [p for p in self.kinds if len(p) == 1]
@@ -66,6 +72,9 @@ class Tree:
 
     def kind(self, p: Path) -> str:
         return self.kinds[p]
+
+    def label(self, p: Path) -> str:
+        return self.labels.get(p, p[-1])
 
     def children(self, p: Path) -> tuple:
         return self._children[p]
@@ -169,7 +178,7 @@ def interior(T: Tree, X: Iterable[Path]) -> Optional[frozenset]:
 
 def restrict(T: Tree, K: Iterable[Path]) -> Tree:
     """T|K. K는 적격 선택이어야 한다."""
-    return Tree({n: T.kinds[n] for n in K})
+    return Tree({n: T.kinds[n] for n in K}, {n: l for n, l in T.labels.items() if n in K})
 
 
 def variants(T: Tree) -> list:
@@ -271,12 +280,18 @@ def holds(f, V: frozenset) -> bool:
         return any(holds(g, V) for g in f[1:])
     if op == "imp":
         return (not holds(f[1], V)) or holds(f[2], V)
+    if op == "pred":                    # 변이에 대한 임의의 술어 (문법적 식이 없는 확장용)
+        return bool(f[1](V))
     raise AlgebraError(f"알 수 없는 제약식: {f!r}")
 
 
 def _rebase(f, old_root: str, new_prefix: Path):
     op = f[0]
     if op == "true":
+        return f
+    if op == "pred":
+        if new_prefix != (old_root,):
+            raise AlgebraError("술어 제약은 뿌리에 놓인 가지치기 SES에서만 쓸 수 있다")
         return f
     if op == "sel":
         p = f[1]
@@ -315,13 +330,14 @@ def is_pes(S: SES) -> bool:
 # ---------------------------------------------------------------------------
 
 def occurrences(T: Tree, name: str) -> list:
-    return sorted(q for q in T.nodes if T.kind(q) == ENT and q[-1] == name)
+    """정의 표지가 name인 엔티티 노드."""
+    return sorted(q for q in T.nodes if T.kind(q) == ENT and T.label(q) == name)
 
 
 def matches(T: Tree, P: Tree) -> list:
-    """대응 쌍 (p, q). P의 뿌리 이름이 T에서 출현하는 곳마다 P를 접붙인다."""
+    """대응 쌍 (p, q). P의 뿌리 표지가 T에서 출현하는 곳마다 P를 접붙인다."""
     out = []
-    for o in occurrences(T, P.root[0]):
+    for o in occurrences(T, P.label(P.root)):
         for p in P.nodes:
             q = o + p[1:]
             if q in T.nodes:
@@ -350,7 +366,8 @@ def lift_formula(T: Tree, P: SES):
     if P.phi == TRUE:
         return TRUE
     name = P.tree.root[0]
-    return f_and(*(f_imp(sel(o), _rebase(P.phi, name, o)) for o in occurrences(T, name)))
+    return f_and(*(f_imp(sel(o), _rebase(P.phi, name, o))
+                   for o in occurrences(T, P.tree.label(P.tree.root))))
 
 
 def meet(S: SES, P: SES) -> Optional[SES]:
@@ -379,12 +396,12 @@ def compatible(S: SES, P: SES) -> list:
 
 
 def is_uniform(T: Tree) -> bool:
-    """uniformity: 같은 이름의 엔티티는 같은 하위 구조를 가진다."""
+    """uniformity: 같은 정의 표지의 엔티티는 같은 하위 구조를 가진다."""
     shapes: dict = {}
     for q in T.nodes:
         if T.kind(q) != ENT:
             continue
         shape = frozenset((n[len(q):], T.kind(n)) for n in T.nodes if n[:len(q)] == q)
-        if shapes.setdefault(q[-1], shape) != shape:
+        if shapes.setdefault(T.label(q), shape) != shape:
             return False
     return True

@@ -19,7 +19,10 @@ import operator
 from . import model as m
 from .algebra import (ASP, ENT, SPEC, SES, TRUE, AlgebraError, Tree,
                       f_and, f_imp, f_not, f_or, sel)
-from .coupling import SELF, Ann, PortDecl, validate
+from .coupling import SELF, Ann, Coupling, PortDecl, validate
+from .ext_attr import AttrDecl, Attributes
+from .ext_text import Text
+from .extension import Layered
 
 _OPS = {"eq": operator.eq, "ne": operator.ne, "lt": operator.lt, "le": operator.le,
         "gt": operator.gt, "ge": operator.ge, "in": lambda v, c: v in c}
@@ -103,13 +106,17 @@ def _instantiate_pattern(ma: m.MultiAspect, names: list) -> tuple:
     return tuple(dict.fromkeys(out))
 
 
-def unfold_annotated(doc: m.SesDocument) -> tuple:
+def _unfold(doc: m.SesDocument) -> dict:
     root = (doc.root.name,)
     kinds: dict = {}
+    labels: dict = {}
     clauses: list = []
     ports: dict = {}
     void: set = set()
     coup: dict = {}
+    attrs: dict = {}
+    templates: dict = {}
+    layouts: dict = {}
 
     def value(name: str, v) -> tuple:
         return root + (var_node(name), str(v))
@@ -139,7 +146,16 @@ def unfold_annotated(doc: m.SesDocument) -> tuple:
 
     def rec(def_name: str, path: tuple) -> None:
         kinds[path] = ENT
+        labels[path] = def_name                      # 정의 표지: 이름과 별개
         e = doc.entities[def_name]
+        if e.attributes:
+            attrs[path] = {n: AttrDecl(a.type.value, a.default) for n, a in e.attributes.items()}
+        text = e.metadata.get("text") if e.metadata else None
+        if isinstance(text, str):
+            templates[path] = text
+        elif isinstance(text, dict) and "template" in text:
+            templates[path] = text["template"]
+        seps = text.get("separators", {}) if isinstance(text, dict) else {}
         if e.ports:
             ports[path] = {n: PortDecl(p.type, p.direction.value, p.required)
                            for n, p in e.ports.items()}
@@ -157,6 +173,7 @@ def unfold_annotated(doc: m.SesDocument) -> tuple:
             kinds[a_path] = ASP
             for part in a.parts:
                 rec(part.def_name, a_path + (part.part_name,))
+            layouts[a_path] = (tuple(p.part_name for p in a.parts), seps.get(a.name, ""))
             if a.couplings:
                 coup[a_path] = _plain(a.couplings)
             if a.rule is not None:
@@ -168,6 +185,7 @@ def unfold_annotated(doc: m.SesDocument) -> tuple:
                 names = [_replica_name(ma, i, n) for i in range(n)]
                 for name in names:
                     rec(ma.part.def_name, a_path + (name,))
+                layouts[a_path] = (tuple(names), seps.get(ma.name, ""))
                 ks = _instantiate_pattern(ma, names)
                 if ks:
                     coup[a_path] = ks
@@ -184,14 +202,35 @@ def unfold_annotated(doc: m.SesDocument) -> tuple:
         body = f_and(*([tr(c.require)] if c.require is not None else []),
                      *([f_not(tr(c.forbid))] if c.forbid is not None else []))
         clauses.append(f_imp(tr(c.when), body) if c.when is not None else body)
-    tree = Tree(kinds)
+    tree = Tree(kinds, labels)
     ann = Ann(ports, frozenset(void), coup)
     validate(tree, ann)
-    return SES(tree, f_and(*clauses)), ann
+    return {"ses": SES(tree, f_and(*clauses)), "ann": ann, "attrs": attrs,
+            "templates": templates, "layouts": layouts}
+
+
+def unfold_annotated(doc: m.SesDocument) -> tuple:
+    """SES와 결합 주석(포트, 없음 대안, 결합)."""
+    u = _unfold(doc)
+    return u["ses"], u["ann"]
 
 
 def unfold(doc: m.SesDocument) -> SES:
-    return unfold_annotated(doc)[0]
+    return _unfold(doc)["ses"]
+
+
+def unfold_layered(doc: m.SesDocument) -> Layered:
+    """SES + DEVS + Attr (+ Text): 정준 문서가 담은 확장들을 얹은 것.
+
+    포트와 결합, 속성은 정준 YAML의 내장 열쇠에서, 문서 조립 틀은 엔티티의
+    metadata.text 에서 읽는다.
+    """
+    u = _unfold(doc)
+    ann = u["ann"]
+    exts = [Coupling(ann.ports, ann.coup), Attributes(u["attrs"])]
+    if u["templates"]:
+        exts.append(Text(u["templates"], u["layouts"]))
+    return Layered(u["ses"], ann.void, tuple(exts))
 
 
 def pruning_patterns(doc: m.SesDocument) -> list:

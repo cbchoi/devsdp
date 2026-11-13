@@ -19,6 +19,8 @@ from typing import Mapping, Optional
 
 from .algebra import (ASP, ENT, SPEC, SES, AlgebraError, Tree, f_and, f_imp, f_not, f_or,
                       holds, prune, sel, sem)
+from .extension import Extension, View
+from .skeleton import component_of, components, is_component, members, owner  # noqa: F401
 
 IN, OUT = "in", "out"
 SELF = None          # 결합 끝점의 "자기 자신" (결합 모델의 외부 포트)
@@ -67,43 +69,6 @@ def validate(T: Tree, ann: Ann) -> None:
             for w in (sw, dw):
                 if w is not SELF and w not in names:
                     raise AlgebraError(f"{a}: 결합이 가리키는 부분 {w} 가 없다")
-
-
-# ---------------------------------------------------------------------------
-# 구성 노드와 병합체
-# ---------------------------------------------------------------------------
-
-def is_component(T: Tree, e: tuple) -> bool:
-    """뿌리이거나 aspect의 부분인 엔티티."""
-    return len(e) == 1 or T.kind(e[:-1]) == ASP
-
-
-def component_of(T: Tree, y: tuple) -> tuple:
-    """엔티티 y가 속할 수 있는 병합체의 구성 노드."""
-    while len(y) > 1 and T.kind(y[:-1]) == SPEC:
-        y = y[:-2]
-    return y
-
-
-def members(T: Tree, e: tuple) -> list:
-    """M(e): 구성 노드 e의 병합체에 들어갈 수 있는 엔티티 노드."""
-    out, stack = [e], [e]
-    while stack:
-        y = stack.pop()
-        for s in T.specs(y):
-            for c in T.children(s):
-                out.append(c)
-                stack.append(c)
-    return out
-
-
-def owner(T: Tree, a: tuple) -> tuple:
-    """aspect a를 가진 병합체의 구성 노드."""
-    return component_of(T, a[:-1])
-
-
-def components(T: Tree) -> list:
-    return sorted(e for e in T.nodes if T.kind(e) == ENT and is_component(T, e))
 
 
 def _want(sw, dw, no_self_loop: bool):
@@ -465,3 +430,89 @@ def cut_cardinalities(cards) -> list:
     small = [n for n in cards if n <= 2]
     large = [n for n in cards if n >= 3]
     return small + large[:1]
+
+
+# ---------------------------------------------------------------------------
+# 확장으로서의 결합: SES + DEVS
+# ---------------------------------------------------------------------------
+
+class Coupling(Extension):
+    """포트와 결합을 얹는 확장. 위의 함수들과 같은 적격성을 확장 계약으로 다시 쓴 것이다.
+
+    주석: 엔티티에는 포트 선언, aspect에는 결합.
+    병합: 포트 선언의 합집합. 같은 이름이 다른 타입이나 방향이면 충돌.
+    검사: C1 ~ C4.
+    해석: 계층적 결합 모델 구조.
+    """
+
+    name = "devs"
+
+    def __init__(self, ports: Mapping, coup: Mapping, no_self_loop: bool = False):
+        self.ports, self.coup, self.no_self_loop = ports, coup, no_self_loop
+
+    def entity(self, path):
+        return self.ports.get(path) or None
+
+    def aspect(self, path):
+        return self.coup.get(path, ())
+
+    def merge(self, tree, items):
+        decls: dict = {}
+        for _, ports in items:
+            for p, d in ports.items():
+                decls.setdefault(p, []).append(d)
+        merged = {p: PortDecl(ds[0].type, ds[0].direction, any(d.required for d in ds))
+                  for p, ds in decls.items()}
+        conflicts = [f"포트 {p} 의 선언이 충돌한다" for p, ds in decls.items()
+                     if len({(d.type, d.direction) for d in ds}) > 1]
+        return merged, conflicts
+
+    def _live(self, v: View) -> list:
+        dead = set(v.absent)
+        return [k for k in (v.aspect_ann or ()) if not ({k[0][0], k[1][0]} & dead)]
+
+    def check(self, v: View) -> list:
+        if v.comp.aspect is None:
+            return []
+        out = []
+        ports = v.ann or {}
+        live = self._live(v)
+
+        def decl(who, p):
+            return (ports if who is SELF else (v.children[who].ann or {})).get(p)
+
+        for (sw, sp), (dw, dp) in live:
+            sd, dd = decl(sw, sp), decl(dw, dp)
+            label = f"{sw or 'self'}.{sp} 에서 {dw or 'self'}.{dp}"
+            if sd is None or dd is None:
+                out.append(("C1", f"{label}: 포트가 없다"))
+                continue
+            want = _want(sw, dw, self.no_self_loop)
+            if want is None or (sd.direction, dd.direction) != want:
+                out.append(("C2", f"{label}: 방향이 맞지 않다"))
+            if sd.type != dd.type:
+                out.append(("C3", f"{label}: 타입이 다르다 ({sd.type}, {dd.type})"))
+        driven = {k[1] for k in live}
+        for n, child in v.children.items():
+            for p, d in (child.ann or {}).items():
+                if d.direction == IN and d.required and (n, p) not in driven:
+                    out.append(("C4", f"{n}.{p}: 필수 입력 포트에 들어오는 결합이 없다"))
+        for p, d in ports.items():
+            if d.direction == OUT and d.required and (SELF, p) not in driven:
+                out.append(("C4", f"self.{p}: 필수 출력 포트로 나가는 결합이 없다"))
+        return out
+
+    def interpret(self, v: View, children):
+        node = {"ports": {p: (d.type, d.direction) for p, d in (v.ann or {}).items()},
+                "children": dict(children), "eic": [], "eoc": [], "ic": []}
+        for (sw, sp), (dw, dp) in self._live(v):
+            if sw is SELF:
+                node["eic"].append((sp, (dw, dp)))
+            elif dw is SELF:
+                node["eoc"].append(((sw, sp), dp))
+            else:
+                node["ic"].append(((sw, sp), (dw, dp)))
+        return node
+
+    def psi(self, tree, void):
+        return psi(tree, Ann(self.ports, void, self.coup), self.no_self_loop)
