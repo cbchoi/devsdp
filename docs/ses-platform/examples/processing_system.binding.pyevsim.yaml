@@ -1,38 +1,17 @@
-# 모델베이스(Model Base, MB) 바인딩 예시
-# 엔티티 정의를 특정 실행 백엔드의 구현체에 연결한다. 백엔드마다 별도 파일을 둔다.
+# 바인딩 예시: 처리 시스템에 pyevsim 실행기를 붙인다 (15_pyevsim_executor.md 참고)
+# 정의 이름을 pyevsim 모델베이스(examples/processing_pyevsim.py)의 모듈에 잇는다. 모듈의 본체는
+# pyevsim의 모델(BehaviorModelExecutor)이다. 모듈의 이름과 인터페이스는 DEVS 바인딩
+# (processing_system.binding.devs.yaml)의 것과 같으므로 같은 이름에 공통 모델베이스
+# (examples/processing_mb.py)를 붙여도 된다. 결합 모델은 묶지 않는다. 실행기가 SES의 구조를
+# 평탄화해 엔진의 연결로 등록한다.
 
 binding: "1.0"
-target: pyevsim
-ses:
-  name: ProcessingSystem
-  version: "0.1.0"
+executor: pyevsim
+target: ProcessingSystem
 
-defaults:
-  module_prefix: processing_mb
-
-# 엔티티 이름 기준 매핑. 포트 이름과 속성 이름은 SES 정의와 일치해야 하며
-# 빌더가 구현체의 생성자 시그니처와 대조하여 검증한다.
 map:
-  Generator:
-    module: processing_mb.generators
-    class: PoissonGenerator
-    ctor_args: {interarrival: interarrival, seed: seed}
-  FifoBuffer:
-    module: processing_mb.buffers
-    class: FifoBuffer
-    ctor_args: {capacity: capacity}
-  PriorityBuffer:
-    module: processing_mb.buffers
-    class: PriorityBuffer
-    ctor_args: {capacity: capacity, levels: levels}
-  Server:
-    module: processing_mb.servers
-    class: ExpServer
-    ctor_args: {service_time: service_time}
-  Collector:
-    module: processing_mb.sinks
-    class: CsvCollector
-    ctor_args: {log_path: log_path}
-
-# 결합(coupled) 모델은 별도 구현 없이 빌더가 PES 구조로부터 생성한다.
-coupled_builder: pyevsim.default
+  Generator: {module: Generator}
+  FifoBuffer: {module: FifoBuffer}
+  PriorityBuffer: {module: PriorityBuffer}
+  Server: {module: Server}
+  Collector: {module: Collector}

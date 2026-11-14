@@ -6,6 +6,9 @@
 - extension, coupling, ext_attr, ext_text, profile: 확장 계약과 확장들.
 - unfold: 정준 문서에서 분석 모델(펼친 나무)로.
 - edit, decisions, diagnose: 편집기를 위한 자료구조. 편집 모델, 결정 집합, 진단.
+- structure, executor, devs, hw, classic: 실행기를 붙이는 자리. 구조와 평탄화, 바인딩과 계획,
+  DEVS 참조 실행기, 하드웨어 실행기, 고전 SES/MB의 절차적 의미.
+- pyevsim_executor: pyevsim 실행기. pyevsim이 설치되어 있어야 가져올 수 있다.
 
 이 패키지의 최상위에서는 정준 문서의 자료구조와 적재기만 내보낸다.
 나머지는 모듈 이름으로 가져온다.
