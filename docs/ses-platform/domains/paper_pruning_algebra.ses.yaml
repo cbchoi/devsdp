@@ -1,0 +1,54 @@
+# 도메인 문서: 어느 논문의 논리 구성 (프로파일 paper)
+# 변이 하나가 논문의 구성안 하나다.
+ses: "1.0"
+name: 가지치기대수논문
+profile: paper
+
+entities:
+  가지치기대수논문:
+    root: true
+    kind: 논문
+    aspects:
+      논리구성:
+        parts: [RQ1, RQ2, C1, C2, C3, E1, E2, E3, E4]
+
+  RQ1: {kind: 연구질문, doc: 가지치기를 SES 사이의 연산으로 정의할 수 있는가}
+  RQ2: {kind: 연구질문, doc: 모든 변이가 조립 가능함을 보장할 수 있는가}
+
+  C1: {kind: 주장, links: {답함: [RQ1]}, doc: 가지치기는 격자의 교다}
+  C2: {kind: 주장, links: {답함: [RQ2], 전제: [C1]}, doc: 적격성은 가지치기에 보존된다}
+
+  # 넣을지 말지 정하지 못한 주장
+  C3:
+    kind: 주장
+    fields: {유형: 보조}
+    links: {답함: [RQ2]}
+    doc: 복제 개수가 커도 판정할 수 있다
+    specializations:
+      포함여부:
+        alternatives: [C3포함, C3제외]
+  C3포함: {extends: C3}
+  C3제외: {extends: C3, stereotype: void}
+
+  E1: {kind: 근거, fields: {종류: 증명, 분량: 3}, links: {지지: [C1]}}
+  E2: {kind: 근거, fields: {종류: 실험, 분량: 4}, links: {지지: [C1, C2]}}
+
+  # 평가 방법은 둘 가운데 하나. 방법에 따라 지지하는 주장과 분량이 다르다
+  E3:
+    kind: 근거
+    specializations:
+      평가방법:
+        alternatives: [사례연구, 성능실험]
+  사례연구: {extends: E3, fields: {종류: 사례, 분량: 3}, links: {지지: [C2]}}
+  성능실험: {extends: E3, fields: {종류: 실험, 분량: 4}, links: {지지: [C3]}}
+
+  # 넣을 수도 있는 추가 증명
+  E4:
+    kind: 근거
+    fields: {종류: 증명, 분량: 3}
+    links: {지지: [C3]}
+    specializations:
+      포함여부:
+        alternatives: [E4포함, E4제외]
+  E4포함: {extends: E4}
+  E4제외: {extends: E4, stereotype: void}

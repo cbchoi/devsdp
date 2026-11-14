@@ -1,0 +1,36 @@
+# 도메인 프로파일: 논문의 논리 구성
+profile: "1.0"
+name: paper
+description: 논문의 연구질문, 주장, 근거와 그 사이의 논리 관계
+
+kinds:
+  논문:
+    contains: [연구질문, 주장, 근거]
+  연구질문: {}
+  주장:
+    fields:
+      유형: {type: enum, values: [핵심, 보조], default: 핵심}
+  근거:
+    fields:
+      종류: {type: enum, values: [증명, 실험, 사례, 인용], required: true}
+      분량: {type: int, required: true, doc: 쪽 수}
+
+links:
+  답함: {from: [주장], to: [연구질문], target: required}
+  지지: {from: [근거], to: [주장], doc: 대상 주장이 빠지면 관계도 사라진다}
+  전제: {from: [주장], to: [주장], acyclic: true, target: required}
+
+rules:
+  - name: 연구질문에는 답이 있다
+    each: 연구질문
+    incoming: {답함: 1}
+  - name: 주장에는 근거가 있다
+    each: 주장
+    incoming: {지지: 1}
+  - name: 근거는 어떤 주장을 지지한다
+    each: 근거
+    outgoing: {지지: 1}
+  - name: 분량
+    at: 논문
+    sum: {field: 분량, over: [근거]}
+    max: 12

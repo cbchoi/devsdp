@@ -1,0 +1,43 @@
+# 도메인 프로파일: 학습 커리큘럼의 내용체계
+# 분야의 낱말(유형, 필드, 관계, 규칙)은 이 파일에만 있다. 코드는 없다.
+profile: "1.0"
+name: curriculum
+description: 학습 커리큘럼의 내용체계
+
+kinds:
+  과정:
+    doc: 하나의 교과 또는 강좌
+    contains: [영역, 성취기준, 평가]
+  영역:
+    doc: 내용 영역
+    contains: [단원]
+  단원:
+    doc: 수업 단위
+    fields:
+      시수: {type: int, required: true}
+      수준: {type: enum, values: [기초, 심화], default: 기초}
+  성취기준:
+    fields:
+      코드: {type: str, required: true}
+  평가:
+    fields:
+      비중: {type: int, required: true}
+
+links:
+  선수: {from: [단원], to: [단원], acyclic: true, target: required, doc: 먼저 배워야 하는 단원}
+  달성: {from: [단원], to: [성취기준], doc: 이 단원이 다루는 성취기준}
+  평가함: {from: [평가], to: [성취기준], doc: 이 평가가 확인하는 성취기준}
+
+rules:
+  - name: 성취기준은 다뤄지고 평가된다
+    each: 성취기준
+    incoming: {달성: 1, 평가함: 1}
+  - name: 총시수
+    at: 과정
+    sum: {field: 시수, over: [단원]}
+    min: 30
+    max: 45
+  - name: 평가비중합
+    at: 과정
+    sum: {field: 비중, over: [평가]}
+    equals: 100

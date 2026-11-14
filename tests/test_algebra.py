@@ -131,7 +131,7 @@ def test_lemma1_closure_and_union(seed):
 def test_lemma1_interior_is_greatest(seed):
     rng = random.Random(seed)
     T = rand_tree(rng)
-    X = frozenset(n for n in T.nodes if rng.random() < 0.85) | {T.root}
+    X = frozenset(n for n in sorted(T.nodes) if rng.random() < 0.85) | {T.root}
     inside = var_in(T, X)
     K = interior(T, X)
     if not inside:

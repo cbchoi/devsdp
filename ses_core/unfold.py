@@ -23,6 +23,7 @@ from .coupling import SELF, Ann, Coupling, PortDecl, validate
 from .ext_attr import AttrDecl, Attributes
 from .ext_text import Text
 from .extension import Layered
+from .profile import Domain, Item, Profile
 
 _OPS = {"eq": operator.eq, "ne": operator.ne, "lt": operator.lt, "le": operator.le,
         "gt": operator.gt, "ge": operator.ge, "in": lambda v, c: v in c}
@@ -117,6 +118,7 @@ def _unfold(doc: m.SesDocument) -> dict:
     attrs: dict = {}
     templates: dict = {}
     layouts: dict = {}
+    items: dict = {}
 
     def value(name: str, v) -> tuple:
         return root + (var_node(name), str(v))
@@ -150,6 +152,8 @@ def _unfold(doc: m.SesDocument) -> dict:
         e = doc.entities[def_name]
         if e.attributes:
             attrs[path] = {n: AttrDecl(a.type.value, a.default) for n, a in e.attributes.items()}
+        if e.kind is not None or e.fields or e.links:
+            items[path] = Item(e.kind, dict(e.fields), dict(e.links))
         text = e.metadata.get("text") if e.metadata else None
         if isinstance(text, str):
             templates[path] = text
@@ -206,7 +210,7 @@ def _unfold(doc: m.SesDocument) -> dict:
     ann = Ann(ports, frozenset(void), coup)
     validate(tree, ann)
     return {"ses": SES(tree, f_and(*clauses)), "ann": ann, "attrs": attrs,
-            "templates": templates, "layouts": layouts}
+            "templates": templates, "layouts": layouts, "items": items}
 
 
 def unfold_annotated(doc: m.SesDocument) -> tuple:
@@ -219,17 +223,29 @@ def unfold(doc: m.SesDocument) -> SES:
     return _unfold(doc)["ses"]
 
 
-def unfold_layered(doc: m.SesDocument) -> Layered:
-    """SES + DEVS + Attr (+ Text): 정준 문서가 담은 확장들을 얹은 것.
+def unfold_layered(doc: m.SesDocument, profile: Profile = None) -> Layered:
+    """정준 문서가 담은 확장들을 얹은 것.
 
-    포트와 결합, 속성은 정준 YAML의 내장 열쇠에서, 문서 조립 틀은 엔티티의
-    metadata.text 에서 읽는다.
+    포트와 결합(DEVS), 속성(Attr)은 정준 YAML의 내장 열쇠에서, 문서 조립 틀(Text)은
+    엔티티의 metadata.text 에서 읽는다. 문서가 프로파일을 따르면(profile 열쇠)
+    kind, fields, links 를 그 프로파일로 해석하는 범용 확장(Domain)을 얹는다.
+    쓰이지 않는 확장은 얹지 않는다.
     """
     u = _unfold(doc)
     ann = u["ann"]
-    exts = [Coupling(ann.ports, ann.coup), Attributes(u["attrs"])]
+    exts = []
+    if ann.ports or ann.coup:
+        exts.append(Coupling(ann.ports, ann.coup))
+    if u["attrs"]:
+        exts.append(Attributes(u["attrs"]))
     if u["templates"]:
         exts.append(Text(u["templates"], u["layouts"]))
+    if doc.profile is not None or u["items"]:
+        if profile is None:
+            raise AlgebraError(f"문서가 프로파일 {doc.profile} 을 따른다. 프로파일을 함께 주어야 한다")
+        if doc.profile is not None and doc.profile != profile.name:
+            raise AlgebraError(f"문서의 프로파일은 {doc.profile} 인데 {profile.name} 이 주어졌다")
+        exts.append(Domain(profile, u["items"]))
     return Layered(u["ses"], ann.void, tuple(exts))
 
 

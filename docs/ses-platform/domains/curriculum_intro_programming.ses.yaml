@@ -1,0 +1,70 @@
+# 도메인 문서: 프로그래밍 입문 과정의 내용체계 (프로파일 curriculum)
+# 구조(분해, 대안, 복제, 선택)는 SES 핵의 열쇠로, 분야의 내용은 kind, fields, links로 적는다.
+# 변이 하나가 강의계획 하나다.
+ses: "1.0"
+name: 프로그래밍입문
+profile: curriculum
+
+variables:
+  실습주수: {type: int, range: [1, 3], doc: 실습 단원의 개수}
+
+entities:
+  프로그래밍입문:
+    root: true
+    kind: 과정
+    aspects:
+      구성:
+        parts: [기초영역, 응용영역, 실습영역, LO1, LO2, LO3, LO4, 중간평가, 기말평가]
+
+  기초영역:
+    kind: 영역
+    aspects:
+      단원구성:
+        parts: [변수와자료형, 제어구조, 함수, 심화알고리즘]
+
+  변수와자료형: {kind: 단원, fields: {시수: 6}, links: {달성: [LO1]}}
+  제어구조: {kind: 단원, fields: {시수: 6}, links: {선수: [변수와자료형], 달성: [LO1]}}
+  함수: {kind: 단원, fields: {시수: 6}, links: {선수: [제어구조], 달성: [LO2]}}
+
+  # 선택 단원: 개설하지 않을 수 있다
+  심화알고리즘:
+    kind: 단원
+    fields: {시수: 6, 수준: 심화}
+    links: {선수: [함수], 달성: [LO4]}
+    specializations:
+      개설여부:
+        alternatives: [심화개설, 심화미개설]
+  심화개설: {extends: 심화알고리즘}
+  심화미개설: {extends: 심화알고리즘, stereotype: void}
+
+  # 응용 영역은 두 가지 구성 가운데 하나를 고른다 (트랙)
+  응용영역:
+    kind: 영역
+    aspects:
+      자료처리트랙:
+        parts: [파일입출력, 자료분석]
+      웹트랙:
+        parts: [웹기초, 웹프로젝트]
+
+  파일입출력: {kind: 단원, fields: {시수: 6}, links: {선수: [함수]}}
+  자료분석: {kind: 단원, fields: {시수: 9}, links: {선수: [파일입출력], 달성: [LO3]}}
+  웹기초: {kind: 단원, fields: {시수: 6}, links: {선수: [함수]}}
+  웹프로젝트: {kind: 단원, fields: {시수: 9}, links: {선수: [웹기초], 달성: [LO3]}}
+
+  # 실습 단원은 주수만큼 반복된다
+  실습영역:
+    kind: 영역
+    multi_aspects:
+      실습들:
+        part: 실습
+        cardinality: {var: 실습주수}
+        naming: "실습_{i}"
+  실습: {kind: 단원, fields: {시수: 3}}
+
+  LO1: {kind: 성취기준, fields: {코드: P-01}, doc: 기본 문법으로 프로그램을 작성한다}
+  LO2: {kind: 성취기준, fields: {코드: P-02}, doc: 함수로 프로그램을 구조화한다}
+  LO3: {kind: 성취기준, fields: {코드: P-03}, doc: 응용 문제를 프로그램으로 해결한다}
+  LO4: {kind: 성취기준, fields: {코드: P-04}, doc: 알고리즘의 효율을 분석한다}
+
+  중간평가: {kind: 평가, fields: {비중: 40}, links: {평가함: [LO1, LO2]}}
+  기말평가: {kind: 평가, fields: {비중: 60}, links: {평가함: [LO3, LO4]}}

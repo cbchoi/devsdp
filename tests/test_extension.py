@@ -39,7 +39,8 @@ KINDS = ["devs", "attr", "text", "devs+attr", "attr+text", "devs+attr+text"]
 # ---------------------------------------------------------------------------
 
 def rand_void(rng, T):
-    return frozenset(e for e in T.nodes if T.kind(e) == ENT and len(e) > 1
+    # 정렬해서 돈다. 집합의 순회 순서는 실행마다 달라 표본이 재현되지 않는다
+    return frozenset(e for e in sorted(T.nodes) if T.kind(e) == ENT and len(e) > 1
                      and T.kind(e[:-1]) == SPEC and not T.children(e) and rng.random() < 0.25)
 
 

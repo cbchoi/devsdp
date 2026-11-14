@@ -67,6 +67,14 @@ class Extension:
         """국소 검사. (부호, 메시지)의 목록."""
         return []
 
+    def check_tree(self, root: View) -> list:
+        """뼈대 전체에 대한 검사. (부호, 경로, 메시지)의 목록.
+
+        구성요소 하나의 시야로 적을 수 없는 조건(나무를 가로지르는 관계, 합계)을
+        위한 자리다. 뼈대만 받으므로 적격성은 여전히 변이 자체의 성질이다.
+        """
+        return []
+
     def interpret(self, view: View, children: Mapping[str, Any]) -> Any:
         """해석. children은 살아 있는 자식들의 해석 결과."""
         return None
@@ -116,7 +124,9 @@ def violations(L: Layered, V: frozenset) -> list:
             walk(ext, child)
 
     for ext in L.extensions:
-        walk(ext, view(ext, T, sk))
+        root = view(ext, T, sk)
+        walk(ext, root)
+        out.extend((ext.name, code, path, msg) for code, path, msg in ext.check_tree(root))
     return out
 
 

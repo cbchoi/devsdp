@@ -1,0 +1,30 @@
+# 도메인 프로파일: 제안요청서(RFP)
+profile: "1.0"
+name: rfp
+description: 제안요청서의 과업, 요구사항, 평가 기준
+
+kinds:
+  사업:
+    contains: [과업, 평가항목]
+  과업:
+    contains: [요구사항]
+  요구사항:
+    fields:
+      번호: {type: str, required: true}
+      구분: {type: enum, values: [기능, 성능, 보안, 운영], required: true}
+  평가항목:
+    fields:
+      배점: {type: int, required: true}
+
+links:
+  평가대상: {from: [평가항목], to: [요구사항], target: required, doc: 이 평가항목이 평가하는 요구사항}
+  의존: {from: [요구사항], to: [요구사항], acyclic: true, target: required}
+
+rules:
+  - name: 모든 요구사항은 평가된다
+    each: 요구사항
+    incoming: {평가대상: 1}
+  - name: 배점합
+    at: 사업
+    sum: {field: 배점, over: [평가항목]}
+    equals: 100

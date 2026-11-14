@@ -266,6 +266,10 @@ class EntityDef:
     specializations: Mapping[Name, Specialization] = field(default_factory=dict)
     doc: Optional[str] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    # 도메인 프로파일이 뜻을 정하는 부분 (12 문서). 핵은 해석하지 않는다.
+    kind: Optional[str] = None                                   # 프로파일의 유형 이름
+    fields: Mapping[str, Any] = field(default_factory=dict)      # 유형이 정한 필드의 값
+    links: Mapping[str, tuple] = field(default_factory=dict)     # 관계 유형에서 대상 정의 이름들로
 
     @property
     def is_leaf(self) -> bool:
@@ -303,6 +307,7 @@ class SesDocument:
     constraints: tuple[Constraint, ...] = ()
     experimental_frames: tuple[FrameAttachment, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    profile: Optional[str] = None                                # 도메인 프로파일의 이름
 
     @property
     def root(self) -> EntityDef:

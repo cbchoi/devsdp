@@ -153,6 +153,9 @@ def _entity(name: str, d: dict) -> m.EntityDef:
         specializations={k: _specialization(k, v) for k, v in (d.get("specializations") or {}).items()},
         doc=d.get("doc"),
         metadata=d.get("metadata") or {},
+        kind=d.get("kind"),
+        fields=d.get("fields") or {},
+        links={k: tuple(v) for k, v in (d.get("links") or {}).items()},
     )
 
 
@@ -178,6 +181,7 @@ def load_ses_dict(d: dict) -> m.SesDocument:
         experimental_frames=tuple(m.FrameAttachment(f["ref"], f.get("attach_to"))
                                   for f in d.get("experimental_frames", [])),
         metadata=d.get("metadata") or {},
+        profile=d.get("profile"),
     )
     check_integrity(doc)
     return doc
@@ -281,9 +285,13 @@ def check_integrity(doc: m.SesDocument) -> None:
         # 스테레오타입 일관성
         if ent.stereotype == m.Stereotype.ATOMIC and not ent.is_leaf:
             errors.append(f"{name}: atomic 인데 분해를 가진다")
+        for ltype, targets in ent.links.items():
+            for t in targets:
+                if t not in ents:
+                    errors.append(f"{name}.links.{ltype}: 정의되지 않은 엔티티 {t}")
         if ent.stereotype == m.Stereotype.VOID:
-            if ent.ports or ent.attributes or ent.decomposition_names:
-                errors.append(f"{name}: 없음 대안은 포트, 속성, 분해를 가질 수 없다")
+            if ent.ports or ent.attributes or ent.decomposition_names or ent.fields or ent.links:
+                errors.append(f"{name}: 없음 대안은 포트, 속성, 필드, 관계, 분해를 가질 수 없다")
             if ent.root:
                 errors.append(f"{name}: 없음 대안은 뿌리가 될 수 없다")
         for asp in ent.aspects.values():

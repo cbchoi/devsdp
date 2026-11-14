@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cbchoi/devsdp/docs/ses-platform/schema/profile.schema.json",
+  "title": "SES 도메인 프로파일 (draft 0.1)",
+  "description": "한 분야의 낱말과 규칙을 선언한다. 유형, 필드, 포함 규칙, 관계, 규칙의 다섯 범용 장치만 쓴다. 코드는 담지 않는다.",
+  "type": "object",
+  "required": ["profile", "name", "kinds"],
+  "additionalProperties": false,
+  "properties": {
+    "profile": {"type": "string", "description": "프로파일 형식 버전"},
+    "name": {"$ref": "#/$defs/identifier", "description": "SES 문서가 profile 열쇠로 가리키는 이름"},
+    "description": {"type": "string"},
+    "kinds": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/identifier"},
+      "additionalProperties": {"$ref": "#/$defs/kind"}
+    },
+    "links": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/identifier"},
+      "additionalProperties": {"$ref": "#/$defs/link"}
+    },
+    "rules": {"type": "array", "items": {"$ref": "#/$defs/rule"}}
+  },
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[A-Za-z_가-힣][A-Za-z0-9_가-힣]*$"},
+    "kindList": {"type": "array", "items": {"$ref": "#/$defs/identifier"}},
+    "kind": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "doc": {"type": "string"},
+        "contains": {"$ref": "#/$defs/kindList", "description": "이 유형이 부분으로 가질 수 있는 유형. 없으면 제한하지 않는다."},
+        "fields": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/identifier"},
+          "additionalProperties": {"$ref": "#/$defs/field"}
+        }
+      }
+    },
+    "field": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"type": "string", "enum": ["int", "float", "str", "bool", "enum"]},
+        "required": {"type": "boolean"},
+        "values": {"type": "array", "items": {"type": ["string", "number"]}},
+        "default": {"type": ["string", "number", "boolean"]},
+        "doc": {"type": "string"}
+      }
+    },
+    "link": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "from": {"$ref": "#/$defs/kindList", "description": "출발이 될 수 있는 유형. 없으면 제한하지 않는다."},
+        "to": {"$ref": "#/$defs/kindList"},
+        "acyclic": {"type": "boolean", "description": "이 관계로 순환이 생기면 안 된다."},
+        "target": {
+          "type": "string",
+          "enum": ["required", "optional"],
+          "description": "required: 출발이 변이에 있으면 대상도 있어야 한다. optional(기본값): 대상이 없으면 관계가 사라진다."
+        },
+        "doc": {"type": "string"}
+      }
+    },
+    "count": {
+      "oneOf": [
+        {"type": "integer", "minimum": 0, "description": "최소 개수"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"min": {"type": "integer"}, "max": {"type": "integer"}}
+        }
+      ]
+    },
+    "counts": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/identifier"},
+      "additionalProperties": {"$ref": "#/$defs/count"}
+    },
+    "rule": {
+      "oneOf": [
+        {
+          "description": "포괄 규칙: 어떤 유형의 엔티티마다 관계가 몇 개 있어야 하는가",
+          "type": "object",
+          "required": ["name", "each"],
+          "additionalProperties": false,
+          "properties": {
+            "name": {"type": "string"},
+            "each": {"$ref": "#/$defs/identifier"},
+            "incoming": {"$ref": "#/$defs/counts"},
+            "outgoing": {"$ref": "#/$defs/counts"}
+          }
+        },
+        {
+          "description": "수량 규칙: 필드의 합이나 엔티티의 개수가 범위 안에 있어야 한다",
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "oneOf": [{"required": ["sum"]}, {"required": ["count"]}],
+          "properties": {
+            "name": {"type": "string"},
+            "at": {"$ref": "#/$defs/identifier", "description": "합을 내는 자리의 유형. 없으면 뿌리."},
+            "sum": {
+              "type": "object",
+              "required": ["field", "over"],
+              "additionalProperties": false,
+              "properties": {"field": {"$ref": "#/$defs/identifier"}, "over": {"$ref": "#/$defs/kindList"}}
+            },
+            "count": {
+              "type": "object",
+              "required": ["over"],
+              "additionalProperties": false,
+              "properties": {"over": {"$ref": "#/$defs/kindList"}}
+            },
+            "min": {"type": "number"},
+            "max": {"type": "number"},
+            "equals": {"type": "number"}
+          }
+        }
+      ]
+    }
+  }
+}

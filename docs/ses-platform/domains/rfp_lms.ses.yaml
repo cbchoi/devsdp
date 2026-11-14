@@ -1,0 +1,60 @@
+# 도메인 문서: 학습관리시스템 구축 사업의 제안요청서 (프로파일 rfp)
+# 변이 하나가 발주 조건 하나에 맞춘 제안요청서다.
+ses: "1.0"
+name: 학습관리시스템구축
+profile: rfp
+
+entities:
+  학습관리시스템구축:
+    root: true
+    kind: 사업
+    aspects:
+      구성:
+        parts: [개발과업, 운영과업, 기술평가, 가격평가, 운영평가]
+
+  개발과업:
+    kind: 과업
+    aspects:
+      요구사항목록:
+        parts: [로그인, 강의관리, 암호화, 동시접속]
+
+  로그인: {kind: 요구사항, fields: {번호: FR-01, 구분: 기능}}
+  강의관리: {kind: 요구사항, fields: {번호: FR-02, 구분: 기능}, links: {의존: [로그인]}}
+
+  # 보안 수준은 둘 가운데 하나
+  암호화:
+    kind: 요구사항
+    fields: {번호: SR-01, 구분: 보안}
+    links: {의존: [로그인]}
+    specializations:
+      보안수준:
+        alternatives: [기본암호화, 강화암호화]
+  기본암호화: {extends: 암호화}
+  강화암호화: {extends: 암호화}
+
+  # 선택 요구사항
+  동시접속:
+    kind: 요구사항
+    fields: {번호: PR-01, 구분: 성능}
+    specializations:
+      포함여부:
+        alternatives: [성능요구포함, 성능요구제외]
+  성능요구포함: {extends: 동시접속}
+  성능요구제외: {extends: 동시접속, stereotype: void}
+
+  # 운영 과업은 발주 범위에 따라 빠질 수 있다
+  운영과업:
+    kind: 과업
+    aspects:
+      요구사항목록:
+        parts: [장애대응]
+    specializations:
+      운영범위:
+        alternatives: [운영포함, 운영제외]
+  운영포함: {extends: 운영과업}
+  운영제외: {extends: 운영과업, stereotype: void}
+  장애대응: {kind: 요구사항, fields: {번호: OR-01, 구분: 운영}}
+
+  기술평가: {kind: 평가항목, fields: {배점: 60}, links: {평가대상: [로그인, 강의관리, 암호화]}}
+  가격평가: {kind: 평가항목, fields: {배점: 30}}
+  운영평가: {kind: 평가항목, fields: {배점: 10}, links: {평가대상: [장애대응]}}

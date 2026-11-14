@@ -80,12 +80,17 @@
     "metadata": {
       "type": "object",
       "description": "플러그인 확장용 네임스페이스. 코어는 해석하지 않는다."
+    },
+    "profile": {
+      "$ref": "#/$defs/identifier",
+      "description": "이 문서가 따르는 도메인 프로파일의 이름. kind, fields, links의 뜻은 프로파일이 정한다."
     }
   },
   "$defs": {
     "identifier": {
       "type": "string",
-      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      "pattern": "^[A-Za-z_가-힣][A-Za-z0-9_가-힣]*$",
+      "description": "영문자, 숫자, 밑줄, 한글 음절. 숫자로 시작하지 않는다."
     },
     "scalarType": {
       "type": "string",
@@ -277,6 +282,34 @@
         },
         "metadata": {
           "type": "object"
+        },
+        "kind": {
+          "$ref": "#/$defs/identifier",
+          "description": "도메인 프로파일이 정의한 유형"
+        },
+        "fields": {
+          "type": "object",
+          "description": "유형이 정한 필드의 값. 타입과 필수 여부는 프로파일에 있다.",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        },
+        "links": {
+          "type": "object",
+          "description": "관계 유형에서 대상 엔티티 정의 이름들로. 관계의 뜻과 규칙은 프로파일에 있다.",
+          "propertyNames": {
+            "$ref": "#/$defs/identifier"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/identifier"
+            }
+          }
         }
       }
     },

@@ -15,6 +15,9 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | 09_review.md | 전체 검토: 재현된 결함, 이론과 검증의 빈 곳, 연구 주장의 빈 곳, 정합성, 우선순위 권고 |
 | 10_theory_extensions.md | 새로운 이론으로 확장할 여지: 후보 9개의 핵심 추측, 선행 연구 위험, 비교와 권고 |
 | 11_ses_core_and_extensions.md | SES 핵과 확장(SES + X)의 정의: 핵의 두 층, 확장 계약, 모든 확장이 물려받는 정리, 세 사례(DEVS, 속성, 문서 조립) |
+| 12_generic_and_specific.md | 범용성과 특수성을 나눈 형식: 네 층(핵, 범용 장치, 도메인 프로파일, 도메인 문서), 세 분야(커리큘럼, RFP, 논문의 논리 구성) 적용 결과 |
+| schema/profile.schema.json | 도메인 프로파일의 JSON Schema 초안 |
+| domains/ | 세 분야의 프로파일과 예시 도메인 문서 |
 | examples/processing_system.pruning.ses.yaml | 가지치기 SES 예시 (대상 SES와 같은 스키마) |
 | references.md | 검토 문헌 링크 목록 (열람 상태 표기) |
 | schema/ses.schema.json | 정준 YAML/JSON 표현의 JSON Schema 초안 |
