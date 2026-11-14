@@ -128,7 +128,7 @@ def _build(doc, def_name: str, sigma: dict, memo: dict) -> list:
             for combo in product(*(_build(doc, d, sigma, memo) for _, d in parts)):
                 kids = {name: c for (name, _), c in zip(parts, combo) if c is not None}
                 node = dict(base, children=kids, eic=[], eoc=[], ic=[])
-                for (sw, sp), (dw, dp) in ks:                 # 빠진 부분을 가리키는 결합은 버린다
+                for (sw, sp), (dw, dp) in dict.fromkeys(ks):  # 빠진 부분을 가리키는 결합은 버린다. 같은 결합은 하나다
                     if (sw is not None and sw not in kids) or (dw is not None and dw not in kids):
                         continue
                     if sw is None:

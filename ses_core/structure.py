@@ -26,8 +26,9 @@ class StructureError(ValueError):
 
 def node(ports: Optional[Mapping] = None, children: Optional[Mapping] = None, eic=(), eoc=(), ic=(),
          required=(), **extra) -> dict:
+    # 결합은 관계다. 같은 결합을 두 번 적은 것은 한 번 적은 것과 같다 (정의 24)
     out = {"ports": dict(ports or {}), "required": sorted(required), "children": dict(children or {}),
-           "eic": list(eic), "eoc": list(eoc), "ic": list(ic)}
+           "eic": list(dict.fromkeys(eic)), "eoc": list(dict.fromkeys(eoc)), "ic": list(dict.fromkeys(ic))}
     out.update(extra)
     return out
 

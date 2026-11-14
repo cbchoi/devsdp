@@ -506,7 +506,7 @@ class Coupling(Extension):
         node = {"ports": {p: (d.type, d.direction) for p, d in (v.ann or {}).items()},
                 "required": sorted(p for p, d in (v.ann or {}).items() if d.required),
                 "children": dict(children), "eic": [], "eoc": [], "ic": []}
-        for (sw, sp), (dw, dp) in self._live(v):
+        for (sw, sp), (dw, dp) in dict.fromkeys(self._live(v)):      # 같은 결합을 두 번 적어도 하나다
             if sw is SELF:
                 node["eic"].append((sp, (dw, dp)))
             elif dw is SELF:

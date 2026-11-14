@@ -416,15 +416,56 @@ def generic(ports: dict):
     return Generic
 
 
+def quirky(ports: dict):
+    """출력마다 값을 0개에서 2개까지 내는 모델. 받은 것을 그대로 적어 두므로 전달의 횟수, 내용, 순서가 달라지면 상태가 달라진다."""
+    outs = sorted(p for p, (_, d) in ports.items() if d == "out")
+
+    class Quirky(Atomic):
+        PORTS = dict(ports)
+
+        def init(self):
+            self.delay = 0.5 + (sum(map(ord, self.name)) % 7) / 4
+            self.left, self.sent, self.heard = self.delay, 0, []
+
+        def ta(self):
+            return self.left
+
+        def output(self):
+            return {p: [(self.name, self.sent, k) for k in range((self.sent + i) % 3)] for i, p in enumerate(outs)}
+
+        def internal(self):
+            self.sent += 1
+            self.left = self.delay if self.sent < 3 else INF
+
+        def external(self, elapsed, bag):
+            if self.left != INF:
+                self.left -= elapsed
+            self.heard.append((self.now, elapsed, [(p, list(v)) for p, v in bag.items()]))     # 묶음을 훑는 순서 그대로
+            if self.left == INF and self.sent < 5:
+                self.left = self.delay
+
+        def confluent(self, bag):
+            self.heard.append(("both", self.now))
+            self.internal()
+            self.external(0.0, bag)
+
+    return Quirky
+
+
+def state(leaves: dict) -> dict:
+    """원자 모델의 마지막 상태. 사건 기록에 드러나지 않는 차이를 본다."""
+    return {p: {k: v for k, v in vars(a).items() if k in ("left", "sent", "seen", "heard")} for p, a in leaves.items()}
+
+
 def library_of(mods: dict) -> dict:
     return {n: Module(n, m["ports"], tuple(m["required"]), m["params"], generic(m["ports"])) for n, m in mods.items()}
 
 
-def model_of(n: dict, path=()):
+def model_of(n: dict, path=(), body=generic):
     """구조에서 바로 DEVS 모델을 만든다. 원자마다 인터페이스에 맞는 모델을 둔다."""
     if st.is_atom(n):
-        return generic(n["ports"])("/".join(path))
-    return devs.Coupled("", n["ports"], {k: model_of(c, path + (k,)) for k, c in n["children"].items()},
+        return body(n["ports"])("/".join(path))
+    return devs.Coupled("", n["ports"], {k: model_of(c, path + (k,), body) for k, c in n["children"].items()},
                         n["eic"], n["eoc"], n["ic"])
 
 
@@ -522,18 +563,36 @@ def test_corollary_two_executors_agree_at_a_common_cut(seed):
 def test_devs_closure_under_coupling(seed):
     """계층대로 실행한 것과 평탄화해서 실행한 것의 사건 기록이 같다. 문헌의 정리를 확인만 한다."""
     n = rand_structure(random.Random(seed))
-    log = simulate(model_of(n), until=8.0)
-    assert log == simulate(model_of(n), until=8.0, flat=True)
+    hier, flat = model_of(n), model_of(n)
+    log = simulate(hier, until=8.0)
+    assert log == simulate(flat, until=8.0, flat=True)
+    assert state(devs._leaves(hier)) == state(devs._leaves(flat))
     STATS["events"] += len(log)
     STATS["delivered"] += sum(1 for _, _, _, (_, _, seen) in log if seen > 0)
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_devs_closure_with_empty_and_multiple_outputs(seed):
+    """출력이 값을 0개, 1개, 2개 가질 때에도 두 실행이 같다. 상태까지 본다."""
+    n = rand_structure(random.Random(seed))
+    hier, flat = model_of(n, body=quirky), model_of(n, body=quirky)
+    log = simulate(hier, until=8.0)
+    assert log == simulate(flat, until=8.0, flat=True)
+    assert state(devs._leaves(hier)) == state(devs._leaves(flat))
+    heard = [h for a in devs._leaves(hier).values() for h in a.heard if h[0] != "both"]
+    STATS["quirky_events"] += len(log)
+    STATS["quirky_bags"] += len(heard)
+    STATS["quirky_long_bags"] += sum(1 for _, _, bag in heard if any(len(v) > 1 for _, v in bag))
+    STATS["quirky_wide_bags"] += sum(1 for _, _, bag in heard if len(bag) > 1)
 
 
 @pytest.mark.parametrize("seed", range(100))
 def test_devs_closure_on_realized_plans(seed):
     rng, d, L, (ext,) = setup(seed)
     for V in [V for V in sem(L.ses) if X.executable(L, ext, V)][:4]:
-        model = X.realize(L, ext, DevsExecutor(), V)
-        assert simulate(model, until=6.0) == simulate(X.realize(L, ext, DevsExecutor(), V), until=6.0, flat=True)
+        hier, flat = X.realize(L, ext, DevsExecutor(), V), X.realize(L, ext, DevsExecutor(), V)
+        assert simulate(hier, until=6.0) == simulate(flat, until=6.0, flat=True)
+        assert state(devs._leaves(hier)) == state(devs._leaves(flat))
 
 
 def labelled(n: dict, labels) -> tuple:
@@ -588,6 +647,8 @@ def test_executor_samples_are_not_vacuous():
     assert STATS["both"] >= 100 and STATS["only_one"] >= 300 and STATS["all_executable_docs"] >= 5, STATS
     assert STATS["agree"] >= 100 and STATS["different_frontiers"] >= 20, STATS
     assert STATS["events"] >= 3000 and STATS["delivered"] >= 500, STATS
+    assert STATS["quirky_events"] >= 1000 and STATS["quirky_bags"] >= 500, STATS
+    assert STATS["quirky_long_bags"] >= 100 and STATS["quirky_wide_bags"] >= 20, STATS
     assert STATS["classic_models"] >= 2000 and STATS["classic_skipped"] >= 500, STATS
 
 
@@ -604,6 +665,82 @@ def test_variable_values_are_not_members_of_the_root_component():
         assert skeleton(L.ses.tree, L.void, V).labels == ("R",)
         p = X.plan(L, ext, V)
         assert p["module"] is None and X.frontier(p) == [("fast",)] and X.executable(L, ext, V)
+
+
+TWICE = {
+    "ses": "1.0", "name": "R", "port_types": {"T": {}},
+    "entities": {
+        "R": {"root": True, "aspects": {"a": {"parts": ["A", "B"], "couplings": [
+            {"from": "A.o", "to": "B.i"}, {"from": "A.o", "to": "B.i"}]}}},
+        "A": {"ports": {"o": {"type": "T", "direction": "out"}}},
+        "B": {"ports": {"i": {"type": "T", "direction": "in"}}},
+    },
+}
+
+
+def test_a_coupling_written_twice_is_one_coupling():
+    """결합은 관계다. 문서에 같은 결합을 두 번 적어도 구조와 실행은 한 번 적은 것과 같다.
+
+    평탄화는 결합을 집합으로 보는데 계층 실행은 적힌 횟수만큼 날랐다. 두 실행이 어긋나던 자리다.
+    """
+    one = (("A", "o"), ("B", "i"))
+    assert st.node({}, {}, ic=[one, one])["ic"] == [one]
+    assert devs.Coupled("", {}, {}, ic=[one, one]).ic == [one]
+    L0 = unfold_layered(load_ses_dict(TWICE))
+    (V,) = sem(L0.ses)
+    assert interpret(L0, V)["devs"]["ic"] == [one]
+    assert [n["ic"] for _, n in classic.enumerate_classic(load_ses_dict(TWICE))] == [[one]]
+    lib = library_of({"MA": {"ports": {"o": ("T", "out")}, "required": [], "params": {}},
+                      "MB": {"ports": {"i": ("T", "in")}, "required": [], "params": {}}})
+    L, ext = X.attach(L0, DevsExecutor(), Binding("devs", {"A": Bind("MA"), "B": Bind("MB")}), lib)
+    p = X.plan(L, ext, V)
+    assert p["ic"] == [one] and st.flatten(p) == {((("A",), "o"), (("B",), "i")): 1}
+    received = []
+    for flat in (False, True):
+        model = X.realize(L, ext, DevsExecutor(), V)
+        assert len(simulate(model, until=8.0, flat=flat)) == 1
+        received.append(devs._leaves(model)[("B",)].seen)
+    assert received == [1, 1]                                # 계층 실행과 평탄 실행에서 받은 수가 같다
+
+
+class Sometimes(Atomic):
+    """홀수 번째에만 값을 낸다. 짝수 번째의 출력은 값이 없는 목록이다."""
+    PORTS = {"o": ("T", "out")}
+
+    def init(self):
+        self.k = 0
+
+    def ta(self):
+        return 1.0
+
+    def output(self):
+        return {"o": [self.k] if self.k % 2 else []}
+
+    def internal(self):
+        self.k += 1
+
+
+class Witness(Atomic):
+    PORTS = {"i": ("T", "in")}
+
+    def init(self):
+        self.seen = []
+
+    def external(self, elapsed, bag):
+        self.seen.append((self.now, elapsed, {p: list(v) for p, v in bag.items()}))
+
+
+def test_an_output_without_values_is_not_an_event():
+    """값이 없는 출력은 보내지 않은 것이다. 받는 쪽에 외부 전이가 일어나지 않는다.
+
+    평탄 실행은 빈 묶음으로 외부 전이를 일으켰고 계층 실행은 일으키지 않았다. 두 실행이 어긋나던 자리다.
+    """
+    seen = []
+    for flat in (False, True):
+        model = devs.Coupled("", {}, {"s": Sometimes("s"), "w": Witness("w")}, ic=[(("s", "o"), ("w", "i"))])
+        assert simulate(model, until=4.0, flat=flat) == [(2.0, ("s",), "o", 1), (4.0, ("s",), "o", 3)]
+        seen.append(model.children["w"].seen)
+    assert seen[0] == seen[1] == [(2.0, 2.0, {"i": [1]}), (4.0, 2.0, {"i": [3]})]
 
 
 def test_structural_errors_above_the_frontier_block_execution():

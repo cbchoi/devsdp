@@ -63,7 +63,8 @@ class Coupled:
 
     def __init__(self, name: str, ports: Mapping, children: Mapping, eic=(), eoc=(), ic=()) -> None:
         self.name, self.ports, self.children = name, dict(ports), dict(children)
-        self.eic, self.eoc, self.ic = list(eic), list(eoc), list(ic)
+        # 결합은 관계다. 같은 결합을 두 번 적어도 메시지는 한 번 간다. 평탄 실행과 같아야 한다
+        self.eic, self.eoc, self.ic = list(dict.fromkeys(eic)), list(dict.fromkeys(eoc)), list(dict.fromkeys(ic))
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +117,9 @@ def simulate(model, until: float, flat: bool = False, max_steps: int = 100000) -
         for p in imminent:
             leaves[p].now = t
             for port, values in sorted(leaves[p].output().items()):
-                emitted[(p, port)] = list(values)
-                log.extend((t, p, port, v) for v in values)
+                if values:                                # 값이 없는 출력은 보내지 않은 것이다. 받는 쪽에 사건이 없다
+                    emitted[(p, port)] = list(values)
+                    log.extend((t, p, port, v) for v in values)
         inbox: dict = {p: {} for p in leaves}
         if flat:
             for src, values in emitted.items():
