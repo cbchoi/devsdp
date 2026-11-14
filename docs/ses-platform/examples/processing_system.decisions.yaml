@@ -1,0 +1,20 @@
+# 결정 집합 예시 (13_editor_data_model.md 참고)
+# 가지치기를 자료로 적은 것이다. 결정 하나가 가지치기 SES 하나로 번역되고,
+# 결정들은 순서와 무관하게 모두 적용된다. 서로 모순이면 남는 변이가 없다.
+# processing_system.pruning.ses.yaml 과 같은 결과를 내되, 변수 값을 직접 적을 수 있고
+# 대상에 있는 정의를 다시 선언하지 않아도 된다.
+
+decisions: "1.0"
+name: priority_4servers
+target: ProcessingSystem
+
+# 변수가 가질 값. 구조는 선택 규칙과 개수 지정을 따라 정해진다.
+variables:
+  policy: priority
+  num_servers: 4
+
+# 선택 지점에 대한 결정. at 은 정의 이름이며 그 정의가 출현하는 모든 곳에 적용된다.
+# 여기서는 변수 값이 이미 같은 것을 정하므로 없어도 결과가 같다. 형식을 보이기 위해 적는다.
+choose:
+  - {at: Buffer, specialization: policySpec, alternative: PriorityBuffer}
+  - {at: ServerPool, multi_aspect: serversMAsp, count: 4}

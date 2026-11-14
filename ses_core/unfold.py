@@ -44,6 +44,12 @@ def _domain(doc: m.SesDocument, name: str) -> list:
     raise AlgebraError(f"변수 {name} 에 유한 범위가 필요하다")
 
 
+def variable_domains(doc: m.SesDocument) -> dict:
+    """변수 이름에서 가질 수 있는 값의 목록으로. 펼친 나무는 값을 글자로 적으므로,
+    결정 집합과 선택 지점 표가 원래 형의 값을 되찾을 때 쓴다."""
+    return {name: _domain(doc, name) for name in doc.variables}
+
+
 def _card_set(doc: m.SesDocument, ma: m.MultiAspect) -> list:
     c = ma.cardinality
     if isinstance(c, m.Fixed):

@@ -64,11 +64,13 @@ class Tree:
 
     @cached_property
     def _children(self) -> dict:
+        # 자식의 순서는 kinds에 넣은 순서, 곧 문서에 적은 순서다. 정렬하지 않는다.
+        # 편집기의 표시 순서와 순서에 뜻이 있는 확장(문서 조립)이 이 순서를 쓴다.
         ch: dict = {p: [] for p in self.kinds}
         for p in self.kinds:
             if len(p) > 1:
                 ch[p[:-1]].append(p)
-        return {p: tuple(sorted(c)) for p, c in ch.items()}
+        return {p: tuple(c) for p, c in ch.items()}
 
     def kind(self, p: Path) -> str:
         return self.kinds[p]
@@ -177,8 +179,10 @@ def interior(T: Tree, X: Iterable[Path]) -> Optional[frozenset]:
 
 
 def restrict(T: Tree, K: Iterable[Path]) -> Tree:
-    """T|K. K는 적격 선택이어야 한다."""
-    return Tree({n: T.kinds[n] for n in K}, {n: l for n, l in T.labels.items() if n in K})
+    """T|K. K는 적격 선택이어야 한다. T의 노드 순서를 그대로 물려받는다."""
+    K = K if isinstance(K, (set, frozenset)) else set(K)
+    return Tree({n: k for n, k in T.kinds.items() if n in K},
+                {n: l for n, l in T.labels.items() if n in K})
 
 
 def variants(T: Tree) -> list:
