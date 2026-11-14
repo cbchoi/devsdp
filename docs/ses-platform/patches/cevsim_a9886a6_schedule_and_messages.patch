@@ -1,0 +1,52 @@
+--- a/cevsim/src/system_executor.cpp
++++ b/cevsim/src/system_executor.cpp
+@@ -14,6 +14,20 @@
+ #endif
+ namespace evsim
+ {
++	// Erase only the item of this executor. Erasing by key removes every item that has the same time.
++	static void erase_item(std::multiset<executor_item>& list, Time t, const IExecutor& who)
++	{
++		auto range = list.equal_range(executor_item(t, who));
++		for (auto it = range.first; it != range.second; ++it)
++		{
++			if (it->p_executor == who)
++			{
++				list.erase(it);
++				return;
++			}
++		}
++	}
++
+ 	UNIQ CSystemExecutor::OBJECT_ID = 0;
+ 
+ 	CSystemExecutor::CSystemExecutor(std::string _name, SimConfig config)
+@@ -163,7 +177,7 @@
+ 			std::map<CModel*, IExecutor>::iterator dst = m_model_executor_map.find(m_port_to_model_map[_port]);
+ 			if (dst != m_model_executor_map.end())
+ 			{
+-				m_schedule_list.erase(executor_item(dst->second->get_req_time(), dst->second));
++				erase_item(m_schedule_list, dst->second->get_req_time(), dst->second);
+ 
+ 				dst->second->external_transition(const_cast<Port&>(*_port), msg);
+ 				dst->second->set_req_time(m_global_t);
+--- a/cevsim/src/message_deliverer.cpp
++++ b/cevsim/src/message_deliverer.cpp
+@@ -19,7 +19,16 @@
+ 
+ 	void MessageDeliverer::message_delivered(Message msg)
+ 	{
+-		m_data_list.erase(msg);
++		// Erase only this message. Erasing by key removes every message that has the same scheduled time.
++		auto range = m_data_list.equal_range(msg);
++		for (auto it = range.first; it != range.second; ++it)
++		{
++			if (*it == msg)
++			{
++				m_data_list.erase(it);
++				break;
++			}
++		}
+ 		m_bEmptyFlag = m_data_list.empty() ? true : false;
+ 	}
+ 

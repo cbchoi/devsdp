@@ -19,6 +19,8 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | 13_editor_data_model.md | 편집기를 고려한 자료구조: 세 모형, 편집 모델(요소, 참조, 원시 연산과 역연산), 정준 문서와의 왕복, 주소와 곁자료, 진단, 결정 집합과 선택 지점 표, 프로파일의 표시 정보, 검증 상태, 한계와 결정이 필요한 것 |
 | 14_executors.md | 실행기를 붙이는 SES: 구조와 평탄화, 끝에서 끝까지의 구동, 모듈과 바인딩과 계획, 실현의 유일성, 실행 가능 핵, 실행기 사이의 대응, 표현 완전성과 한계, 고전 SES/MB의 포섭, DEVS와 하드웨어 두 실행기의 사례 |
 | 15_pyevsim_executor.md | pyevsim 실행기: 계약과 쓰는 법, pyevsim 1.1.7에서 확인한 엔진의 성질, 공통 모델 기반을 올리는 어댑터와 그 정확성, 참조 시뮬레이터와의 사건 기록 대조, 한계와 결정이 필요한 것 |
+| 16_cevsim_executor.md | cevsim 실행기: 계약과 쓰는 법, cevsim a9886a6에서 확인한 엔진의 성질, C++ 엔진과 Python 사이의 다리, 공통 모델 기반을 올리는 방법, 참조 시뮬레이터와의 사건 기록 대조, 한계와 결정이 필요한 것 |
+| patches/cevsim_a9886a6_schedule_and_messages.patch | cevsim의 두 결함(일정 목록과 메시지 묶음에서 열쇠로 지우기)을 고치는 제안. 고친 사본에서 확인했다. cevsim 저장소에는 올리지 않았다 |
 | schema/profile.schema.json | 도메인 프로파일의 JSON Schema 초안 |
 | schema/binding.schema.json | 바인딩과 모듈 라이브러리의 JSON Schema 초안 |
 | schema/decisions.schema.json | 결정 집합의 JSON Schema 초안 |
@@ -31,6 +33,7 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | examples/processing_system.ses.yaml | 처리 시스템 예시 SES (타입 수준) |
 | examples/processing_system.config.yaml | 가지치기 구성 예시 (04 문서의 옛 형식. 어떤 코드도 읽지 않는다. 13 문서의 결정 집합이 대신한다) |
 | examples/processing_system.binding.pyevsim.yaml | 처리 시스템에 pyevsim 실행기를 붙이는 바인딩. 모델베이스는 저장소 루트의 examples/processing_pyevsim.py(pyevsim 모델) 또는 examples/processing_mb.py(공통 모델 기반) |
+| examples/processing_system.binding.cevsim.yaml | 처리 시스템에 cevsim 실행기를 붙이는 바인딩. 모델베이스는 저장소 루트의 examples/processing_mb.py(공통 모델 기반) |
 | examples/processing_system.binding.devs.yaml | 처리 시스템에 DEVS 실행기를 붙이는 바인딩. 모델베이스는 저장소 루트의 examples/processing_mb.py |
 | examples/sensor_node.ses.yaml | 센서 노드 예시 SES. 실행기 둘을 붙인다 |
 | examples/sensor_node.binding.devs.yaml, sensor_node.binding.hw.yaml, sensor_node.hwlib.yaml | 센서 노드의 DEVS 바인딩, 하드웨어 바인딩, 하드웨어 모듈 라이브러리 |
@@ -41,7 +44,7 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 python -c "import json, yaml, jsonschema; s=json.load(open('docs/ses-platform/schema/ses.schema.json')); d=yaml.safe_load(open('docs/ses-platform/examples/processing_system.ses.yaml')); jsonschema.Draft202012Validator(s).validate(d); print('valid')"
 ```
 
-읽는 순서는 01, 02, 03, 04이다. 03의 6절이 구조 표현의, 04가 자료구조의 핵심이다. 편집기를 만들 때는 13을 먼저 읽는다. 13은 04의 자료구조 가운데 편집에 쓰는 부분을 다시 정한 것이다. 실행기(시뮬레이터, 하드웨어)를 붙일 때는 14를 읽는다. 14는 04의 경계 계층과 바인딩 계층을 다시 정하고 정리로 뒷받침한 것이다. pyevsim으로 실행할 때는 15를 읽는다.
+읽는 순서는 01, 02, 03, 04이다. 03의 6절이 구조 표현의, 04가 자료구조의 핵심이다. 편집기를 만들 때는 13을 먼저 읽는다. 13은 04의 자료구조 가운데 편집에 쓰는 부분을 다시 정한 것이다. 실행기(시뮬레이터, 하드웨어)를 붙일 때는 14를 읽는다. 14는 04의 경계 계층과 바인딩 계층을 다시 정하고 정리로 뒷받침한 것이다. pyevsim으로 실행할 때는 15를, cevsim으로 실행할 때는 16을 읽는다.
 
 04의 자료구조를 그대로 옮긴 Python 참조 정의가 저장소 루트의 ses_core 패키지(model.py, loader.py)에 있다. 예시 SES 를 적재하고 무결성 검사를 확인하는 테스트는 tests/test_loader.py 이며 다음으로 실행한다.
 

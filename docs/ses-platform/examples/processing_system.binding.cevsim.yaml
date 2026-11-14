@@ -1,0 +1,16 @@
+# 바인딩 예시: 처리 시스템에 cevsim 실행기를 붙인다 (16_cevsim_executor.md 참고)
+# 정의 이름을 공통 모델베이스(examples/processing_mb.py)의 모듈에 잇는다. 모델은 Python에 있고
+# cevsim 엔진이 일정과 전달을 맡는다. cevsim의 메시지에는 값이 없어, 일감을 주고받는 이 모델들을
+# cevsim의 고유 모델(C++)로 쓰지는 않았다. 결합 모델은 묶지 않는다. 실행기가 SES의 구조를
+# 평탄화해 엔진의 연결로 등록한다.
+
+binding: "1.0"
+executor: cevsim
+target: ProcessingSystem
+
+map:
+  Generator: {module: Generator}
+  FifoBuffer: {module: FifoBuffer}
+  PriorityBuffer: {module: PriorityBuffer}
+  Server: {module: Server}
+  Collector: {module: Collector}

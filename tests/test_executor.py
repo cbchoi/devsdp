@@ -373,6 +373,7 @@ def test_example_files_conform_to_the_binding_schema():
     with open(os.path.join(EXAMPLES, "..", "schema", "binding.schema.json"), encoding="utf-8") as f:
         validator = jsonschema.Draft202012Validator(json.load(f))
     for name in ("processing_system.binding.devs.yaml", "processing_system.binding.pyevsim.yaml",
+                 "processing_system.binding.cevsim.yaml",
                  "sensor_node.binding.devs.yaml", "sensor_node.binding.hw.yaml", "sensor_node.hwlib.yaml"):
         with open(os.path.join(EXAMPLES, name), encoding="utf-8") as f:
             d = yaml.safe_load(f)
