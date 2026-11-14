@@ -500,3 +500,100 @@ def test_decision_set_follows_renames_in_the_document():
     assert stale == 6                                       # 세 번째 이름 바꾸기부터 낡은 결정이 하나 있다
     after = apply(after_doc, ds, skip_invalid=True)
     assert is_pes(after) and len(after.tree.nodes) == len(before.tree.nodes)
+
+
+# ---------------------------------------------------------------------------
+# 파일 형식: 결정 집합의 스키마
+# ---------------------------------------------------------------------------
+
+def test_decision_sets_conform_to_the_schema():
+    import json
+    jsonschema = pytest.importorskip("jsonschema")
+    with open(os.path.join(ROOT, "schema", "decisions.schema.json"), encoding="utf-8") as f:
+        validator = jsonschema.Draft202012Validator(json.load(f))
+    with open(os.path.join(EXAMPLES, "processing_system.decisions.yaml"), encoding="utf-8") as f:
+        assert list(validator.iter_errors(yaml.safe_load(f))) == []
+    for seed in range(60):                                  # 무작위 결정 집합과 증거
+        rng = random.Random(seed)
+        doc = load_ses_dict(rand_document(rng))
+        S = unfold(doc)
+        ds = rand_decisions(rng, S)
+        assert list(validator.iter_errors(ds.to_dict())) == []
+        V = rng.choice(sem(S))
+        assert list(validator.iter_errors(witness(S.tree, V, variable_domains(doc)).to_dict())) == []
+    # 형식이 틀린 결정: 스키마와 Choice.problems 가 같은 판정을 한다
+    shapes = [
+        Choice(at="A", aspect=("x",)), Choice(path=("A", "b"), specialization="s", alternative=("x", "y")),
+        Choice(node=("A",), multi_aspect="m", count=(1, 2)),
+        Choice(at="A"), Choice(aspect=("x",)), Choice(at="A", path=("A",), aspect=("x",)),
+        Choice(at="A", specialization="s"), Choice(at="A", multi_aspect="m"),
+        Choice(at="A", aspect=("x",), specialization="s", alternative=("y",)),
+        Choice(at="A", alternative=("y",)), Choice(at="A", count=(1,)),
+        Choice(at="A", aspect=("x",), count=(1,)),
+    ]
+    for c in shapes:
+        valid = not list(validator.iter_errors({"decisions": "1.0", "choose": [c.to_dict()]}))
+        assert valid == (not c.problems()), c
+    assert sum(1 for c in shapes if not c.problems()) == 3
+
+
+# ---------------------------------------------------------------------------
+# 결정의 범위: 개수는 그 multi-aspect 안에서만, 경로 수준은 병합체 전체에
+# ---------------------------------------------------------------------------
+
+SHELF = {
+    "ses": "1.0", "name": "Shelf",
+    "entities": {
+        "Shelf": {"root": True,
+                  "aspects": {"fixed": {"parts": ["Box"]}},
+                  "multi_aspects": {"rows": {"part": "Box", "cardinality": {"min": 1, "max": 2}},
+                                    "columns": {"part": "Box", "cardinality": {"min": 1, "max": 3}}}},
+        "Box": {},
+    },
+}
+
+
+def test_count_decision_restricts_only_its_own_multi_aspect():
+    S = unfold(load_ses_dict(SHELF))
+    assert len(sem(S)) == 1 + 2 + 3
+    one_row = Choice(at="Shelf", multi_aspect="rows", count=(1,))
+    assert len(sem(apply(S, DecisionSet(choose=(one_row,))))) == 1 + 1 + 3     # 다른 분해는 그대로다
+    by_rows = Choice(at="Shelf", aspect=("rows",))                             # 분해는 multi-aspect의 이름으로 고른다
+    assert len(sem(apply(S, DecisionSet(choose=(by_rows,))))) == 2
+    assert is_pes(apply(S, DecisionSet(choose=(one_row, by_rows))))            # 둘을 함께 쓰면 하나로 정해진다
+    assert len(sem(apply(S, DecisionSet(choose=(Choice(at="Shelf", aspect=("fixed", "columns")),))))) == 4
+
+
+CLUSTER = {
+    "ses": "1.0", "name": "R",
+    "entities": {
+        "R": {"root": True, "aspects": {"a": {"parts": ["X"]}}},
+        "X": {"aspects": {"q": {"parts": ["L"]}},
+              "specializations": {"s": {"alternatives": ["X1", "X2"]}}},
+        "X1": {"extends": "X", "aspects": {"p1": {"parts": ["L"]}, "p2": {"parts": ["L"]}}},
+        "X2": {"extends": "X", "specializations": {"t": {"alternatives": ["X2a", "X2b"]}}},
+        "X2a": {"extends": "X2"},
+        "X2b": {"extends": "X2"},
+        "L": {},
+    },
+}
+
+
+def test_path_level_decision_reaches_every_member_of_the_cluster():
+    S = unfold(load_ses_dict(CLUSTER))
+    assert len(sem(S)) == 2 + 2
+    # 구성요소 경로로 적은 결정은 그 구성요소의 병합체에 든 대안의 선택 지점에도 닿는다
+    inner = Choice(path=("R", "X"), specialization="t", alternative=("X2a",))
+    assert problems(S, DecisionSet(choose=(inner,))) == []
+    assert len(sem(apply(S, DecisionSet(choose=(inner,))))) == 2 + 1
+    # 분해에 대한 경로 수준의 결정은 "이 구성요소의 분해는 이것"이라는 뜻이다. 병합체의 모든
+    # 구성원에 적용되므로, 바탕 정의의 분해 q가 배제되면 X는 어떤 변이에도 나타날 수 없다
+    by_p1 = Choice(path=("R", "X"), aspect=("p1",))
+    assert problems(S, DecisionSet(choose=(by_p1,))) == []
+    assert apply(S, DecisionSet(choose=(by_p1,))) is None
+    # 바탕의 분해와 함께 남기면 X1의 분해 가운데 하나가 정해진다
+    both = Choice(path=("R", "X"), aspect=("q", "p1"))
+    assert len(sem(apply(S, DecisionSet(choose=(both,))))) == 1 + 2
+    # 정의 수준의 결정은 그 정의의 분해만 본다
+    only_x1 = Choice(at="X1", aspect=("p1",))
+    assert len(sem(apply(S, DecisionSet(choose=(only_x1,))))) == 1 + 2

@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cbchoi/devsdp/docs/ses-platform/schema/edit.schema.json",
+  "title": "SES 편집 모델의 스냅숏과 변경 이력 (ses-edit/1)",
+  "description": "편집기의 작업 상태를 언어와 무관하게 적는 형식. 스냅숏은 요소 저장소 전체이고 변경 이력은 거래의 열이다. 13_editor_data_model.md 참고. 요소 유형마다 허용되는 자식 역할과 참조 속성은 그 문서의 요소 유형 표가 정한다.",
+  "oneOf": [{"$ref": "#/$defs/snapshot"}, {"$ref": "#/$defs/log"}],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "description": "요소 식별자. 세션 안에서만 뜻이 있다."},
+    "elementType": {
+      "type": "string",
+      "enum": ["document", "variable", "entity", "aspect", "part", "multi_aspect", "specialization", "alternative", "link"]
+    },
+    "ref": {
+      "description": "다른 요소에 대한 참조. $ref 가 식별자이면 연결된 참조, null 이면 끊어진 참조이고 name 이 적힌 이름이다.",
+      "type": "object",
+      "required": ["$ref", "name"],
+      "additionalProperties": false,
+      "properties": {"$ref": {"type": ["string", "null"]}, "name": {}}
+    },
+    "missing": {
+      "description": "값이 없음을 뜻하는 표지. Set 연산의 old 와 new 에 쓴다.",
+      "type": "object",
+      "required": ["$missing"],
+      "additionalProperties": false,
+      "properties": {"$missing": {"const": true}}
+    },
+    "element": {
+      "type": "object",
+      "required": ["type", "parent", "role", "props", "children"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"$ref": "#/$defs/elementType"},
+        "parent": {"type": ["string", "null"]},
+        "role": {"type": ["string", "null"], "description": "부모 안에서의 자식 역할"},
+        "props": {"type": "object", "description": "JSON 값. 참조 속성의 값은 ref 형태다."},
+        "children": {
+          "type": "object",
+          "description": "자식 역할에서 자식 식별자의 순서 있는 목록으로",
+          "additionalProperties": {"type": "array", "items": {"$ref": "#/$defs/id"}}
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "required": ["format", "root", "elements"],
+      "additionalProperties": false,
+      "properties": {
+        "format": {"const": "ses-edit/1"},
+        "root": {"type": ["string", "null"]},
+        "elements": {"type": "object", "additionalProperties": {"$ref": "#/$defs/element"}}
+      }
+    },
+    "insert": {
+      "type": "object",
+      "required": ["op", "id", "type", "parent", "role", "index", "props"],
+      "additionalProperties": false,
+      "properties": {
+        "op": {"const": "insert"},
+        "id": {"$ref": "#/$defs/id"},
+        "type": {"$ref": "#/$defs/elementType"},
+        "parent": {"type": ["string", "null"]},
+        "role": {"type": ["string", "null"]},
+        "index": {"type": "integer", "minimum": 0},
+        "props": {"type": "object"}
+      }
+    },
+    "remove": {
+      "type": "object",
+      "required": ["op", "id"],
+      "additionalProperties": false,
+      "properties": {"op": {"const": "remove"}, "id": {"$ref": "#/$defs/id"}}
+    },
+    "set": {
+      "type": "object",
+      "required": ["op", "id", "path", "old", "new"],
+      "additionalProperties": false,
+      "properties": {
+        "op": {"const": "set"},
+        "id": {"$ref": "#/$defs/id"},
+        "path": {"type": "array", "minItems": 1, "items": {"type": ["string", "integer"]}},
+        "old": {"description": "지금 값이어야 한다. 다르면 충돌이다."},
+        "new": {},
+        "at": {"type": "integer", "minimum": 0, "description": "사상에 새 열쇠를 넣을 자리. 없으면 맨 끝."}
+      }
+    },
+    "move": {
+      "type": "object",
+      "required": ["op", "id", "parent", "role", "index"],
+      "additionalProperties": false,
+      "properties": {
+        "op": {"const": "move"},
+        "id": {"$ref": "#/$defs/id"},
+        "parent": {"$ref": "#/$defs/id"},
+        "role": {"type": "string"},
+        "index": {"type": "integer", "minimum": 0, "description": "빼낸 뒤의 목록에서의 자리"}
+      }
+    },
+    "op": {
+      "oneOf": [
+        {"$ref": "#/$defs/insert"}, {"$ref": "#/$defs/remove"},
+        {"$ref": "#/$defs/set"}, {"$ref": "#/$defs/move"}
+      ]
+    },
+    "transaction": {
+      "description": "한 번에 되돌려지는 연산의 묶음",
+      "type": "object",
+      "required": ["label", "ops"],
+      "additionalProperties": false,
+      "properties": {"label": {"type": "string"}, "ops": {"type": "array", "items": {"$ref": "#/$defs/op"}}}
+    },
+    "log": {"type": "array", "items": {"$ref": "#/$defs/transaction"}}
+  }
+}

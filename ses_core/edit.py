@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
@@ -23,6 +24,10 @@ from typing import Any, Mapping, Optional
 
 class EditError(ValueError):
     """잘못된 편집 연산. 저장소의 구조 불변식을 깨는 연산이나 충돌하는 연산."""
+
+
+# 이름의 규칙. 정준 문서의 스키마(ses.schema.json의 identifier)와 같다.
+IDENTIFIER = re.compile(r"^[A-Za-z_가-힣][A-Za-z0-9_가-힣]*$")
 
 
 class _Missing:
@@ -497,6 +502,34 @@ class Model:
             cur = self.elements.get(cur.parent) if cur.parent else None
         return cur.id if cur is not None else None
 
+    def outline(self, entity_id: str) -> list:
+        """엔티티의 한 층 아래. 화면의 나무를 한 층씩 펼칠 때 쓴다.
+
+        화면의 나무는 출현의 나무다. 같은 정의가 여러 곳에서 쓰이면 정의는 하나이고
+        출현은 여럿이다. 출현은 뿌리에서부터 지나온 쓴 자리(부분, multi-aspect, 대안)의
+        식별자 열로 식별한다. 전부 펼친 나무는 문서보다 지수적으로 클 수 있으므로 한 층씩
+        계산한다.
+
+        분해와 specialization마다 {element, kind, name, items}를 돌려준다. items는 쓴 자리마다
+        {element, name, target}이고 target은 그 자리가 가리키는 엔티티다(끊어졌으면 None).
+        """
+        def item(el, prop) -> dict:
+            target = self.resolved(el.props.get(prop))
+            return {"element": el.id, "name": self.label(el.id) if el.type != "multi_aspect"
+                    else self.ref_name(el.props.get(prop)), "target": target.id if target is not None else None}
+
+        out = []
+        for a in self.kids(entity_id, "aspects"):
+            out.append({"element": a.id, "kind": "aspect", "name": a.props.get("name"),
+                        "items": [item(p, "def") for p in self.kids(a.id, "parts")]})
+        for ma in self.kids(entity_id, "multi_aspects"):
+            out.append({"element": ma.id, "kind": "multi_aspect", "name": ma.props.get("name"),
+                        "items": [item(ma, "part")]})
+        for sp in self.kids(entity_id, "specializations"):
+            out.append({"element": sp.id, "kind": "specialization", "name": sp.props.get("name"),
+                        "items": [item(o, "def") for o in self.kids(sp.id, "alternatives")]})
+        return out
+
     # 참조 ---------------------------------------------------------------
 
     def refs_to(self, id: str) -> list:
@@ -734,6 +767,8 @@ class History:
         return inverse
 
     def undo(self) -> Optional[str]:
+        if self._depth:
+            raise EditError("거래 도중에는 되돌릴 수 없다")
         if not self.undo_stack:
             return None
         label, ops = self.undo_stack.pop()
@@ -744,6 +779,8 @@ class History:
         return label
 
     def redo(self) -> Optional[str]:
+        if self._depth:
+            raise EditError("거래 도중에는 다시 할 수 없다")
         if not self.redo_stack:
             return None
         label, ops = self.redo_stack.pop()
@@ -1003,6 +1040,32 @@ def new_document(name: str, profile: Optional[str] = None) -> Model:
 
 
 # ---------------------------------------------------------------------------
+# 곁자료: 문서의 뜻이 아닌 것 (화면 위치, 접힘 상태, 주석)
+# ---------------------------------------------------------------------------
+
+def save_sidecar(m: Model, by_id: Mapping[str, Any]) -> dict:
+    """요소 식별자로 가진 곁자료를 주소로 옮긴다. 저장할 때 쓴다.
+
+    편집하는 동안 곁자료는 식별자로 들고 있으므로 이름을 바꾸거나 옮겨도 고칠 것이
+    없다. 식별자는 세션 안에서만 뜻이 있으므로 파일에는 주소로 적는다.
+    지워진 요소의 곁자료는 빠진다.
+    """
+    return {m.address(i): _norm(v) for i, v in by_id.items() if i in m.elements}
+
+
+def load_sidecar(m: Model, by_address: Mapping[str, Any]) -> tuple:
+    """주소로 저장된 곁자료를 요소 식별자로 옮긴다.
+
+    (식별자로 찾은 것, 주소를 찾지 못한 것)을 돌려준다. 문서가 편집기 바깥에서
+    바뀌어 주소가 사라졌으면 뒤쪽에 남는다. 조용히 버리지 않는다.
+    """
+    index = {address: i for i, address in m.addresses().items()}
+    found = {index[a]: _norm(v) for a, v in by_address.items() if a in index}
+    lost = {a: _norm(v) for a, v in by_address.items() if a not in index}
+    return found, lost
+
+
+# ---------------------------------------------------------------------------
 # 명령: SES의 뜻을 아는 편집. 원시 연산의 거래로 풀린다
 # ---------------------------------------------------------------------------
 
@@ -1049,16 +1112,18 @@ class Editor:
         self.history.apply(Insert(id, type, parent, role, index, props))
         return id
 
-    def set(self, id: str, path, value) -> None:
+    def set(self, id: str, path, value, label: Optional[str] = None) -> None:
         """속성의 값을 바꾼다. 값이 같으면 아무 일도 하지 않는다. MISSING이면 지운다."""
         path = (path,) if isinstance(path, str) else tuple(path)
         old = _get_in(self.model.get(id).props, path)
         if not _same(old, value):
-            self.history.apply(Set(id, path, _norm(old), value))
+            what = "/".join(str(k) for k in path)
+            with self.history.transaction(label or f"{self.model.label(id)} 의 {what} {'삭제' if value is MISSING else '변경'}"):
+                self.history.apply(Set(id, path, _norm(old), value))
 
     def _check_name(self, type: str, parent: str, name: str, skip: Optional[str] = None) -> None:
-        if not isinstance(name, str) or not name:
-            raise EditError("이름이 비어 있다")
+        if not isinstance(name, str) or not IDENTIFIER.match(name):
+            raise EditError(f"이름 {name!r} 이 식별자 규칙에 맞지 않는다")
         m = self.model
         if type in ("entity", "variable"):
             others = m.of_type(type)
@@ -1327,11 +1392,13 @@ class Editor:
             index = len(dest) - (1 if el.parent == parent and el.role == role else 0)
         if TYPES[el.type].named and (el.parent != parent):
             self._check_name(el.type, parent, el.props.get("name"), skip=id)
-        self.history.apply(Move(id, parent, role, index))
+        with self.history.transaction(f"{self.model.label(id)} 옮기기"):
+            self.history.apply(Move(id, parent, role, index))
 
     def reorder(self, id: str, index: int) -> None:
         el = self.model.get(id)
-        self.history.apply(Move(id, el.parent, el.role, index))
+        with self.history.transaction(f"{self.model.label(id)} 순서 바꾸기"):
+            self.history.apply(Move(id, el.parent, el.role, index))
 
     # 분야의 내용 ----------------------------------------------------------
 

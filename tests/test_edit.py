@@ -672,8 +672,11 @@ def test_commands_keep_names_unique():
         ed.add_variable("policy", {"type": "int"})
     with pytest.raises(EditError):                         # aspect, multi-aspect, specialization은 한 범위다
         ed.add_aspect(m.entity("ServerPool"), "serversMAsp")
-    with pytest.raises(EditError):
-        ed.add_entity("")
+    for bad in ("", "서 버", "1번", "a-b", None, 3):          # 명령은 식별자 규칙에 맞는 이름만 받는다
+        with pytest.raises(EditError):
+            ed.add_entity(bad)
+        with pytest.raises(EditError):
+            ed.rename(m.entity("Server"), bad)
     assert state(m) == before and ed.history.undo_stack == []
 
 
@@ -751,3 +754,124 @@ def test_change_tracking_names_the_entities_to_reanalyse():
     assert name(m.changed_entities(rev)) == {"응용영역"}
     assert name(m.users(m.entity("실습"))) == {"응용영역", "실습영역"}
     assert name(m.dependents({m.entity("심화미개설")})) == {"심화미개설", "심화알고리즘", "기초영역", "프로그래밍입문"}
+
+
+# ---------------------------------------------------------------------------
+# 곁자료: 편집하는 동안은 식별자로, 파일에는 주소로
+# ---------------------------------------------------------------------------
+
+def test_sidecar_follows_elements_through_edits_and_a_save():
+    m = E.from_dict(raw(CURRICULUM))
+    ed = Editor(m)
+    layout = {el.id: {"x": i * 10, "y": i} for i, el in enumerate(m.all()) if el.type in ("entity", "part")}
+    ed.rename(m.entity("응용영역"), "응용")                    # 이름을 바꾸고
+    ed.rename(m.by_name("aspect", "웹트랙")[0], "웹")
+    part = next(p.id for p in m.of_type("part") if m.label(p.id) == "웹기초")
+    ed.move(part, m.by_name("aspect", "자료처리트랙")[0])     # 옮기고
+    ed.reorder(m.entity("LO4"), 0)
+    gone = m.entity("실습")
+    ed.remove(gone, cascade=True)                           # 지운다
+    assert all(i in m.elements for i in layout if i != gone)
+
+    saved = E.save_sidecar(m, layout)                       # 파일에는 주소로 적는다
+    assert len(saved) == len(layout) - 1
+    assert saved["entities/응용/aspects/자료처리트랙/parts/웹기초"] == layout[part]
+    reopened = E.from_dict(yaml.safe_load(E.dump(m)))       # 다시 열면 식별자는 새로 매겨진다
+    found, lost = E.load_sidecar(reopened, json.loads(json.dumps(saved, ensure_ascii=False)))
+    assert lost == {} and len(found) == len(saved)
+    for old_id, value in layout.items():
+        if old_id == gone:
+            continue
+        new_id = reopened.find(m.address(old_id))
+        assert found[new_id] == value
+        assert (reopened.get(new_id).type, reopened.label(new_id)) == (m.get(old_id).type, m.label(old_id))
+    # 편집기 바깥에서 문서가 바뀌어 주소가 사라지면 찾지 못한 것으로 돌려준다
+    found, lost = E.load_sidecar(E.from_dict(raw(CURRICULUM)), saved)
+    assert "entities/응용" in lost and "entities/LO1" not in lost
+
+
+# ---------------------------------------------------------------------------
+# 언어 중립 형식: 스냅숏과 변경 이력이 스키마를 따른다
+# ---------------------------------------------------------------------------
+
+def edit_schema():
+    jsonschema = pytest.importorskip("jsonschema")
+    with open(os.path.join(ROOT, "schema", "edit.schema.json"), encoding="utf-8") as f:
+        schema = json.load(f)
+    return jsonschema.Draft202012Validator(schema)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_snapshot_and_log_conform_to_the_schema(seed):
+    validator = edit_schema()
+    rng = random.Random(2000 + seed)
+    m = E.from_dict(raw(DOCS[seed % len(DOCS)]))
+    ed = Editor(m)
+    for _ in range(30):
+        try:
+            rand_command(rng, ed)
+        except EditError:
+            pass
+    snapshot = json.loads(json.dumps(m.snapshot(), ensure_ascii=False))
+    log = json.loads(json.dumps(ed.history.log(), ensure_ascii=False))
+    assert list(validator.iter_errors(snapshot)) == []
+    assert log and list(validator.iter_errors(log)) == []
+    assert list(validator.iter_errors({"format": "ses-edit/2", "root": None, "elements": {}}))
+    assert list(validator.iter_errors([{"label": "x", "ops": [{"op": "rename", "id": "e1"}]}]))
+
+
+# ---------------------------------------------------------------------------
+# 화면의 나무: 출현을 한 층씩 펼친다
+# ---------------------------------------------------------------------------
+
+def _walk_outline(m, T, node):
+    """펼친 나무의 엔티티 노드까지 outline을 따라 내려가 닿은 엔티티와 지나온 쓴 자리들을 돌려준다."""
+    from ses_core.decisions import family
+    entity = m.entity(T.label(node[:1]))
+    trail = []
+    i = 1
+    while i < len(node):
+        group_name, item_name = family(node[i]), node[i + 1]
+        group = next(g for g in m.outline(entity) if g["name"] == group_name)
+        if group["kind"] == "multi_aspect":
+            item = group["items"][0]                        # 복제본들은 쓴 자리 하나의 출현이다
+        else:
+            item = next(x for x in group["items"] if x["name"] == item_name)
+        trail.append(item["element"])
+        entity = item["target"]
+        i += 2
+    return entity, tuple(trail)
+
+
+@pytest.mark.parametrize("path", DOCS, ids=ident)
+def test_outline_reaches_every_node_of_the_unfolded_tree(path):
+    d = raw(path)
+    m = E.from_dict(d)
+    L = unfold_layered(load_ses_dict(d), None if not d.get("profile") else load_profile(
+        os.path.join(ROOT, "domains", d["profile"] + ".profile.yaml")))
+    T = L.ses.tree
+    seen = {}
+    for node in T.kinds:
+        if T.kind(node) != "ent" or any(seg.startswith("$") for seg in node):
+            continue
+        entity, trail = _walk_outline(m, T, node)
+        assert m.get(entity).props["name"] == T.label(node)  # 출현이 가리키는 정의가 정의 표지와 같다
+        seen.setdefault(trail, set()).add(T.label(node))
+    assert all(len(labels) == 1 for labels in seen.values())  # 쓴 자리의 열이 출현을 정한다
+    assert len(seen) >= len(m.of_type("part")) or "pruning" in path
+
+
+def test_outline_of_one_level():
+    m = E.from_dict(raw(CURRICULUM))
+    rows = m.outline(m.entity("프로그래밍입문"))
+    assert [(g["kind"], g["name"], len(g["items"])) for g in rows] == [("aspect", "구성", 9)]
+    assert rows[0]["items"][0] == {"element": m.of_type("part")[0].id, "name": "기초영역",
+                                   "target": m.entity("기초영역")}
+    rows = m.outline(m.entity("실습영역"))
+    assert [(g["kind"], g["name"], g["items"][0]["name"]) for g in rows] == [("multi_aspect", "실습들", "실습")]
+    rows = m.outline(m.entity("심화알고리즘"))
+    assert [(g["kind"], [x["name"] for x in g["items"]]) for g in rows] == [
+        ("specialization", ["심화개설", "심화미개설"])]
+    Editor(m).remove(m.entity("심화미개설"))                 # 끊어진 참조는 이름은 남고 대상은 없다
+    assert m.outline(m.entity("심화알고리즘"))[0]["items"][1]["target"] is None
+    assert m.outline(m.entity("심화알고리즘"))[0]["items"][1]["name"] == "심화미개설"

@@ -48,9 +48,9 @@ def _attempt(rng: random.Random) -> dict:
             aspects[f"a{a}"] = {"parts": parts_from(i, rng.randint(1, 3))}
         if aspects:
             body["aspects"] = aspects
-        if rng.random() < 0.3:
+        for j in range(rng.choice([0, 0, 0, 0, 1, 1, 2])):     # 같은 엔티티에 multi-aspect가 둘일 수 있다
             card = rng.choice([2, {"min": 1, "max": 2}] + ([{"var": rng.choice(list(variables))}] if variables else []))
-            body["multi_aspects"] = {"m0": {"part": rng.choice(names[i + 1:]), "cardinality": card}}
+            body.setdefault("multi_aspects", {})[f"m{j}"] = {"part": rng.choice(names[i + 1:]), "cardinality": card}
         if rng.random() < 0.45:
             alts = []
             for j in range(rng.randint(2, 3)):
@@ -59,8 +59,14 @@ def _attempt(rng: random.Random) -> dict:
                 extra[alt] = {"extends": n}
                 if i > 0 and j > 0 and rng.random() < 0.3:
                     extra[alt]["stereotype"] = "void"
-                elif rng.random() < 0.25:
-                    extra[alt]["aspects"] = {f"b{j}": {"parts": parts_from(i, rng.randint(1, 2))}}
+                elif rng.random() < 0.3:                    # 대안이 자기 분해를 가진다. 둘이면 선택 지점이 된다
+                    extra[alt]["aspects"] = {f"b{j}{x}": {"parts": parts_from(i, rng.randint(1, 2))}
+                                             for x in range(rng.choice([1, 1, 2]))}
+                elif rng.random() < 0.15:                   # 대안 안의 specialization
+                    inner = [f"{alt}_y{x}" for x in range(2)]
+                    for sub in inner:
+                        extra[sub] = {"extends": alt}
+                    extra[alt]["specializations"] = {"t0": {"alternatives": inner}}
             sp = {"alternatives": alts}
             if variables and len(alts) == 2 and rng.random() < 0.4:
                 sp["select"] = {"when": {"var": rng.choice(list(variables)), "eq": 1},

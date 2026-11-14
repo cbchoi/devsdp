@@ -313,6 +313,29 @@
         }
       }
     },
+    "partRef": {
+      "description": "부분으로 쓰는 엔티티. 이름만 적거나, 같은 정의를 다른 이름으로 쓸 때 def 와 alias 를 적는다.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/identifier"
+        },
+        {
+          "type": "object",
+          "required": [
+            "def"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "def": {
+              "$ref": "#/$defs/identifier"
+            },
+            "alias": {
+              "$ref": "#/$defs/identifier"
+            }
+          }
+        }
+      ]
+    },
     "aspect": {
       "type": "object",
       "required": [
@@ -324,7 +347,7 @@
           "type": "array",
           "minItems": 1,
           "items": {
-            "$ref": "#/$defs/identifier"
+            "$ref": "#/$defs/partRef"
           }
         },
         "couplings": {
@@ -355,7 +378,7 @@
       "additionalProperties": false,
       "properties": {
         "part": {
-          "$ref": "#/$defs/identifier"
+          "$ref": "#/$defs/partRef"
         },
         "cardinality": {
           "oneOf": [

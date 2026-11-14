@@ -16,13 +16,17 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | 10_theory_extensions.md | 새로운 이론으로 확장할 여지: 후보 9개의 핵심 추측, 선행 연구 위험, 비교와 권고 |
 | 11_ses_core_and_extensions.md | SES 핵과 확장(SES + X)의 정의: 핵의 두 층, 확장 계약, 모든 확장이 물려받는 정리, 세 사례(DEVS, 속성, 문서 조립) |
 | 12_generic_and_specific.md | 범용성과 특수성을 나눈 형식: 네 층(핵, 범용 장치, 도메인 프로파일, 도메인 문서), 세 분야(커리큘럼, RFP, 논문의 논리 구성) 적용 결과 |
+| 13_editor_data_model.md | 편집기를 고려한 자료구조: 세 모형, 편집 모델(요소, 참조, 원시 연산과 역연산), 정준 문서와의 왕복, 주소와 곁자료, 진단, 결정 집합과 선택 지점 표, 프로파일의 표시 정보, 검증 상태, 한계와 결정이 필요한 것 |
 | schema/profile.schema.json | 도메인 프로파일의 JSON Schema 초안 |
+| schema/decisions.schema.json | 결정 집합의 JSON Schema 초안 |
+| schema/edit.schema.json | 편집 모델의 스냅숏과 변경 이력(ses-edit/1)의 JSON Schema 초안 |
 | domains/ | 세 분야의 프로파일과 예시 도메인 문서 |
+| examples/processing_system.decisions.yaml | 결정 집합 예시 (변수 값과 선택 지점에 대한 결정) |
 | examples/processing_system.pruning.ses.yaml | 가지치기 SES 예시 (대상 SES와 같은 스키마) |
 | references.md | 검토 문헌 링크 목록 (열람 상태 표기) |
 | schema/ses.schema.json | 정준 YAML/JSON 표현의 JSON Schema 초안 |
 | examples/processing_system.ses.yaml | 처리 시스템 예시 SES (타입 수준) |
-| examples/processing_system.config.yaml | 가지치기 구성 예시 |
+| examples/processing_system.config.yaml | 가지치기 구성 예시 (04 문서의 옛 형식. 어떤 코드도 읽지 않는다. 13 문서의 결정 집합이 대신한다) |
 | examples/processing_system.binding.pyevsim.yaml | pyevsim 바인딩 예시 |
 
 예시 SES는 스키마로 검증했다. 검증 방법:
@@ -31,7 +35,7 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 python -c "import json, yaml, jsonschema; s=json.load(open('docs/ses-platform/schema/ses.schema.json')); d=yaml.safe_load(open('docs/ses-platform/examples/processing_system.ses.yaml')); jsonschema.Draft202012Validator(s).validate(d); print('valid')"
 ```
 
-읽는 순서는 01, 02, 03, 04이다. 03의 6절이 구조 표현의, 04가 자료구조의 핵심이다.
+읽는 순서는 01, 02, 03, 04이다. 03의 6절이 구조 표현의, 04가 자료구조의 핵심이다. 편집기를 만들 때는 13을 먼저 읽는다. 13은 04의 자료구조 가운데 편집에 쓰는 부분을 다시 정한 것이다.
 
 04의 자료구조를 그대로 옮긴 Python 참조 정의가 저장소 루트의 ses_core 패키지(model.py, loader.py)에 있다. 예시 SES 를 적재하고 무결성 검사를 확인하는 테스트는 tests/test_loader.py 이며 다음으로 실행한다.
 

@@ -11,11 +11,14 @@ kinds:
   영역:
     doc: 내용 영역
     contains: [단원]
+  # title 과 ui 는 편집기를 위한 표시 정보다. 검사와 해석은 읽지 않는다 (13 문서).
   단원:
     doc: 수업 단위
+    title: 단원
+    ui: {icon: book, color: "#4477aa"}
     fields:
-      시수: {type: int, required: true}
-      수준: {type: enum, values: [기초, 심화], default: 기초}
+      시수: {type: int, required: true, title: 수업 시수, ui: {unit: 시간, widget: number, min: 1}}
+      수준: {type: enum, values: [기초, 심화], default: 기초, ui: {widget: select}}
   성취기준:
     fields:
       코드: {type: str, required: true}
@@ -24,7 +27,8 @@ kinds:
       비중: {type: int, required: true}
 
 links:
-  선수: {from: [단원], to: [단원], acyclic: true, target: required, doc: 먼저 배워야 하는 단원}
+  선수: {from: [단원], to: [단원], acyclic: true, target: required, doc: 먼저 배워야 하는 단원,
+       title: 선수 단원, ui: {line: dashed}}
   달성: {from: [단원], to: [성취기준], doc: 이 단원이 다루는 성취기준}
   평가함: {from: [평가], to: [성취기준], doc: 이 평가가 확인하는 성취기준}
 

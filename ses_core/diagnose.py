@@ -20,12 +20,11 @@ from typing import Mapping, Optional
 from .algebra import ENT, SES, AlgebraError, count_variants, reduce, restrict, sem
 from .decisions import (ChoicePoint, DecisionSet, _variable_choice, choice_table, excluded, family,
                         witness)
-from .edit import EditError, Model, Ref, TYPES, to_dict
+from .edit import IDENTIFIER, EditError, Model, Ref, TYPES, to_dict
 from .extension import Layered, violations
 from .profile import _TYPES, Profile
 from .skeleton import members
 
-_IDENT = re.compile(r"^[A-Za-z_가-힣][A-Za-z0-9_가-힣]*$")
 _STEREOTYPES = ("atomic", "coupled", "abstract", "frame", "void")
 _SCOPE = ("aspects", "multi_aspects", "specializations")
 PROFILE_CODES = ("T1", "F1", "F3", "L0", "L2", "T2")        # 문서 범위에서도 판정하는 프로파일 위반
@@ -132,6 +131,16 @@ def _ancestors(m: Model, entity_id: str) -> tuple:
         out.append(cur)
 
 
+def _ports_of(m: Model, entity_id: str) -> dict:
+    """엔티티의 포트: extends로 물려받은 것과 자신의 것."""
+    merged: dict = {}
+    for eid in list(reversed(_ancestors(m, entity_id)[0])) + [entity_id]:
+        ports = m.elements[eid].props.get("ports")
+        if isinstance(ports, dict):
+            merged.update(ports)
+    return merged
+
+
 def _uses(m: Model, entity_id: str) -> list:
     """(쓰는 자리의 요소, 쓰이는 엔티티)의 목록: 부분, 복제 대상, 대안."""
     out = []
@@ -161,7 +170,7 @@ def check_document(m: Model, profile: Optional[Profile] = None, unused: bool = T
         seen: dict = {}
         for el in elements:
             name = el.props.get("name")
-            if not isinstance(name, str) or not _IDENT.match(name):
+            if not isinstance(name, str) or not IDENTIFIER.match(name):
                 add("error", "NAME", el.id, f"{what} 이름 {name!r} 이 식별자 규칙에 맞지 않는다", ("name",))
             if _hashable(name):
                 seen.setdefault(name, []).append(el.id)
@@ -192,6 +201,34 @@ def check_document(m: Model, profile: Optional[Profile] = None, unused: bool = T
         for name in _vars(expr):
             if not _hashable(name) or name not in var_names:
                 add("error", "VAR", el.id, f"정의되지 않은 변수 {name!r}", (prop,), data={"name": name})
+
+    def check_couplings(holder, owner, couplings, parts: dict, path: tuple) -> None:
+        """결합의 끝점이 가리키는 부분과 포트가 있는가. 포트의 방향과 타입은 적재기가 본다.
+
+        포트와 결합은 요소가 아니라 속성이어서 이름으로 이어져 있다. 부분을 옮기거나
+        포트 이름을 바꾸면 여기서 끊어진 곳이 드러난다.
+        """
+        if not isinstance(couplings, list):
+            return
+        own = _ports_of(m, owner.id)
+        for i, c in enumerate(couplings):
+            for end in ("from", "to"):
+                text = c.get(end) if isinstance(c, dict) else None
+                where = path + (i, end)
+                if not isinstance(text, str):
+                    add("error", "COUP", holder.id, "결합의 끝점이 없다", where)
+                    continue
+                part, _, port = text.rpartition(".")
+                if not part:
+                    if port not in own:
+                        add("error", "COUP", holder.id, f"자신의 포트 {port} 가 없다", where,
+                            data={"port": port})
+                elif part not in parts:
+                    add("error", "COUP", holder.id, f"결합이 가리키는 부분 {part} 가 없다", where,
+                        data={"part": part, "port": port})
+                elif parts[part] is not None and port not in _ports_of(m, parts[part].id):
+                    add("error", "COUP", holder.id, f"부분 {part} 에 포트 {port} 가 없다", where,
+                        [parts[part].id], data={"part": part, "port": port})
 
     for v in variables:
         spec = v.props.get("spec")
@@ -237,6 +274,9 @@ def check_document(m: Model, profile: Optional[Profile] = None, unused: bool = T
                 for i in ids[1:]:
                     add("error", "DUP", i, f"부분 이름 {label!r} 이 겹친다. 별칭이 필요하다", (), ids[:1])
             check_vars(a, "rule", a.props.get("rule"))
+            check_couplings(a, e, a.props.get("couplings"),
+                            {label: m.resolved(m.get(ids[0]).props.get("def")) for label, ids in labels.items()},
+                            ("couplings",))
 
         for ma in m.kids(e.id, "multi_aspects"):
             if "part" not in ma.props:
@@ -251,6 +291,11 @@ def check_document(m: Model, profile: Optional[Profile] = None, unused: bool = T
                 add("error", "SHAPE", ma.id, "개수는 정수, {var}, {min, max} 가운데 하나다", ("cardinality",))
             check_vars(ma, "cardinality", card)
             check_vars(ma, "rule", ma.props.get("rule"))
+            pattern = ma.props.get("couplings")
+            if isinstance(pattern, dict):                   # 결합 틀. 복제본은 {part} 또는 별칭으로 가리킨다
+                replica = {ma.props.get("alias") or "{part}": m.resolved(ma.props.get("part"))}
+                for key in ("fan_out", "fan_in", "custom", "first", "last"):
+                    check_couplings(ma, e, pattern.get(key), replica, ("couplings", key))
 
         for sp in m.kids(e.id, "specializations"):
             alts = m.kids(sp.id, "alternatives")
@@ -299,20 +344,20 @@ def check_document(m: Model, profile: Optional[Profile] = None, unused: bool = T
     if len(roots) == 1:
         root = roots[0].id
         reached: set = set()
-        reported: set = set()
 
         def walk(eid: str, trail: tuple) -> None:           # strict hierarchy: 경로에서 같은 정의의 반복
-            reached.add(eid)
+            reached.add(eid)                                # 한 번 다 본 정의는 다시 보지 않는다
             for site, target in _uses(m, eid):
                 if target in trail + (eid,):
-                    if site not in reported:
-                        reported.add(site)
-                        chain = "/".join(str(m.elements[x].props.get("name")) for x in trail + (eid, target))
-                        add("error", "CYCLE", site, f"정의가 자기 자신을 포함한다: {chain}", (), [target])
-                else:
+                    chain = "/".join(str(m.elements[x].props.get("name")) for x in trail + (eid, target))
+                    add("error", "CYCLE", site, f"정의가 자기 자신을 포함한다: {chain}", (), [target])
+                elif target not in reached:
                     walk(target, trail + (eid,))
 
-        walk(root, ())
+        try:
+            walk(root, ())
+        except RecursionError:
+            add("error", "DEPTH", doc.id, "포함 관계가 너무 깊어 검사하지 못했다")
         if unused:
             based = set(reached)
             for eid in reached:
@@ -394,19 +439,88 @@ def _check_profile(m: Model, profile: Profile, entities: list, add) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 펼친 나무의 크기
+# ---------------------------------------------------------------------------
+
+def unfolded_size(m: Model, cap: int = 10 ** 12) -> int:
+    """정의 표를 뿌리에서 펼쳤을 때의 노드 수. 펼치지 않고 센다.
+
+    같은 정의를 여러 곳에서 쓰면 펼친 나무는 문서보다 지수적으로 크다. 두 부분이 같은
+    정의를 쓰는 층이 40개면 노드는 2의 40제곱을 넘는다. 분석을 시작하기 전에 크기를
+    알아야 편집기가 멈추지 않는다. 막는 오류가 없는 문서에서만 뜻이 있다. cap을 넘으면
+    cap을 돌려준다.
+    """
+    doc = m.get(m.root)
+    domains: dict = {}
+    for v in m.kids(doc.id, "variables"):
+        spec = v.props.get("spec")
+        name = v.props.get("name")
+        if not isinstance(spec, dict) or not _hashable(name):
+            continue
+        r = spec.get("range")
+        if isinstance(spec.get("values"), list):
+            domains[name] = list(spec["values"])
+        elif isinstance(r, list) and len(r) == 2 and all(isinstance(x, int) for x in r):
+            domains[name] = list(range(r[0], r[1] + 1))
+        elif spec.get("type") == "bool":
+            domains[name] = [True, False]
+
+    def counts(card) -> list:
+        if isinstance(card, int) and not isinstance(card, bool):
+            return [card]
+        if isinstance(card, dict):
+            if "var" in card:
+                return [n for n in domains.get(card["var"], []) if isinstance(n, int)] \
+                    if _hashable(card["var"]) else []
+            lo, hi = card.get("min"), card.get("max")
+            if isinstance(lo, int) and isinstance(hi, int):
+                return list(range(lo, hi + 1))
+        return []
+
+    memo: dict = {}
+
+    def size(eid: str, trail: tuple) -> int:
+        if eid in memo:
+            return memo[eid]
+        if eid in trail:
+            return cap
+        deeper = trail + (eid,)
+        total = 1
+        for a in m.kids(eid, "aspects"):
+            total += 1 + sum(size(t.id, deeper) for p in m.kids(a.id, "parts")
+                             for t in [m.resolved(p.props.get("def"))] if t is not None)
+        for ma in m.kids(eid, "multi_aspects"):
+            t = m.resolved(ma.props.get("part"))
+            each = size(t.id, deeper) if t is not None else 0
+            total += sum(1 + n * each for n in counts(ma.props.get("cardinality")))
+        for sp in m.kids(eid, "specializations"):
+            total += 1 + sum(size(t.id, deeper) for o in m.kids(sp.id, "alternatives")
+                             for t in [m.resolved(o.props.get("def"))] if t is not None)
+        memo[eid] = min(total, cap)
+        return memo[eid]
+
+    roots = [e.id for e in m.kids(doc.id, "entities") if e.props.get("root")]
+    if not roots:
+        return 0
+    return min(size(roots[0], ()) + sum(1 + len(d) for d in domains.values()), cap)
+
+
+# ---------------------------------------------------------------------------
 # 펼친 나무에서 문서의 요소로
 # ---------------------------------------------------------------------------
 
-def provenance(m: Model, T, path: tuple) -> tuple:
-    """펼친 나무의 엔티티 노드를 문서의 요소로: (정의 엔티티, 그것을 부분으로 쓴 자리).
+def provenance(m: Model, T, path: tuple, by_name: Optional[Mapping] = None) -> tuple:
+    """펼친 나무의 엔티티 노드를 문서의 요소로: (정의 엔티티, 그것을 쓴 자리).
 
-    정의 표지가 정의 엔티티를 정한다. 쓴 자리는 부모 aspect의 이름과 부분 이름으로 찾는다.
-    뿌리이거나 대안으로 들어온 노드에는 쓴 자리가 없다.
+    정의 표지가 정의 엔티티를 정한다. 쓴 자리는 부모 노드의 이름과 그 아래에서의 이름으로
+    찾는다: aspect의 부분, multi-aspect, specialization의 대안. 뿌리에는 쓴 자리가 없다.
+    by_name은 엔티티 이름에서 식별자로 가는 표이며 여러 번 부를 때 넘겨 준다.
     """
-    entity = m.entity(T.label(path))
+    find = by_name.get if by_name is not None else m.entity
+    entity = find(T.label(path))
     usage = None
     if len(path) >= 3 and T.kind(path[:-1]) != ENT:
-        holder = m.entity(T.label(path[:-2]))
+        holder = find(T.label(path[:-2]))
         if holder is not None:
             name = family(path[-2])
             for a in m.kids(holder, "aspects"):
@@ -477,8 +591,12 @@ def _cause(T, vs: list, hit: set, w: DecisionSet) -> tuple:
 
 
 def analyze(m: Model, profile: Optional[Profile] = None, max_variants: int = 5000,
-            unused: bool = True) -> Analysis:
-    """문서 범위와 족 범위의 진단을 모두 낸다. 어떤 상태의 문서에도 예외 없이 답한다."""
+            unused: bool = True, max_nodes: int = 200000) -> Analysis:
+    """문서 범위와 족 범위의 진단을 모두 낸다. 어떤 상태의 문서에도 예외 없이 답한다.
+
+    max_nodes는 펼친 나무의 노드 수 한도, max_variants는 구조상 변이 수의 한도다.
+    어느 쪽이든 넘으면 변이 분석을 하지 않고 LIMIT로 알린다.
+    """
     from . import loader, unfold                        # 지연 임포트: 순환을 피한다
 
     diags = check_document(m, profile, unused)
@@ -493,6 +611,12 @@ def analyze(m: Model, profile: Optional[Profile] = None, max_variants: int = 500
 
     if any(d.blocking for d in diags):
         return stop("info", "SKIP", "문서에 오류가 있어 변이 분석을 하지 않았다")
+    try:
+        nodes = unfolded_size(m, max_nodes + 1)
+    except RecursionError:
+        nodes = max_nodes + 1
+    if nodes > max_nodes:
+        return stop("info", "LIMIT", f"펼친 나무의 노드가 한도 {max_nodes}개를 넘어 변이 분석을 하지 않았다")
     try:
         d = to_dict(m)
         doc = loader.load_ses_dict(d)
@@ -542,6 +666,7 @@ def _family(m: Model, L: Layered, domains: dict, result: Analysis) -> Analysis:
 
     # 문서 범위에서 이미 보고한 프로파일 위반은 족 범위에서 되풀이하지 않는다
     static = {(d.code, m.entity_of(d.element)) for d in diags if d.code in PROFILE_CODES}
+    by_name = {e.props.get("name"): e.id for e in reversed(m.of_type("entity"))}
     groups: dict = {}                                    # (계층, 부호, 요소, 메시지)에서 변이들로
     good = []
     for V in vs:
@@ -549,9 +674,9 @@ def _family(m: Model, L: Layered, domains: dict, result: Analysis) -> Analysis:
         if not found:
             good.append(V)
         for layer, code, path, msg in found:
-            entity, usage = provenance(m, T, path)
+            entity, usage = provenance(m, T, path, by_name)
             if code in PROFILE_CODES and any(
-                    (code, m.entity(T.label(y))) in static for y in members(T, path) if y in V):
+                    (code, by_name.get(T.label(y))) in static for y in members(T, path) if y in V):
                 continue
             g = groups.setdefault((layer, code, entity, msg), {"variants": [], "usage": usage})
             if not g["variants"] or g["variants"][-1] is not V:

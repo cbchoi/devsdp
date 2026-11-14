@@ -21,7 +21,8 @@ from ses_core import load_ses_dict  # noqa: E402
 from ses_core import edit as E  # noqa: E402
 from ses_core.algebra import reduce, sem  # noqa: E402
 from ses_core.decisions import DecisionSet, apply, choice_table, family, split_count  # noqa: E402
-from ses_core.diagnose import PROFILE_CODES, analyze, check_document, effective_kind, provenance  # noqa: E402
+from ses_core.diagnose import (  # noqa: E402
+    PROFILE_CODES, analyze, check_document, effective_kind, provenance, unfolded_size)
 from ses_core.edit import MISSING, EditError, Editor, Insert, Ref, Set  # noqa: E402
 from ses_core.extension import violations  # noqa: E402
 from ses_core.profile import load_profile  # noqa: E402
@@ -184,6 +185,17 @@ def _no_alternatives(m, ed):
         ed.remove(alt.id)
 
 
+def _drop_part(m, ed):
+    ed.remove(next(p.id for p in m.of_type("part") if m.label(p.id) == "Collector"))
+
+
+def _rename_port(entity, old, new):
+    def change(m, ed):
+        ports = m.get(ent(m, entity)).props["ports"]
+        ed.set(ent(m, entity), "ports", {(new if k == old else k): v for k, v in ports.items()})
+    return change
+
+
 BROKEN = {
     "뿌리 없음": (lambda m, ed: ed.set(ent(m, "ProcessingSystem"), "root", MISSING),
               "ROOT", "", ()),
@@ -225,6 +237,15 @@ BROKEN = {
                        "SHAPE", "entities/Server", ("stereotype",)),
     "type 없는 변수": (lambda m, ed: ed.set(named(m, "variable", "policy"), "spec", {"values": ["a"]}),
                    "SHAPE", "variables/policy", ("spec",)),
+    # 포트와 결합은 이름으로 이어진 속성이다. 끊어지면 결합의 자리까지 짚는다
+    "결합이 가리키는 부분이 빠짐": (_drop_part, "COUP", "entities/ProcessingSystem/aspects/pipelineDec",
+                         ("couplings", 2, "to")),
+    "부분의 포트 이름이 바뀜": (_rename_port("Buffer", "in", "input"), "COUP",
+                       "entities/ProcessingSystem/aspects/pipelineDec", ("couplings", 0, "to")),
+    "자신의 포트 이름이 바뀜": (_rename_port("ServerPool", "done", "finished"), "COUP",
+                       "entities/ServerPool/multi_aspects/serversMAsp", ("couplings", "fan_in", 1, "to")),
+    "복제본의 포트 이름이 바뀜": (_rename_port("Server", "out", "result"), "COUP",
+                        "entities/ServerPool/multi_aspects/serversMAsp", ("couplings", "fan_in", 0, "from")),
 }
 
 
@@ -565,9 +586,161 @@ def test_analysis_never_raises_during_editing(seed):
     assert a.diagnostics == analyze(open_doc(path)[0], profile, max_variants=400).diagnostics
 
 
+@pytest.mark.parametrize("seed", range(120))
+def test_no_diagnostics_means_the_strict_tools_accept(seed):
+    """문서 범위의 진단이 하나도 없으면 정준 문서로 쓸 수 있고, 적재기와 스키마가 받아들인다."""
+    jsonschema = pytest.importorskip("jsonschema")
+    with open(os.path.join(ROOT, "schema", "ses.schema.json"), encoding="utf-8") as f:
+        validator = jsonschema.Draft202012Validator(json.load(f))
+    rng = random.Random(3000 + seed)
+    m, ed, profile = open_doc(DOCS[seed % len(DOCS)])
+    for _ in range(12):
+        try:
+            rand_command(rng, ed)
+        except EditError:
+            pass
+        found = [d for d in check_document(m, profile) if d.code != "UNUSED"]
+        if found:
+            ROBUST["with_diagnostics"] += 1
+            continue
+        d = E.to_dict(m)
+        load_ses_dict(d)
+        assert list(validator.iter_errors(d)) == []
+        ROBUST["clean"] += 1
+
+
 def test_robustness_sample_is_not_vacuous():
     if not ROBUST:
         pytest.skip("앞의 시험과 함께 실행할 때만 센다")
     assert ROBUST["analyzed"] >= 150 and ROBUST["blocked"] >= 250, ROBUST
+    assert ROBUST["clean"] >= 150 and ROBUST["with_diagnostics"] >= 500, ROBUST
     for code in ("REF", "ROOT", "MISS", "DUP", "VAR", "EXT", "UNUSED", "LOAD", "SKIP"):
         assert ROBUST[code] >= 5, (code, ROBUST)
+
+
+# ---------------------------------------------------------------------------
+# 팔레트: 편집기가 내놓는 것과 검사가 받아들이는 것이 같다
+# ---------------------------------------------------------------------------
+
+def test_palette_carries_the_display_hints():
+    profile = load_profile(os.path.join(ROOT, "domains", "curriculum.profile.yaml"))
+    unit = profile.kinds["단원"]
+    assert (unit.title, unit.ui) == ("단원", {"icon": "book", "color": "#4477aa"})
+    assert profile.kinds["영역"].title is None and profile.kinds["영역"].ui == {}
+    pal = profile.palette("단원")
+    assert list(pal["fields"]) == ["시수", "수준"]
+    assert pal["fields"]["시수"].title == "수업 시수"
+    assert pal["fields"]["시수"].ui == {"unit": "시간", "widget": "number", "min": 1}
+    assert profile.links["선수"].title == "선수 단원" and profile.links["선수"].ui == {"line": "dashed"}
+    assert profile.palette("과정")["parts"] == ["영역", "성취기준", "평가"]
+    assert profile.palette("단원")["links_out"] == ["선수", "달성"]
+    assert profile.palette("성취기준")["links_in"] == ["달성", "평가함"]
+    assert profile.palette(None)["parts"] == list(profile.kinds)
+
+
+@pytest.mark.parametrize("name", ["curriculum", "rfp", "paper"])
+def test_palette_agrees_with_the_checks(name):
+    profile = load_profile(os.path.join(ROOT, "domains", name + ".profile.yaml"))
+    kinds = list(profile.kinds)
+    checked = collections.Counter()
+    for parent in kinds:                                    # 포함: 팔레트에 있는 유형만 오류 없이 담긴다
+        for child in kinds:
+            m = E.new_document("문서", profile=name)
+            ed = Editor(m)
+            p = ed.add_entity("부모", kind=parent, root=True)
+            c = ed.add_entity("자식", kind=child)
+            ed.add_part(ed.add_aspect(p, "구성"), c)
+            flagged = any(d.code == "T2" for d in check_document(m, profile))
+            assert flagged == (child not in profile.palette(parent)["parts"])
+            checked["T2" if flagged else "ok"] += 1
+    for link in profile.links:                              # 관계: 양쪽 팔레트에 모두 있어야 한다
+        for src in kinds:
+            for dst in kinds:
+                m = E.new_document("문서", profile=name)
+                ed = Editor(m)
+                a = ed.add_entity("출발", kind=src, root=True)
+                b = ed.add_entity("도착", kind=dst)
+                ed.add_link(a, link, b)
+                flagged = any(d.code == "L2" for d in check_document(m, profile))
+                offered = link in profile.palette(src)["links_out"] and link in profile.palette(dst)["links_in"]
+                assert flagged == (not offered)
+                checked["L2" if flagged else "ok"] += 1
+    for kind in kinds:                                      # 필드: 폼에 있는 필드만 받아들여진다
+        m = E.new_document("문서", profile=name)
+        ed = Editor(m)
+        e = ed.add_entity("하나", kind=kind, root=True)
+        ed.set_field(e, "폼에없는필드", 1)
+        for fname in profile.palette(kind)["fields"]:
+            ed.set_field(e, fname, None)
+        found = check_document(m, profile)
+        assert [d.path for d in found if d.code == "F1"] == [("fields", "폼에없는필드")]
+    assert checked["T2"] >= 1 and checked["L2"] >= 10 and checked["ok"] >= 10
+
+
+def test_coupling_check_sees_inherited_ports():
+    m, ed, _ = open_doc(PROCESSING)
+    part = next(p.id for p in m.of_type("part") if m.label(p.id) == "Buffer")
+    with ed.history.transaction("대안을 직접 부분으로"):       # Buffer 자리에 그 대안을 같은 이름으로 둔다
+        ed.relink(part, "def", ent(m, "FifoBuffer"))
+        ed.set_alias(part, "Buffer")
+    assert check_document(m, unused=False) == []            # 포트는 Buffer에서 물려받은 것이다
+    load_ses_dict(E.to_dict(m))
+    ports = m.get(ent(m, "Buffer")).props["ports"]
+    ed.set(ent(m, "Buffer"), "ports", {k: v for k, v in ports.items() if k != "ack"})
+    found = [(d.code, d.path, d.data) for d in check_document(m, unused=False)]
+    assert found == [("COUP", ("couplings", 3, "to"), {"part": "Buffer", "port": "ack"})]
+
+
+def test_shared_definitions_do_not_blow_up_the_hierarchy_check():
+    """같은 정의를 여러 곳에서 쓰는 깊은 문서에서도 문서 범위 검사가 금방 끝난다."""
+    import time
+    depth = 40                                              # 경로의 수는 2의 40제곱이다
+    entities = {"L0": {"root": True}}
+    for i in range(depth):
+        entities[f"L{i}"].update({"aspects": {"a": {"parts": [f"L{i + 1}", {"def": f"L{i + 1}", "alias": "again"}]}}})
+        entities[f"L{i + 1}"] = {}
+    m = E.from_dict({"ses": "1.0", "name": "L0", "entities": entities})
+    started = time.time()
+    assert check_document(m) == []
+    assert time.time() - started < 5
+    # 펼친 나무는 3 곱하기 2의 40제곱쯤 된다. 펼치지 않고 세고, 분석은 시작하지 않는다
+    assert unfolded_size(m, cap=10 ** 15) == 3 * 2 ** depth - 2
+    assert unfolded_size(m, cap=1000) == 1000                 # 상한을 넘으면 상한을 돌려준다
+    a = analyze(m)
+    assert [(d.severity, d.code) for d in a.diagnostics] == [("info", "LIMIT")] and a.variants is None
+    assert time.time() - started < 5
+    m.apply(Insert("p900", "part", m.by_name("aspect", "a")[-1], "parts", 0, {"def": Ref(m.entity("L3"), None)}))
+    found = check_document(m)
+    assert [(d.code, d.element) for d in found] == [("CYCLE", "p900")]
+    assert "L3/" in found[0].message and found[0].message.endswith("/L3")
+
+
+@pytest.mark.parametrize("seed", range(150))
+def test_unfolded_size_is_counted_without_unfolding(seed):
+    if seed < len(DOCS):
+        d = raw(DOCS[seed])
+    else:
+        d = rand_document(random.Random(seed))
+    L = unfold_layered(load_ses_dict(d), profile_of(d))
+    assert unfolded_size(E.from_dict(d)) == len(L.ses.tree.nodes)
+
+
+def test_very_deep_document_gets_a_diagnostic_not_a_crash():
+    depth = 3000
+    entities = {"L0": {"root": True}}
+    for i in range(depth):
+        entities[f"L{i}"].update({"aspects": {"a": {"parts": [f"L{i + 1}"]}}})
+        entities[f"L{i + 1}"] = {}
+    m = E.from_dict({"ses": "1.0", "name": "L0", "entities": entities})
+    a = analyze(m)
+    assert [d.code for d in a.diagnostics if d.code != "UNUSED"] == ["DEPTH", "SKIP"]
+
+
+def test_undo_is_refused_inside_a_transaction():
+    m, ed, _ = open_doc(PROCESSING)
+    ed.add_entity("X")
+    with ed.history.transaction("묶음"):
+        ed.add_entity("Y")
+        with pytest.raises(EditError):
+            ed.undo()
+    assert ed.undo() == "묶음" and m.entity("Y") is None and m.entity("X") is not None

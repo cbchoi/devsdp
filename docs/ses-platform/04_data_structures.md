@@ -247,6 +247,8 @@ at 이 NodeId(정의 수준)이면 그 정의가 나타나는 모든 인스턴�
 
 2026-11-12 수정. 초안은 "둘 다 있으면 인스턴스 수준이 우선한다"고 적었으나 철회한다. 07 문서의 가지치기 대수에서 Configuration 은 가지치기 SES 의 직렬화이며, 정의 수준 결정과 인스턴스 수준 결정은 모두 적용되고 서로 모순이면 결과는 모순(⊥)이다. 덮어쓰기 규칙은 결과를 결정 순서에 의존하게 만들어 가지치기 연산의 교환 법칙을 깨뜨린다.
 
+2026-11-14 추가. 이 절의 values와 decisions는 13 문서의 결정 집합(ses_core/decisions.py)으로 구현되었다. values는 결정 집합의 variables, decisions는 choose에 해당하고, at이 NodeId인 결정은 at, InstancePath인 결정은 path로 적는다. 파일 형식과 스키마는 13 문서 7절과 schema/decisions.schema.json에 있다. overrides(속성 재정의)는 결정 집합에 넣지 않았다. 이 절의 표와 ses_core/model.py의 Configuration 선언은 초안으로 남아 있으며 어떤 코드도 쓰지 않는다. 6절의 PruningTrace는 결정을 순서 있는 열로 기록하는 설계인데, 결정 집합은 순서가 없는 집합이므로 그대로는 맞지 않는다.
+
 ## 6. 기록 계층: PruningTrace
 
 | 필드 | 타입 | 설명 |

@@ -24,6 +24,10 @@ from .extension import Extension, View
 _TYPES = {"int": (int,), "float": (int, float), "str": (str,), "bool": (bool,), "enum": (str, int)}
 
 
+# title과 ui는 편집기를 위한 것이다. title은 화면에 보일 이름, ui는 편집기가 해석하는
+# 자유로운 힌트(아이콘, 색, 입력 방식, 단위)다. 핵과 검사는 둘을 읽지 않는다.
+# 분야에 따라 달라지는 표시 방식도 분야의 낱말이므로 프로파일에 둔다.
+
 @dataclass(frozen=True)
 class FieldSpec:
     type: str
@@ -31,6 +35,8 @@ class FieldSpec:
     values: tuple = ()
     default: Any = None
     doc: Optional[str] = None
+    title: Optional[str] = None
+    ui: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,8 @@ class KindSpec:
     fields: Mapping[str, FieldSpec] = field(default_factory=dict)
     contains: Optional[tuple] = None        # None이면 제한 없음
     doc: Optional[str] = None
+    title: Optional[str] = None
+    ui: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -49,6 +57,8 @@ class LinkSpec:
     acyclic: bool = False
     target_required: bool = False            # 출발이 있으면 대상도 있어야 하는가
     doc: Optional[str] = None
+    title: Optional[str] = None
+    ui: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -75,6 +85,21 @@ class Profile:
     rules: tuple = ()
     description: Optional[str] = None
 
+    def palette(self, kind: Optional[str]) -> dict:
+        """유형 kind의 엔티티를 편집할 때 편집기가 내놓을 것.
+
+        fields는 입력 폼의 항목, parts는 부분으로 둘 수 있는 유형, links_out과 links_in은
+        이 유형에서 나가거나 이 유형으로 들어올 수 있는 관계다. 검사(Domain.check)가
+        받아들이는 것과 같아야 한다. 모르는 유형이면 제한 없는 팔레트를 준다.
+        """
+        spec = self.kinds.get(kind)
+        return {
+            "fields": dict(spec.fields) if spec is not None else {},
+            "parts": list(self.kinds) if spec is None or spec.contains is None else list(spec.contains),
+            "links_out": [l.name for l in self.links.values() if not l.src or kind in l.src],
+            "links_in": [l.name for l in self.links.values() if not l.dst or kind in l.dst],
+        }
+
 
 @dataclass(frozen=True)
 class Item:
@@ -99,13 +124,14 @@ def load_profile_dict(d: dict) -> Profile:
     for name, k in (d.get("kinds") or {}).items():
         k = k or {}
         fields = {f: FieldSpec(spec["type"], bool(spec.get("required", False)),
-                               tuple(spec.get("values", ())), spec.get("default"), spec.get("doc"))
+                               tuple(spec.get("values", ())), spec.get("default"), spec.get("doc"),
+                               spec.get("title"), dict(spec.get("ui") or {}))
                   for f, spec in (k.get("fields") or {}).items()}
         kinds[name] = KindSpec(name, fields, tuple(k["contains"]) if "contains" in k else None,
-                               k.get("doc"))
+                               k.get("doc"), k.get("title"), dict(k.get("ui") or {}))
     links = {name: LinkSpec(name, tuple(l.get("from", ())), tuple(l.get("to", ())),
                             bool(l.get("acyclic", False)), l.get("target", "optional") == "required",
-                            l.get("doc"))
+                            l.get("doc"), l.get("title"), dict(l.get("ui") or {}))
              for name, l in ((n, v or {}) for n, v in (d.get("links") or {}).items())}
     rules = []
     for r in d.get("rules", []):

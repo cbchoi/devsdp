@@ -122,9 +122,11 @@ class Choice:
             d["aspect"] = _one(self.aspect)
         if self.specialization is not None:
             d["specialization"] = self.specialization
+        if self.specialization is not None or self.alternative:    # 형식이 틀린 결정도 그대로 적는다
             d["alternative"] = _one(self.alternative)
         if self.multi_aspect is not None:
             d["multi_aspect"] = self.multi_aspect
+        if self.multi_aspect is not None or self.count:
             d["count"] = _one(self.count)
         return d
 
