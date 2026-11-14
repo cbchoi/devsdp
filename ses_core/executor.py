@@ -88,6 +88,10 @@ def load_library_dict(d: dict, bodies: Optional[Mapping] = None) -> dict:
     return out
 
 
+class OffGrid(ValueError):
+    """사건 시각이 실행기의 시간 격자 위에 없다. 시간 간격의 배수인 시각만 처리하는 엔진에서 난다."""
+
+
 class Executor:
     """실행기: 계획을 받아 자기 플랫폼의 산출물을 만든다.
 

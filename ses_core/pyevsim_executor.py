@@ -40,13 +40,9 @@ from pyevsim.system_executor import SysExecutor
 
 from . import structure as st
 from .devs import INF, Atomic
-from .executor import Executor
+from .executor import Executor, OffGrid
 
 _SERIAL = itertools.count(1)
-
-
-class OffGrid(ValueError):
-    """사건 시각이 엔진의 시간 격자 위에 없다. pyevsim은 time_step의 배수인 시각만 처리한다."""
 
 
 def ref(path: tuple) -> str:
