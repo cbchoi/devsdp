@@ -1,0 +1,15 @@
+# 센서 노드에 DEVS 실행기를 붙인다. 모듈은 examples/sensor_node_mb.py 의 원자 모델이다.
+# 바탕 정의에 묶으면 그 대안들이 물려받는다 (Supply, Probe). 더 구체적인 정의에 묶은 것이 있으면
+# 그것이 이긴다. LoRa 무선의 시뮬레이션 모델은 아직 없다. 그래서 LoRa를 고른 변이는
+# 시뮬레이션할 수 없고, 그 사실이 족 수준에서 드러난다.
+
+binding: "1.0"
+executor: devs
+target: SensorNode
+
+map:
+  Supply: {module: PowerSource}
+  Controller: {module: Controller}
+  Probe: {module: Probe}
+  WifiRadio: {module: Radio}
+  Oled: {module: Display}

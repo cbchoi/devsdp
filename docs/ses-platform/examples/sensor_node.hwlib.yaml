@@ -1,0 +1,56 @@
+# 하드웨어 모듈 라이브러리 예시. 부품 이름은 지어낸 것이다.
+# 모듈은 인터페이스(포트, 필수 입력, 매개변수)로만 SES와 만난다. part 같은 나머지는 실행기만 본다.
+
+library: "1.0"
+executor: hw
+
+modules:
+  CellPack:
+    part: CELL-1S
+    ports: {out: {type: Power, direction: out}}
+    params: {capacity_ma: {type: int}}
+  UsbPower:
+    part: USB-5V
+    ports: {out: {type: Power, direction: out}}
+    params: {capacity_ma: {type: int}}
+  McuBoard:
+    part: MCU-A
+    ports:
+      pwr: {type: Power, direction: in}
+      sense: {type: Reading, direction: in}
+      tx: {type: Packet, direction: out}
+      show: {type: Frame, direction: out}
+    required: [pwr]
+    params: {load_ma: {type: int}}
+  TempSensor:
+    part: TEMP-A
+    ports: {pwr: {type: Power, direction: in}, data: {type: Reading, direction: out}}
+    required: [pwr]
+    params: {address: {type: int}, load_ma: {type: int}}
+  HumiditySensor:
+    part: HUMI-A
+    ports: {pwr: {type: Power, direction: in}, data: {type: Reading, direction: out}}
+    required: [pwr]
+    params: {address: {type: int}, load_ma: {type: int}}
+  WifiModule:
+    part: WIFI-A
+    ports: {pwr: {type: Power, direction: in}, rx: {type: Packet, direction: in}}
+    required: [pwr, rx]
+    params: {load_ma: {type: int}}
+  LoraModule:
+    part: LORA-A
+    ports: {pwr: {type: Power, direction: in}, rx: {type: Packet, direction: in}}
+    required: [pwr, rx]
+    params: {load_ma: {type: int}}
+  OledPanel:
+    part: OLED-A
+    ports: {pwr: {type: Power, direction: in}, frame: {type: Frame, direction: in}}
+    required: [pwr]
+    params: {load_ma: {type: int}}
+
+# 포트 타입을 하드웨어에서 어떻게 잇는가. 평탄화된 연결 위의 조건이 된다.
+conventions:
+  Reading: {bus: I2C, unique: address}          # 한 버스에 달린 장치는 주소가 서로 달라야 한다
+  Packet: {bus: UART, max_out: 1, max_in: 1}    # 일대일
+  Frame: {bus: SPI, max_out: 1, max_in: 1}
+  Power: {bus: rail, load: load_ma, capacity: capacity_ma}   # 부하의 합이 용량을 넘지 않아야 한다

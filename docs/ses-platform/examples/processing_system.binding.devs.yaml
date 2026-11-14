@@ -1,0 +1,15 @@
+# 바인딩 예시: 처리 시스템에 DEVS 실행기를 붙인다 (14_executors.md 참고)
+# 정의 이름을 모델베이스(examples/processing_mb.py)의 모듈에 잇는다. 고전 SES/MB의 모델베이스
+# 참조에 해당한다. 결합 모델은 묶지 않는다. 실행기가 SES의 구조에서 만든다.
+# 대안에 묶으면 그 대안이 선택된 변이에서만 쓰인다. Buffer 자체는 묶지 않았다.
+
+binding: "1.0"
+executor: devs
+target: ProcessingSystem
+
+map:
+  Generator: {module: Generator}
+  FifoBuffer: {module: FifoBuffer}
+  PriorityBuffer: {module: PriorityBuffer}
+  Server: {module: Server}
+  Collector: {module: Collector}

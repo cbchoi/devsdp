@@ -1,0 +1,16 @@
+# 센서 노드에 하드웨어 실행기를 붙인다. 모듈은 sensor_node.hwlib.yaml 의 부품이다.
+# 하드웨어에서는 대안마다 부품이 다르므로 대안에 묶는다.
+
+binding: "1.0"
+executor: hw
+target: SensorNode
+
+map:
+  Battery: {module: CellPack}
+  UsbSupply: {module: UsbPower}
+  Controller: {module: McuBoard}
+  TempProbe: {module: TempSensor}
+  HumidityProbe: {module: HumiditySensor}
+  WifiRadio: {module: WifiModule}
+  LoraRadio: {module: LoraModule}
+  Oled: {module: OledPanel}

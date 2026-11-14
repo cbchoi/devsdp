@@ -29,12 +29,21 @@ def component_of(T: Tree, y: tuple) -> tuple:
     return y
 
 
+VARIABLE_PREFIX = "$"       # 변수는 뿌리의 specialization으로 부호화된다 (unfold.var_node)
+
+
 def members(T: Tree, e: tuple) -> list:
-    """M(e): 구성 노드 e의 병합체에 들어갈 수 있는 엔티티 노드."""
+    """M(e): 구성 노드 e의 병합체에 들어갈 수 있는 엔티티 노드.
+
+    변수를 부호화한 specialization의 값 노드는 들지 않는다. 변수 값은 선택의 일부이지
+    뿌리 구성요소에 합쳐지는 정의가 아니다.
+    """
     out, stack = [e], [e]
     while stack:
         y = stack.pop()
         for s in T.specs(y):
+            if len(s) == 2 and s[-1].startswith(VARIABLE_PREFIX):
+                continue
             for c in T.children(s):
                 out.append(c)
                 stack.append(c)

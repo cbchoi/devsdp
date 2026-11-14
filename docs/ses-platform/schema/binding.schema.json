@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cbchoi/devsdp/docs/ses-platform/schema/binding.schema.json",
+  "title": "SES 바인딩과 모듈 라이브러리 (draft 0.1)",
+  "description": "SES에 실행기를 붙이는 두 파일. 바인딩은 정의 이름을 모듈에 잇고, 라이브러리는 모듈의 인터페이스를 적는다. 14_executors.md 참고.",
+  "oneOf": [{"$ref": "#/$defs/binding"}, {"$ref": "#/$defs/library"}],
+  "$defs": {
+    "binding": {
+      "type": "object",
+      "required": ["binding", "executor", "map"],
+      "additionalProperties": false,
+      "properties": {
+        "binding": {"type": "string", "description": "바인딩 형식 버전"},
+        "executor": {"type": "string", "description": "실행기 이름"},
+        "target": {"type": "string", "description": "대상 SES 문서의 이름"},
+        "map": {
+          "type": "object",
+          "description": "정의 이름에서 모듈로. 바탕 정의에 묶으면 대안이 물려받고, 더 구체적인 정의에 묶은 것이 이긴다. 분해를 가진 정의에 묶으면 그 아래는 펼치지 않는다.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["module"],
+            "additionalProperties": false,
+            "properties": {
+              "module": {"type": "string"},
+              "params": {
+                "type": "object",
+                "description": "모듈의 매개변수 이름에서 속성 이름으로. 없으면 같은 이름의 속성을 쓴다.",
+                "additionalProperties": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "library": {
+      "type": "object",
+      "required": ["library", "executor", "modules"],
+      "additionalProperties": false,
+      "properties": {
+        "library": {"type": "string", "description": "라이브러리 형식 버전"},
+        "executor": {"type": "string"},
+        "modules": {"type": "object", "additionalProperties": {"$ref": "#/$defs/module"}},
+        "conventions": {
+          "type": "object",
+          "description": "포트 타입마다 실행기가 정하는 규약. 내용은 실행기가 해석한다.",
+          "additionalProperties": {"type": "object"}
+        }
+      }
+    },
+    "module": {
+      "description": "모듈의 인터페이스. 여기 없는 열쇠(부품 번호 등)는 실행기만 본다.",
+      "type": "object",
+      "properties": {
+        "ports": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["type", "direction"],
+            "additionalProperties": false,
+            "properties": {"type": {"type": "string"}, "direction": {"type": "string", "enum": ["in", "out"]}}
+          }
+        },
+        "required": {"type": "array", "items": {"type": "string"}, "description": "구동되어야 하는 입력 포트"},
+        "params": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["type"],
+            "additionalProperties": false,
+            "properties": {"type": {"type": "string", "enum": ["int", "float", "str", "bool"]}, "default": {}}
+          }
+        }
+      }
+    }
+  }
+}

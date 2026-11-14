@@ -1,0 +1,126 @@
+# 환경 감시 노드: 실행기 둘을 붙이는 예시 (14_executors.md 참고)
+# 이 SES에는 시뮬레이션의 낱말도 하드웨어의 낱말도 없다. 구성요소, 포트, 결합, 속성뿐이다.
+# DEVS 모델베이스를 붙이면 시뮬레이션 모델이 되고 (sensor_node.binding.devs.yaml),
+# 하드웨어 모듈 라이브러리를 붙이면 배선표와 부품표가 된다 (sensor_node.binding.hw.yaml).
+# 포트 타입은 주고받는 것의 종류다. 그것이 메시지인지 버스인지는 실행기가 정한다.
+
+ses: "1.0"
+name: SensorNode
+description: 탐침으로 재고, 제어기가 모아, 무선으로 보내는 감시 노드의 변이 공간
+
+variables:
+  probes: {type: int, range: [1, 3], doc: 탐침의 개수}
+
+port_types:
+  Power: {doc: 전원}
+  Reading: {doc: 측정값}
+  Packet: {doc: 보낼 묶음}
+  Frame: {doc: 화면에 보일 내용}
+
+entities:
+
+  SensorNode:
+    root: true
+    aspects:
+      board:
+        parts: [Supply, Controller, Sensing, Radio, Display]
+        couplings:
+          - {from: Supply.out, to: Controller.pwr}
+          - {from: Supply.out, to: Sensing.pwr}
+          - {from: Supply.out, to: Radio.pwr}
+          - {from: Supply.out, to: Display.pwr}
+          - {from: Sensing.data, to: Controller.sense}
+          - {from: Controller.tx, to: Radio.rx}
+          - {from: Controller.show, to: Display.frame}
+
+  # 전원: 전지 또는 USB. 용량이 다르다
+  Supply:
+    ports:
+      out: {type: Power, direction: out}
+    specializations:
+      source:
+        alternatives: [Battery, UsbSupply]
+  Battery:
+    extends: Supply
+    attributes:
+      capacity_ma: {type: int, default: 100}
+  UsbSupply:
+    extends: Supply
+    attributes:
+      capacity_ma: {type: int, default: 500}
+
+  Controller:
+    ports:
+      pwr: {type: Power, direction: in, required: true}
+      sense: {type: Reading, direction: in, required: true}
+      tx: {type: Packet, direction: out}
+      show: {type: Frame, direction: out}
+    attributes:
+      period: {type: float, default: 1.0}
+      load_ma: {type: int, default: 20}
+
+  # 탐침 묶음: 개수만큼 복제하고, 전원을 나눠 주고 측정값을 모은다
+  Sensing:
+    ports:
+      pwr: {type: Power, direction: in, required: true}
+      data: {type: Reading, direction: out, required: true}
+    multi_aspects:
+      array:
+        part: Probe
+        cardinality: {var: probes}
+        naming: "probe_{i}"
+        couplings:
+          pattern: fan_out_fan_in
+          fan_out: [{from: pwr, to: "{part}.pwr"}]
+          fan_in: [{from: "{part}.data", to: data}]
+
+  # 탐침의 종류는 탐침마다 따로 고른다. 종류마다 주소가 다르다
+  Probe:
+    ports:
+      pwr: {type: Power, direction: in, required: true}
+      data: {type: Reading, direction: out}
+    attributes:
+      load_ma: {type: int, default: 1}
+    specializations:
+      kind:
+        alternatives: [TempProbe, HumidityProbe]
+  TempProbe:
+    extends: Probe
+    attributes:
+      address: {type: int, default: 72}
+  HumidityProbe:
+    extends: Probe
+    attributes:
+      address: {type: int, default: 64}
+
+  Radio:
+    ports:
+      pwr: {type: Power, direction: in, required: true}
+      rx: {type: Packet, direction: in, required: true}
+    specializations:
+      link:
+        alternatives: [WifiRadio, LoraRadio]
+  WifiRadio:
+    extends: Radio
+    attributes:
+      load_ma: {type: int, default: 180}
+  LoraRadio:
+    extends: Radio
+    attributes:
+      load_ma: {type: int, default: 40}
+
+  # 화면은 달지 않을 수 있다
+  Display:
+    ports:
+      pwr: {type: Power, direction: in, required: true}
+      frame: {type: Frame, direction: in}
+    specializations:
+      fitted:
+        alternatives: [Oled, NoDisplay]
+  Oled:
+    extends: Display
+    attributes:
+      load_ma: {type: int, default: 15}
+  NoDisplay:
+    extends: Display
+    stereotype: void

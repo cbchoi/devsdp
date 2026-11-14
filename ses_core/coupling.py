@@ -504,6 +504,7 @@ class Coupling(Extension):
 
     def interpret(self, v: View, children):
         node = {"ports": {p: (d.type, d.direction) for p, d in (v.ann or {}).items()},
+                "required": sorted(p for p, d in (v.ann or {}).items() if d.required),
                 "children": dict(children), "eic": [], "eoc": [], "ic": []}
         for (sw, sp), (dw, dp) in self._live(v):
             if sw is SELF:
