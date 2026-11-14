@@ -311,3 +311,25 @@ def test_structure_samples_are_not_vacuous():
     assert STATS["c4_ok_c5_bad"] >= 5 and STATS["c5_ok"] >= 30, STATS
     assert STATS["delegated"] >= 500 and STATS["delegation_ports"] >= 500 and STATS["seams"] >= 200, STATS
     assert STATS["members"] >= 400, STATS
+
+
+def test_bad_couplings_are_reported_by_kind():
+    """구조의 적격성: 없는 포트(C1), 틀린 방향(C2), 다른 타입(C3)."""
+    a = node({"o": ("A", OUT), "i": ("A", IN), "u": ("B", OUT)})
+    n = node({"x": ("A", IN), "y": ("A", OUT)}, {"a": a, "b": st.copy(a)},
+             eic=[("x", ("a", "i")), ("y", ("a", "i")), ("x", ("a", "nope"))],
+             eoc=[(("a", "o"), "y"), (("a", "i"), "y")],
+             ic=[(("a", "o"), ("b", "i")), (("a", "u"), ("b", "i")), (("a", "i"), ("b", "o")),
+                 (("a", "o"), ("a", "i"))])
+    found = st.violations(n)
+    assert collections.Counter(code for code, _, _ in found) == {"C1": 1, "C2": 3, "C3": 1}
+    assert all(path == () for _, path, _ in found)
+    strict = st.violations(n, no_self_loop=True)             # 자기 자신으로 가는 내부 결합을 금지하는 규약
+    assert collections.Counter(code for code, _, _ in strict) == {"C1": 1, "C2": 4, "C3": 1}
+    good = node({"x": ("A", IN), "y": ("A", OUT)}, {"a": a, "b": st.copy(a)},
+                eic=[("x", ("a", "i"))], eoc=[(("b", "o"), "y")], ic=[(("a", "o"), ("b", "i"))])
+    assert st.violations(good) == [] and st.flatten(good) == {(((), "x"), (("a",), "i")): 1,
+                                                              ((("a",), "o"), (("b",), "i")): 1,
+                                                              ((("b",), "o"), ((), "y")): 1}
+    with pytest.raises(st.StructureError):                   # 방향이 틀린 결합은 순환을 만들 수 있다
+        st.flatten(node({}, {"a": a}, ic=[(("a", "o"), ("a", "o"))]))

@@ -350,6 +350,8 @@ SES 에서 유도되는 리프 정의의 계약이다. 모델베이스 작성자
 | map | Map<DefName, Implementation> | |
 | coupled_builder | Name? | 결합 모델 생성 방식 |
 
+2026-11-14 추가. 8절의 경계 계층과 이 절의 바인딩은 14 문서에서 다시 정의하고 구현했다. FPES와 ComponentContract의 자리는 계획(ses_core/executor.py)이, Binding의 자리는 바인딩 파일(schema/binding.schema.json)이 대신한다. 바인딩은 잎 정의뿐 아니라 바탕 정의(대안이 물려받는다)와 분해를 가진 정의(그 아래를 펼치지 않는다)에도 묶을 수 있다. 아래의 서술과 ses_core/model.py의 선언은 초안으로 남아 있다.
+
 Implementation 은 백엔드마다 다르다. 코어는 DefName 키와 param_map(계약 파라미터 이름에서 구현체 인자 이름으로의 사전)만 검사하고 나머지는 빌더에 넘긴다. 예: Python 백엔드는 {module, class, ctor_args}, C++ 백엔드는 {header, class, factory}, FMI 는 {fmu_path, parameter_map}.
 
 ## 10. 시뮬레이터별 대응

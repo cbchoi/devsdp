@@ -604,3 +604,19 @@ def test_variable_values_are_not_members_of_the_root_component():
         assert skeleton(L.ses.tree, L.void, V).labels == ("R",)
         p = X.plan(L, ext, V)
         assert p["module"] is None and X.frontier(p) == [("fast",)] and X.executable(L, ext, V)
+
+
+def test_structural_errors_above_the_frontier_block_execution():
+    """적재기를 거치지 않고 만든 SES에서 결합의 방향이 틀리면 실행기가 그것을 먼저 알린다."""
+    from ses_core.algebra import SES, asp, build, ent
+    from ses_core.coupling import PortDecl
+    T = build(ent("R", asp("a", ent("A"), ent("B"))))
+    ports = {("R", "a", "A"): {"o": PortDecl("T", "out")}, ("R", "a", "B"): {"i": PortDecl("T", "out")}}
+    coup = {("R", "a"): ((("A", "o"), ("B", "i")),)}
+    L0 = Layered(SES(T), frozenset(), (Coupling(ports, coup),))
+    lib = {"MA": Module("MA", {"o": ("T", "out")}), "MB": Module("MB", {"i": ("T", "out")})}
+    L, ext = X.attach(L0, Executor(), Binding("x", {"A": Bind("MA"), "B": Bind("MB")}), lib)
+    (V,) = sem(L.ses)
+    assert [code for _, code, _, _ in violations(L0, V)] == ["C2"]
+    assert [(code, path) for _, code, path, _ in violations(X.alone(L, ext), V)] == [("C2", ("R",))]
+    assert not X.executable(L, ext, V)
