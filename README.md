@@ -13,7 +13,7 @@ pyevsim 실행기(ses_core/pyevsim_executor.py, examples/processing_pyevsim.py, 
 pip install pyevsim
 ```
 
-cevsim 실행기(ses_core/cevsim_executor.py, ses_core/cevsim_bridge/, tests/test_cevsim.py)는 cevsim의 소스와 C++ 컴파일러(g++)가 있어야 쓸 수 있다. cevsim을 받아 둔 자리를 환경 변수로 준다. cevsim의 a9886a6에서 확인했다. 없으면 그 시험은 건너뛴다.
+cevsim 실행기(ses_core/cevsim_executor.py, ses_core/cevsim_bridge/, tests/test_cevsim.py)는 cevsim의 소스와 C++ 컴파일러(g++)가 있어야 쓸 수 있다. cevsim을 받아 둔 자리를 환경 변수로 준다. cevsim의 main(45e7fa9)에 맞췄고 C++23을 지원하는 g++가 필요하다. 그보다 앞선 cevsim이거나 없으면 그 시험은 건너뛴다.
 
 ```bash
 CEVSIM_HOME=/path/to/cevsim python -m pytest -q tests/test_cevsim.py

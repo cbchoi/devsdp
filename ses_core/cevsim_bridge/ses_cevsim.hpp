@@ -7,6 +7,7 @@
 //         return new CSource(name, p.time("period", 1));
 //     });
 //
+// 공장은 부를 때마다 new로 만든 새 모델을 돌려준다. 그 모델은 실행기와 엔진이 넘겨받아 지운다.
 // 이 파일과 모델의 소스는 실행기가 cevsim과 함께 하나의 공유 라이브러리로 컴파일한다.
 #pragma once
 

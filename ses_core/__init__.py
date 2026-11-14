@@ -9,7 +9,7 @@
 - structure, executor, devs, hw, classic: 실행기를 붙이는 자리. 구조와 평탄화, 바인딩과 계획,
   DEVS 참조 실행기, 하드웨어 실행기, 고전 SES/MB의 절차적 의미.
 - pyevsim_executor: pyevsim 실행기. pyevsim이 설치되어 있어야 가져올 수 있다.
-- cevsim_executor, cevsim_bridge: cevsim 실행기와 C++ 다리. 조립하려면 cevsim의 소스와 C++ 컴파일러가 있어야 한다.
+- cevsim_executor, cevsim_bridge: cevsim 실행기와 C++ 다리. 조립하려면 cevsim의 소스(main의 45e7fa9)와 C++23 컴파일러가 있어야 한다.
 
 이 패키지의 최상위에서는 정준 문서의 자료구조와 적재기만 내보낸다.
 나머지는 모듈 이름으로 가져온다.

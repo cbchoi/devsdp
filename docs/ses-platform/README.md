@@ -19,8 +19,8 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | 13_editor_data_model.md | 편집기를 고려한 자료구조: 세 모형, 편집 모델(요소, 참조, 원시 연산과 역연산), 정준 문서와의 왕복, 주소와 곁자료, 진단, 결정 집합과 선택 지점 표, 프로파일의 표시 정보, 검증 상태, 한계와 결정이 필요한 것 |
 | 14_executors.md | 실행기를 붙이는 SES: 구조와 평탄화, 끝에서 끝까지의 구동, 모듈과 바인딩과 계획, 실현의 유일성, 실행 가능 핵, 실행기 사이의 대응, 표현 완전성과 한계, 고전 SES/MB의 포섭, DEVS와 하드웨어 두 실행기의 사례 |
 | 15_pyevsim_executor.md | pyevsim 실행기: 계약과 쓰는 법, pyevsim 1.1.7에서 확인한 엔진의 성질, 공통 모델 기반을 올리는 어댑터와 그 정확성, 참조 시뮬레이터와의 사건 기록 대조, 한계와 결정이 필요한 것 |
-| 16_cevsim_executor.md | cevsim 실행기: 계약과 쓰는 법, cevsim a9886a6에서 확인한 엔진의 성질, C++ 엔진과 Python 사이의 다리, 공통 모델 기반을 올리는 방법, 참조 시뮬레이터와의 사건 기록 대조, 한계와 결정이 필요한 것 |
-| patches/cevsim_a9886a6_schedule_and_messages.patch | cevsim의 두 결함(일정 목록과 메시지 묶음에서 열쇠로 지우기)을 고치는 제안. 고친 사본에서 확인했다. cevsim 저장소에는 올리지 않았다 |
+| 16_cevsim_executor.md | cevsim 실행기: 계약과 쓰는 법, cevsim의 main(45e7fa9)에서 확인한 엔진의 성질과 앞선 커밋(a9886a6)과의 차이, C++ 엔진과 Python 사이의 다리, 공통 모델 기반을 올리는 방법, 참조 시뮬레이터와의 사건 기록 대조, 한계와 결정이 필요한 것 |
+| patches/cevsim_a9886a6_schedule_and_messages.patch | cevsim a9886a6의 두 결함(일정 목록과 메시지 묶음에서 열쇠로 지우기)을 고치는 제안. 그 커밋의 사본에서 확인했다. cevsim의 main(45e7fa9)은 같은 문제를 다른 방법으로 고쳤으므로 main에는 맞지 않는다. 기록으로 둔다 |
 | schema/profile.schema.json | 도메인 프로파일의 JSON Schema 초안 |
 | schema/binding.schema.json | 바인딩과 모듈 라이브러리의 JSON Schema 초안 |
 | schema/decisions.schema.json | 결정 집합의 JSON Schema 초안 |
