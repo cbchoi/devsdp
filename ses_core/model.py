@@ -82,8 +82,17 @@ class Not(Expr):
 
 @dataclass(frozen=True)
 class Selected(Expr):
-    node: str                    # NodeId. 예: Buffer/policySpec
-    choice: Name
+    """어떤 선택 지점이 그 선택지를 골랐는가. 선택 제약(constraints)에서만 쓴다.
+
+    node는 정의 수준의 주소다. "정의/이름"이면 그 정의의 specialization(선택지는 대안)이나
+    multi-aspect(선택지는 개수)를, "정의"이면 그 정의의 분해(선택지는 aspect나 multi-aspect의
+    이름)를 가리킨다. 그 정의가 나타나는 곳 가운데 하나라도 그렇게 골랐으면 참이다.
+    path가 있으면 그 구성요소 경로 한 곳만 본다. 그때 node는 그 구성요소 안의 이름이고,
+    분해를 가리키면 빈 글자다.
+    """
+    node: str                    # 예: Buffer/policySpec
+    choice: Any
+    path: Optional[tuple] = None
 
 
 @dataclass(frozen=True)

@@ -586,6 +586,18 @@
       "oneOf": [
         {
           "required": [
+            "var"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "var": {
+              "$ref": "#/$defs/identifier"
+            }
+          },
+          "description": "값으로 쓰는 변수. 함수의 인자, 비교의 오른쪽, 속성의 식에 쓴다."
+        },
+        {
+          "required": [
             "var",
             "eq"
           ],
@@ -621,7 +633,10 @@
               "$ref": "#/$defs/identifier"
             },
             "ge": {
-              "type": "number"
+              "type": [
+                "number",
+                "object"
+              ]
             }
           }
         },
@@ -636,7 +651,10 @@
               "$ref": "#/$defs/identifier"
             },
             "gt": {
-              "type": "number"
+              "type": [
+                "number",
+                "object"
+              ]
             }
           }
         },
@@ -651,7 +669,10 @@
               "$ref": "#/$defs/identifier"
             },
             "le": {
-              "type": "number"
+              "type": [
+                "number",
+                "object"
+              ]
             }
           }
         },
@@ -666,7 +687,10 @@
               "$ref": "#/$defs/identifier"
             },
             "lt": {
-              "type": "number"
+              "type": [
+                "number",
+                "object"
+              ]
             }
           }
         },
@@ -731,8 +755,11 @@
           "additionalProperties": false,
           "properties": {
             "selected": {
-              "type": "string",
-              "description": "경로/전문화 노드가 특정 대안을 선택했는지. 예: Buffer/policySpec=PriorityBuffer"
+              "type": [
+                "string",
+                "object"
+              ],
+              "description": "어떤 선택 지점이 그 선택지를 골랐는가. 선택 제약(constraints)에서만 쓴다. 글자로는 '정의/이름=선택지'(specialization의 대안이나 multi-aspect의 개수) 또는 '정의=분해'. 예: Buffer/policySpec=PriorityBuffer. 객체로는 at(정의) 또는 path(구성요소 경로)와, specialization과 alternative, multi_aspect와 count, aspect 가운데 하나."
             }
           }
         },
@@ -747,9 +774,18 @@
             },
             "args": {
               "type": "array"
+            },
+            "eq": {},
+            "ne": {},
+            "ge": {},
+            "gt": {},
+            "le": {},
+            "lt": {},
+            "in": {
+              "type": "array"
             }
           },
-          "description": "이름으로 등록된 SES 함수 호출. 함수 본문은 코드(플러그인)에 있고 명세에는 이름만 둔다."
+          "description": "이름으로 등록된 SES 함수 호출. 함수 본문은 코드(플러그인)에 있고 명세에는 이름만 둔다. 인자는 상수이거나 값으로 쓰는 식이다. 비교 연산자를 함께 적으면 함수의 값을 견준다. 함수는 같은 인자에 늘 같은 값을 내야 한다."
         }
       ]
     }

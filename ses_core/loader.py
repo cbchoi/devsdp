@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from . import model as m
 
@@ -23,13 +23,42 @@ class LoadError(ValueError):
 _CMP_OPS = ("eq", "ne", "lt", "le", "gt", "ge", "in")
 
 
+def _operand(x: Any) -> m.Expr:
+    """비교의 오른쪽이나 함수의 인자. 객체이면 값으로 쓰는 식(변수, 함수 호출)이고 아니면 상수다."""
+    return parse_expr(x) if isinstance(x, dict) else m.Const(x)
+
+
+def _selected(s: Any) -> m.Selected:
+    if isinstance(s, dict):
+        at, path = s.get("at"), s.get("path")
+        if (at is None) == (path is None):
+            raise LoadError(f"selected 에는 at 과 path 가운데 정확히 하나가 있어야 한다: {s!r}")
+        kinds = [k for k in ("specialization", "multi_aspect", "aspect") if k in s]
+        if len(kinds) != 1:
+            raise LoadError(f"selected 에는 specialization, multi_aspect, aspect 가운데 정확히 하나가 있어야 한다: {s!r}")
+        group, choice = {"specialization": (s.get("specialization"), s.get("alternative")),
+                         "multi_aspect": (s.get("multi_aspect"), s.get("count")),
+                         "aspect": ("", s.get("aspect"))}[kinds[0]]
+        if choice is None or isinstance(choice, (list, dict)):
+            raise LoadError(f"selected 에는 선택지 하나(alternative, count, aspect)가 있어야 한다: {s!r}")
+        if at is not None:
+            return m.Selected(f"{at}/{group}" if group else str(at), choice)
+        return m.Selected(group, choice, tuple(path))
+    node, _, choice = str(s).partition("=")
+    if not node or not choice:
+        raise LoadError(f"selected 는 '정의/이름=선택지' 또는 '정의=분해' 형식이어야 한다: {s}")
+    return m.Selected(node, choice)
+
+
 def parse_expr(d: Any) -> m.Expr:
     if not isinstance(d, dict):
         raise LoadError(f"표현식은 객체여야 한다: {d!r}")
     if "var" in d:
         for op in _CMP_OPS:
             if op in d:
-                return m.Compare(op, m.Var(d["var"]), m.Const(d[op]))
+                return m.Compare(op, m.Var(d["var"]), _operand(d[op]))
+        if set(d) == {"var"}:
+            return m.Var(d["var"])               # 값으로 쓰는 변수: 함수의 인자, 비교의 오른쪽, 속성의 식
         raise LoadError(f"var 비교 연산자가 없다: {d!r}")
     if "all" in d:
         return m.And(tuple(parse_expr(x) for x in d["all"]))
@@ -38,13 +67,13 @@ def parse_expr(d: Any) -> m.Expr:
     if "not" in d:
         return m.Not(parse_expr(d["not"]))
     if "selected" in d:
-        node, _, choice = d["selected"].partition("=")
-        if not choice:
-            raise LoadError(f"selected 는 'NodeId=choice' 형식이어야 한다: {d['selected']}")
-        return m.Selected(node, choice)
+        return _selected(d["selected"])
     if "call" in d:
-        return m.Call(d["call"], tuple(parse_expr(a) if isinstance(a, dict) else m.Const(a)
-                                       for a in d.get("args", [])))
+        call = m.Call(d["call"], tuple(_operand(a) for a in d.get("args", [])))
+        for op in _CMP_OPS:
+            if op in d:
+                return m.Compare(op, call, _operand(d[op]))   # 함수의 값을 견준다
+        return call
     raise LoadError(f"알 수 없는 표현식: {d!r}")
 
 
@@ -207,19 +236,26 @@ def check_integrity(doc: m.SesDocument) -> None:
         if name not in ents:
             errors.append(f"{where}: 정의되지 않은 엔티티 참조 {name}")
 
-    def expr_vars(e: m.Expr | None, where: str) -> None:
+    def expr_vars(e: m.Expr | None, where: str, constraint: bool = False) -> None:
         if e is None:
             return
         if isinstance(e, m.Var) and e.name not in doc.variables:
             errors.append(f"{where}: 정의되지 않은 변수 {e.name}")
+        if isinstance(e, m.Selected):
+            if not constraint:
+                errors.append(f"{where}: selected 는 선택 제약(constraints)에서만 쓴다")
+            elif e.path is None:
+                why = selected_problem(doc, e)
+                if why:
+                    errors.append(f"{where}: {why}")
         for child in getattr(e, "items", ()) or ():
-            expr_vars(child, where)
+            expr_vars(child, where, constraint)
         for attr in ("left", "right", "item"):
             if hasattr(e, attr):
-                expr_vars(getattr(e, attr), where)
+                expr_vars(getattr(e, attr), where, constraint)
         if isinstance(e, m.Call):
             for a in e.args:
-                expr_vars(a, where)
+                expr_vars(a, where, constraint)
 
     for name, ent in ents.items():
         # extends 와 순환
@@ -301,7 +337,7 @@ def check_integrity(doc: m.SesDocument) -> None:
 
     for c in doc.constraints:
         for e in (c.when, c.require, c.forbid):
-            expr_vars(e, f"constraint {c.name}")
+            expr_vars(e, f"constraint {c.name}", constraint=True)
 
     # strict hierarchy: 펼친 경로에서 같은 정의 반복 금지
     try:
@@ -311,6 +347,37 @@ def check_integrity(doc: m.SesDocument) -> None:
 
     if errors:
         raise LoadError("무결성 오류 " + str(len(errors)) + "건:\n  " + "\n  ".join(errors))
+
+
+def selected_target(doc: m.SesDocument, e: m.Selected, def_name: str, group: str) -> tuple:
+    """selected 가 정의 def_name 안에서 가리키는 것: (종류, 선택지). 가리키는 것이 없으면 (None, 까닭).
+
+    종류는 spec(대안), count(multi-aspect의 개수), aspect(분해의 이름) 가운데 하나다.
+    """
+    ent = doc.entities.get(def_name)
+    if ent is None:
+        return None, f"selected 가 가리키는 정의 {def_name} 이 없다"
+    if not group:
+        if e.choice in ent.aspects or e.choice in ent.multi_aspects:
+            return "aspect", e.choice
+        return None, f"selected: {def_name} 에 분해 {e.choice} 가 없다"
+    if group in ent.specializations:
+        if e.choice in ent.specializations[group].alternatives:
+            return "spec", e.choice
+        return None, f"selected: {def_name}/{group} 에 대안 {e.choice} 가 없다"
+    if group in ent.multi_aspects:
+        try:
+            return "count", int(e.choice)
+        except (TypeError, ValueError):
+            return None, f"selected: {def_name}/{group} 의 선택지는 개수(정수)여야 한다: {e.choice!r}"
+    return None, f"selected: {def_name} 에 specialization 이나 multi-aspect {group} 이 없다"
+
+
+def selected_problem(doc: m.SesDocument, e: m.Selected) -> Optional[str]:
+    """정의 수준의 selected 가 가리키는 곳이 문서에 있는가. 없으면 까닭을 돌려준다."""
+    def_name, _, group = e.node.partition("/")
+    kind, why = selected_target(doc, e, def_name, group)
+    return why if kind is None else None
 
 
 def _check_couplings(doc, ent, parts, couplings, where, errors) -> None:

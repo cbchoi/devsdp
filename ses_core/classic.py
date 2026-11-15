@@ -17,28 +17,54 @@ from itertools import product
 from typing import Optional
 
 from . import model as m
+from .loader import selected_target
 from .unfold import _OPS, _domain, _instantiate_pattern, _replica_name
 
 
-def _eval(e: Optional[m.Expr], sigma: dict) -> bool:
+def _value(e: m.Expr, sigma: dict, functions):
+    """값으로 쓰는 식: 상수, 변수, 등록한 함수의 호출."""
+    if isinstance(e, m.Const):
+        return e.value
+    if isinstance(e, m.Var):
+        return sigma[e.name]
+    if isinstance(e, m.Call):
+        return functions[e.fn](*(_value(a, sigma, functions) for a in e.args))
+    return _eval(e, sigma, functions)
+
+
+def _eval(e: Optional[m.Expr], sigma: dict, functions=None, picks=None, doc=None) -> bool:
+    """규칙과 제약의 식을 변수 값 sigma 에서 평가한다. picks 는 조립하면서 한 선택들이다(selected 용)."""
     if e is None:
         return True
     if isinstance(e, m.Compare):
-        return bool(_OPS[e.op](sigma[e.left.name], e.right.value))
+        return bool(_OPS[e.op](_value(e.left, sigma, functions), _value(e.right, sigma, functions)))
     if isinstance(e, m.And):
-        return all(_eval(x, sigma) for x in e.items)
+        return all(_eval(x, sigma, functions, picks, doc) for x in e.items)
     if isinstance(e, m.Or):
-        return any(_eval(x, sigma) for x in e.items)
+        return any(_eval(x, sigma, functions, picks, doc) for x in e.items)
     if isinstance(e, m.Not):
-        return not _eval(e.item, sigma)
+        return not _eval(e.item, sigma, functions, picks, doc)
+    if isinstance(e, (m.Call, m.Var, m.Const)):
+        return bool(_value(e, sigma, functions))
+    if isinstance(e, m.Selected) and picks is not None and e.path is None:
+        def_name, _, group = e.node.partition("/")
+        kind, choice = selected_target(doc, e, def_name, group)
+        return (kind, def_name, group, choice) in picks
     raise ValueError(f"절차적 의미가 다루지 않는 식: {e!r}")
 
 
-def _allowed(sp: m.Specialization, sigma: dict) -> list:
+def _mentions_selected(e) -> bool:
+    if isinstance(e, m.Selected):
+        return True
+    kids = list(getattr(e, "items", ()) or ()) + [getattr(e, a) for a in ("left", "right", "item") if hasattr(e, a)]
+    return any(_mentions_selected(x) for x in kids)
+
+
+def _allowed(sp: m.Specialization, sigma: dict, functions=None) -> list:
     """선택 규칙이 정하는 대안. 규칙이 정하지 않으면 모든 대안 가운데 고른다."""
     rule = sp.select
     while rule is not None:
-        if _eval(rule.when, sigma):
+        if _eval(rule.when, sigma, functions):
             return [rule.then]
         if isinstance(rule.otherwise, m.SelectRule):
             rule = rule.otherwise
@@ -49,46 +75,60 @@ def _allowed(sp: m.Specialization, sigma: dict) -> list:
     return list(sp.alternatives)
 
 
-def enumerate_classic(doc: m.SesDocument) -> list:
+def enumerate_classic(doc: m.SesDocument, functions=None) -> list:
     """절차적 가지치기와 조립으로 얻는 (변수 값, 구조)의 목록.
 
     구조는 결합 확장의 해석과 같은 모양의 중첩 사전이고, 구성요소마다 합쳐진 정의들의 이름
     (labels)이 더 붙는다. 합칠 수 없는 경우(같은 이름의 포트를 다르게 선언, 엔티티와 고른
     대안이 각자 분해를 가짐)와 뿌리가 없음이 되는 경우는 내놓지 않는다.
+
+    변수만 보는 제약은 조립하기 전에 검사한다. 선택에 대한 제약(selected)은 조립하면서 한 선택들을
+    모아 두었다가 조립한 뒤에 검사한다. functions 는 식의 call 이 부르는 함수들이다.
     """
     names = list(doc.variables)
+    late = [c for c in doc.constraints if any(x is not None and _mentions_selected(x) for x in (c.when, c.require, c.forbid))]
+    early = [c for c in doc.constraints if c not in late]
+
+    def satisfied(c, sigma, picks=None) -> bool:
+        if not _eval(c.when, sigma, functions, picks, doc):
+            return True
+        return (c.require is None or _eval(c.require, sigma, functions, picks, doc)) \
+            and (c.forbid is None or not _eval(c.forbid, sigma, functions, picks, doc))
+
     out = []
     for values in product(*(_domain(doc, n) for n in names)):
         sigma = dict(zip(names, values))
-        ok = True
-        for c in doc.constraints:
-            if _eval(c.when, sigma):
-                ok = ok and (c.require is None or _eval(c.require, sigma)) \
-                    and (c.forbid is None or not _eval(c.forbid, sigma))
-        if not ok:
+        if not all(satisfied(c, sigma) for c in early):
             continue
         memo: dict = {}
-        out += [(sigma, s) for s in _build(doc, doc.root.name, sigma, memo) if s is not None]
+        for s, picks in _build(doc, doc.root.name, sigma, memo, functions):
+            if s is not None and all(satisfied(c, sigma, picks) for c in late):
+                out.append((sigma, s))
     return out
 
 
-def _clusters(doc, def_name: str, sigma: dict) -> list:
-    """엔티티에서 시작해 specialization마다 대안을 하나씩 골라 합쳐지는 정의들의 목록들."""
+def _clusters(doc, def_name: str, sigma: dict, functions=None) -> list:
+    """엔티티에서 시작해 specialization마다 대안을 하나씩 골라 합쳐지는 정의들의 목록들.
+
+    목록마다 그때 한 선택들 (spec, 정의, specialization, 대안)이 함께 온다.
+    """
     options = []
     for sp in doc.entities[def_name].specializations.values():
-        options.append([ms for alt in _allowed(sp, sigma) for ms in _clusters(doc, alt, sigma)])
-    return [[def_name] + [x for part in combo for x in part] for combo in product(*options)]
+        options.append([(ms, picks | {("spec", def_name, sp.name, alt)})
+                        for alt in _allowed(sp, sigma, functions) for ms, picks in _clusters(doc, alt, sigma, functions)])
+    return [([def_name] + [x for ms, _ in combo for x in ms], frozenset().union(*(p for _, p in combo)))
+            for combo in product(*options)]
 
 
-def _build(doc, def_name: str, sigma: dict, memo: dict) -> list:
-    """정의 하나에서 만들어질 수 있는 구성요소들. None은 없음(빠지는 구성요소)이다."""
+def _build(doc, def_name: str, sigma: dict, memo: dict, functions=None) -> list:
+    """정의 하나에서 만들어질 수 있는 구성요소들과, 그것을 만들며 한 선택들. None은 없음(빠지는 구성요소)이다."""
     if def_name in memo:
         return memo[def_name]
     results: list = []
-    for members in _clusters(doc, def_name, sigma):
+    for members, chosen in _clusters(doc, def_name, sigma, functions):
         ents = [doc.entities[x] for x in members]
         if any(e.stereotype == m.Stereotype.VOID for e in ents):
-            results.append(None)
+            results.append((None, chosen))                    # 빠진다. 대안을 고른 것까지는 한 선택이다
             continue
         ports: dict = {}
         required: set = set()
@@ -104,29 +144,29 @@ def _build(doc, def_name: str, sigma: dict, memo: dict) -> list:
             continue                                          # 합칠 수 없다
         base = {"labels": sorted(members), "ports": ports, "required": sorted(required)}
         if not owners:
-            results.append(dict(base, children={}, eic=[], eoc=[], ic=[]))
+            results.append((dict(base, children={}, eic=[], eoc=[], ic=[]), chosen))
             continue
         e = owners[0]
-        forced = [a for a in e.aspects.values() if a.rule is not None and _eval(a.rule, sigma)]
+        forced = [a for a in e.aspects.values() if a.rule is not None and _eval(a.rule, sigma, functions)]
         if len(forced) > 1:
             continue                                          # 두 규칙이 서로 다른 aspect를 요구한다
-        choices = []                                          # (부분의 (이름, 정의) 목록, 결합)
+        choices = []                                          # (부분의 (이름, 정의) 목록, 결합, 이때 한 선택)
         for a in e.aspects.values():
             if forced and a is not forced[0]:
                 continue
             ks = [((c.src.part, c.src.port), (c.dst.part, c.dst.port)) for c in a.couplings]
-            choices.append(([(p.part_name, p.def_name) for p in a.parts], ks))
+            choices.append(([(p.part_name, p.def_name) for p in a.parts], ks, {("aspect", e.name, "", a.name)}))
         for ma in ([] if forced else e.multi_aspects.values()):
             card = ma.cardinality
             counts = [card.n] if isinstance(card, m.Fixed) else [sigma[card.var]] \
                 if isinstance(card, m.VarCard) else range(card.min, card.max + 1)
             for n in counts:
                 replicas = [_replica_name(ma, i, n) for i in range(n)]
-                choices.append(([(r, ma.part.def_name) for r in replicas],
-                                list(_instantiate_pattern(ma, replicas))))
-        for parts, ks in choices:
-            for combo in product(*(_build(doc, d, sigma, memo) for _, d in parts)):
-                kids = {name: c for (name, _), c in zip(parts, combo) if c is not None}
+                choices.append(([(r, ma.part.def_name) for r in replicas], list(_instantiate_pattern(ma, replicas)),
+                                {("aspect", e.name, "", ma.name), ("count", e.name, ma.name, n)}))
+        for parts, ks, mine in choices:
+            for combo in product(*(_build(doc, d, sigma, memo, functions) for _, d in parts)):
+                kids = {name: c for (name, _), (c, _) in zip(parts, combo) if c is not None}
                 node = dict(base, children=kids, eic=[], eoc=[], ic=[])
                 for (sw, sp), (dw, dp) in dict.fromkeys(ks):  # 빠진 부분을 가리키는 결합은 버린다. 같은 결합은 하나다
                     if (sw is not None and sw not in kids) or (dw is not None and dw not in kids):
@@ -137,6 +177,6 @@ def _build(doc, def_name: str, sigma: dict, memo: dict) -> list:
                         node["eoc"].append(((sw, sp), dp))
                     else:
                         node["ic"].append(((sw, sp), (dw, dp)))
-                results.append(node)
+                results.append((node, chosen | mine | frozenset().union(*(p for _, p in combo))))
     memo[def_name] = results
     return results

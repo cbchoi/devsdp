@@ -591,13 +591,14 @@ def _cause(T, vs: list, hit: set, w: DecisionSet) -> tuple:
 
 
 def analyze(m: Model, profile: Optional[Profile] = None, max_variants: int = 5000,
-            unused: bool = True, max_nodes: int = 200000, attach=None) -> Analysis:
+            unused: bool = True, max_nodes: int = 200000, attach=None, functions=None) -> Analysis:
     """문서 범위와 족 범위의 진단을 모두 낸다. 어떤 상태의 문서에도 예외 없이 답한다.
 
     max_nodes는 펼친 나무의 노드 수 한도, max_variants는 구조상 변이 수의 한도다.
     어느 쪽이든 넘으면 변이 분석을 하지 않고 LIMIT로 알린다.
     attach는 분석 모델에 확장을 더 얹는 함수다. 실행기를 붙이면(executor.attach) 그 실행기로
     만들 수 없는 변이가 다른 위반과 같은 방식으로 진단된다.
+    functions는 식의 call 이 부르는 함수들이다. 등록되지 않은 함수를 부르면 ANALYZE로 알린다.
     """
     from . import loader, unfold                        # 지연 임포트: 순환을 피한다
 
@@ -634,7 +635,7 @@ def analyze(m: Model, profile: Optional[Profile] = None, max_variants: int = 500
     except Exception as e:                              # 모양이 스키마와 다른 문서. 적재기는 엄격하다
         return stop("error", "LOAD", f"문서를 분석 모델로 옮길 수 없다: {type(e).__name__}: {e}")
     try:
-        L = unfold.unfold_layered(doc, profile)
+        L = unfold.unfold_layered(doc, profile, functions)
         if attach is not None:
             L = attach(L)
         domains = unfold.variable_domains(doc)
