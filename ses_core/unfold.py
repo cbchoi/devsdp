@@ -39,13 +39,14 @@ from . import model as m
 from .algebra import (ASP, ENT, SPEC, SES, TRUE, AlgebraError, Tree,
                       f_and, f_imp, f_not, f_or, occurrences, sel)
 from .coupling import SELF, Ann, Coupling, PortDecl, validate
-from .decisions import component_path, family
+from .decisions import family
 from .ext_attr import AttrDecl, Attributes
 from .ext_text import Text
 from .extension import Layered
 from .loader import fits, selected_target
 from .profile import Domain, Item, Profile
-from .skeleton import NO_ASPECT, component_of, components, is_component, live_formula, members, owner
+from .skeleton import (NO_ASPECT, component_of, component_path, components, is_component, live_formula,
+                       members, owner)
 
 _OPS = {"eq": operator.eq, "ne": operator.ne, "lt": operator.lt, "le": operator.le,
         "gt": operator.gt, "ge": operator.ge, "in": lambda v, c: v in c}
@@ -202,25 +203,52 @@ def _instantiate_pattern(ma: m.MultiAspect, names: list) -> tuple:
     return tuple(dict.fromkeys(out))
 
 
-def _unfold(doc: m.SesDocument, functions=None) -> dict:
-    root = (doc.root.name,)
-    kinds: dict = {}
-    labels: dict = {}
-    clauses: list = []
-    ports: dict = {}
-    void: set = set()
-    coup: dict = {}
-    attrs: dict = {}
-    templates: dict = {}
-    layouts: dict = {}
-    items: dict = {}
-    decomps: dict = {}                               # 엔티티 노드에서 그 분해들로: [이름, aspect 노드들, 규칙, 우선순위]
-    computed: dict = {}                              # (정의, 속성, 식이 본 복제본들)에서 그 속성의 선언으로
+def above(p, q) -> bool:
+    """우선순위 p가 q보다 앞서는가. 없는 것은 가장 뒤이고, 없는 것끼리는 가르지 못한다."""
+    return p is not None and (q is None or p > q)
 
-    def value(name: str, v) -> tuple:
-        return root + (var_node(name), str(v))
 
-    def attribute(def_name: str, a: m.Attribute, replicas: tuple) -> AttrDecl:
+class Unfolding:
+    """정의 표를 펼쳐 나무, 제약식, 주석을 모으는 일.
+
+    두 가지로 쓴다. 족 전체를 펼칠 때는 rec 이 모든 선택지를 따라 내려간다(_unfold). 결정이 끝난
+    변이 하나를 만들 때는 고른 것만 적는다(direct.py). 그때 sigma 는 정해진 변수 값이고, 변수의
+    범위는 그 값 하나로 줄어든다. 노드에 주석을 적는 코드는 두 쓰임이 함께 쓴다.
+    """
+
+    def __init__(self, doc: m.SesDocument, functions=None, sigma=None) -> None:
+        self.doc, self.functions, self.sigma = doc, functions, sigma
+        self.root = (doc.root.name,)
+        self.kinds: dict = {}
+        self.labels: dict = {}
+        self.clauses: list = []
+        self.ports: dict = {}
+        self.void: set = set()
+        self.coup: dict = {}
+        self.attrs: dict = {}
+        self.templates: dict = {}
+        self.layouts: dict = {}
+        self.items: dict = {}
+        self.decomps: dict = {}          # 엔티티 노드에서 그 분해들로: [이름, aspect 노드들, 규칙, 우선순위]
+        self.computed: dict = {}         # (정의, 속성, 식이 본 복제본들)에서 그 속성의 선언으로
+        self.tree = None
+        self.gone = frozenset()
+
+    # 변수와 식 -----------------------------------------------------------
+
+    def domain(self, name: str) -> list:
+        if self.sigma is not None:
+            return [self.sigma[name]]
+        return _domain(self.doc, name)
+
+    def cards(self, ma: m.MultiAspect) -> list:
+        c = ma.cardinality
+        return self.domain(c.var) if isinstance(c, m.VarCard) else _card_set(self.doc, ma)
+
+    def value(self, name: str, v) -> tuple:
+        return self.root + (var_node(name), str(v))
+
+    def attribute(self, def_name: str, a: m.Attribute, replicas: tuple) -> AttrDecl:
         """정의 def_name 의 속성 a 가 이 자리에서 가지는 값. replicas 는 바깥에서 안으로 적은 (번호, 개수)들이다."""
         kind = a.type.value
         if a.each is not None:
@@ -233,10 +261,10 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
             raise AlgebraError(f"속성 {def_name}.{a.name} 의 식이 복제본의 번호를 쓰는데, "
                                f"그 정의가 놓인 자리를 감싼 multi-aspect 가 {len(replicas)} 겹뿐이다")
         key = (def_name, a.name, tuple(replicas[-1 - u] for u in sorted(levels)))
-        if key in computed:
-            return computed[key]
+        if key in self.computed:
+            return self.computed[key]
         names = sorted(expr_vars(a.expr))
-        domains = [_domain(doc, n) for n in names]
+        domains = [self.domain(n) for n in names]
         rows = 1
         for d in domains:
             rows *= len(d)
@@ -244,7 +272,7 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
             raise AlgebraError(f"속성 {def_name}.{a.name} 의 표가 너무 크다. 변수 {names} 의 값 조합이 {rows} 가지다")
         table = {}
         for row in product(*domains):
-            v = evaluate(a.expr, dict(zip(names, row), **{REPLICAS: replicas}), functions)
+            v = evaluate(a.expr, dict(zip(names, row), **{REPLICAS: replicas}), self.functions)
             if v is not None and (not fits(v, a.type) or (a.values is not None and v not in a.values)):
                 raise AlgebraError(f"속성 {def_name}.{a.name} 의 식이 타입 {kind} 에 맞지 않는 값 {v!r} 을 냈다"
                                    + (f" (변수 값 {dict(zip(names, row))})" if names else ""))
@@ -254,165 +282,192 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
         else:
             decl = AttrDecl(kind, None, False, lambda env, names=tuple(names), table=table:
                             table[tuple(env[n] for n in names)])
-        computed[key] = decl
+        self.computed[key] = decl
         return decl
 
-    def table(e: m.Expr):
+    def table(self, e: m.Expr):
         """변수에 대한 조건 하나를, 그것이 참이 되는 변수 값의 조합들로 적는다."""
         names = sorted(expr_vars(e))
-        domains = [_domain(doc, n) for n in names]
+        domains = [self.domain(n) for n in names]
         rows = 1
         for d in domains:
             rows *= len(d)
         if rows > MAX_ROWS:
             raise AlgebraError(f"조건의 표가 너무 크다. 변수 {names} 의 값 조합이 {rows} 가지다: {e!r}")
-        return f_or(*(f_and(*(sel(value(n, v)) for n, v in zip(names, row)))
-                      for row in product(*domains) if evaluate(e, dict(zip(names, row)), functions)))
+        return f_or(*(f_and(*(sel(self.value(n, v)) for n, v in zip(names, row)))
+                      for row in product(*domains) if evaluate(e, dict(zip(names, row)), self.functions)))
 
-    def tr(e: m.Expr, chosen=None):
+    def tr(self, e: m.Expr, chosen=None):
         """식을 선택 원자의 명제식으로. chosen 은 selected 를 번역하는 함수다 (선택 제약에서만 준다)."""
         if isinstance(e, m.And):
-            return f_and(*(tr(x, chosen) for x in e.items))
+            return f_and(*(self.tr(x, chosen) for x in e.items))
         if isinstance(e, m.Or):
-            return f_or(*(tr(x, chosen) for x in e.items))
+            return f_or(*(self.tr(x, chosen) for x in e.items))
         if isinstance(e, m.Not):
-            return f_not(tr(e.item, chosen))
+            return f_not(self.tr(e.item, chosen))
         if isinstance(e, m.Selected):
             if chosen is None:
                 raise AlgebraError(f"selected 는 선택 제약에서만 쓴다: {e!r}")
             return chosen(e)
         if isinstance(e, (m.Compare, m.Call, m.Var, m.Const)):
-            return table(e)
+            return self.table(e)
         raise AlgebraError(f"분석 가능 단편 밖의 표현식: {e!r}")
 
-    def select(rule: m.SelectRule, sp_path: tuple):
-        cond = tr(rule.when)
+    def select(self, rule: m.SelectRule, sp_path: tuple):
+        cond = self.tr(rule.when)
         other = rule.otherwise
         if isinstance(other, m.SelectRule):
-            rest = select(other, sp_path)
+            rest = self.select(other, sp_path)
         elif other is None:
             rest = TRUE
         else:
             rest = sel(sp_path + (other,))
         return f_and(f_imp(cond, sel(sp_path + (rule.then,))), f_imp(f_not(cond), rest))
 
-    def rec(def_name: str, path: tuple, replicas: tuple = ()) -> None:
-        kinds[path] = ENT
-        labels[path] = def_name                      # 정의 표지: 이름과 별개
-        e = doc.entities[def_name]
+    # 노드와 주석 ---------------------------------------------------------
+
+    def entity(self, def_name: str, path: tuple, replicas: tuple = ()) -> m.EntityDef:
+        """엔티티 노드 하나와 그 주석(속성, 포트, 없음 표시, 프로파일의 항목, 문서 조립 틀)을 적는다."""
+        self.kinds[path] = ENT
+        self.labels[path] = def_name                 # 정의 표지: 이름과 별개
+        e = self.doc.entities[def_name]
         if e.attributes:
-            attrs[path] = {n: attribute(def_name, a, replicas) for n, a in e.attributes.items()}
+            self.attrs[path] = {n: self.attribute(def_name, a, replicas) for n, a in e.attributes.items()}
         if e.kind is not None or e.fields or e.links:
-            items[path] = Item(e.kind, dict(e.fields), dict(e.links))
+            self.items[path] = Item(e.kind, dict(e.fields), dict(e.links))
         text = e.metadata.get("text") if e.metadata else None
         if isinstance(text, str):
-            templates[path] = text
+            self.templates[path] = text
         elif isinstance(text, dict) and "template" in text:
-            templates[path] = text["template"]
-        seps = text.get("separators", {}) if isinstance(text, dict) else {}
+            self.templates[path] = text["template"]
         if e.ports:
-            ports[path] = {n: PortDecl(p.type, p.direction.value, p.required)
-                           for n, p in e.ports.items()}
+            self.ports[path] = {n: PortDecl(p.type, p.direction.value, p.required)
+                                for n, p in e.ports.items()}
         if e.stereotype == m.Stereotype.VOID:
-            void.add(path)
+            self.void.add(path)
+        return e
+
+    @staticmethod
+    def _separator(e: m.EntityDef, name: str) -> str:
+        text = e.metadata.get("text") if e.metadata else None
+        return (text.get("separators", {}) if isinstance(text, dict) else {}).get(name, "")
+
+    def aspect(self, e: m.EntityDef, a: m.Aspect, path: tuple) -> tuple:
+        """엔티티 노드 path 아래에 aspect 노드를 적는다. 부분들은 부르는 쪽이 이어서 적는다."""
+        a_path = path + (a.name,)
+        self.kinds[a_path] = ASP
+        self.layouts[a_path] = (tuple(p.part_name for p in a.parts), self._separator(e, a.name))
+        if a.couplings:
+            self.coup[a_path] = _plain(a.couplings)
+        return a_path
+
+    def multi(self, e: m.EntityDef, ma: m.MultiAspect, n: int, path: tuple) -> tuple:
+        """multi-aspect 의 개수 n 짜리 전개를 적는다. (aspect 노드, 복제본 이름들)을 돌려준다."""
+        a_path = path + (f"{ma.name}[{n}]",)
+        self.kinds[a_path] = ASP
+        names = [_replica_name(ma, i, n) for i in range(n)]
+        self.layouts[a_path] = (tuple(names), self._separator(e, ma.name))
+        ks = _instantiate_pattern(ma, names)
+        if ks:
+            self.coup[a_path] = ks
+        return a_path, names
+
+    def rec(self, def_name: str, path: tuple, replicas: tuple = ()) -> None:
+        """모든 선택지를 따라 내려가며 펼친다."""
+        e = self.entity(def_name, path, replicas)
         for sp in e.specializations.values():
             sp_path = path + (sp.name,)
-            kinds[sp_path] = SPEC
+            self.kinds[sp_path] = SPEC
             for alt in sp.alternatives:
-                rec(alt, sp_path + (alt,), replicas)
+                self.rec(alt, sp_path + (alt,), replicas)
             if sp.select is not None:
-                clauses.append(f_imp(sel(sp_path), select(sp.select, sp_path)))
+                self.clauses.append(f_imp(sel(sp_path), self.select(sp.select, sp_path)))
         for a in e.aspects.values():
-            a_path = path + (a.name,)
-            kinds[a_path] = ASP
+            a_path = self.aspect(e, a, path)
             for part in a.parts:
-                rec(part.def_name, a_path + (part.part_name,), replicas)
-            layouts[a_path] = (tuple(p.part_name for p in a.parts), seps.get(a.name, ""))
-            if a.couplings:
-                coup[a_path] = _plain(a.couplings)
-            decomps.setdefault(path, []).append((a.name, (a_path,), a.rule, a.priority))
+                self.rec(part.def_name, a_path + (part.part_name,), replicas)
+            self.decomps.setdefault(path, []).append((a.name, (a_path,), a.rule, a.priority))
         for ma in e.multi_aspects.values():
-            decomps.setdefault(path, []).append(
-                (ma.name, tuple(path + (f"{ma.name}[{n}]",) for n in _card_set(doc, ma)), ma.rule, ma.priority))
-            for n in _card_set(doc, ma):
-                a_path = path + (f"{ma.name}[{n}]",)
-                kinds[a_path] = ASP
-                names = [_replica_name(ma, i, n) for i in range(n)]
+            self.decomps.setdefault(path, []).append(
+                (ma.name, tuple(path + (f"{ma.name}[{n}]",) for n in self.cards(ma)), ma.rule, ma.priority))
+            for n in self.cards(ma):
+                a_path, names = self.multi(e, ma, n, path)
                 for i, name in enumerate(names):
-                    rec(ma.part.def_name, a_path + (name,), replicas + ((i, n),))
-                layouts[a_path] = (tuple(names), seps.get(ma.name, ""))
-                ks = _instantiate_pattern(ma, names)
-                if ks:
-                    coup[a_path] = ks
+                    self.rec(ma.part.def_name, a_path + (name,), replicas + ((i, n),))
                 if isinstance(ma.cardinality, m.VarCard):
-                    clauses.append(f_imp(sel(a_path), sel(value(ma.cardinality.var, n))))
+                    self.clauses.append(f_imp(sel(a_path), sel(self.value(ma.cardinality.var, n))))
 
-    rec(doc.root.name, root)
-    for name in doc.variables:
-        s = root + (var_node(name),)
-        kinds[s] = SPEC
-        for v in _domain(doc, name):
-            kinds[s + (str(v),)] = ENT
-    gone = frozenset(void)
+    def variables(self) -> None:
+        """변수를 뿌리의 specialization 으로 적는다. 값마다 노드 하나다."""
+        for name in self.doc.variables:
+            s = self.root + (var_node(name),)
+            self.kinds[s] = SPEC
+            for v in self.domain(name):
+                self.kinds[s + (str(v),)] = ENT
+        self.gone = frozenset(self.void)
 
-    def above(p, q) -> bool:
-        """우선순위 p가 q보다 앞서는가. 없는 것은 가장 뒤이고, 없는 것끼리는 가르지 못한다."""
-        return p is not None and (q is None or p > q)
+    # 분해의 규칙과 우선순위 ---------------------------------------------
 
-    def together(y: tuple, z: tuple) -> bool:
-        """한 병합체의 두 구성원이 함께 선택될 수 있는가. 같은 specialization의 서로 다른 대안 아래이면 아니다."""
-        i = 0
-        while i < min(len(y), len(z)) and y[i] == z[i]:
-            i += 1
-        return i == len(y) or i == len(z) or y[i] != z[i]
+    def rules(self) -> None:
+        """분해의 규칙과 우선순위를 제약식으로 옮기고 나무를 만든다. 밀릴 수 있는 구성원에게 "분해 없음"을 준다."""
+        kinds, labels, decomps, gone = self.kinds, self.labels, self.decomps, self.gone
 
-    # 병합체 안에서 다른 구성원의 분해에 밀릴 수 있는 구성원에게 "분해 없음"을 준다
-    plain = Tree(kinds, labels)
-    rivals: dict = {}                                # 구성원에서, 함께 선택될 수 있고 분해를 가진 다른 구성원들로
-    for e in components(plain):
-        owners = [y for y in members(plain, e) if y in decomps]
-        for y in owners:
-            rivals[y] = [z for z in owners if z != y and together(y, z)]
-            if any(above(pb, pa) for z in rivals[y] for *_, pb in decomps[z] for *_, pa in decomps[y]):
-                kinds[y + (NO_ASPECT,)] = ASP
-    tree = Tree(kinds, labels)
+        def together(y: tuple, z: tuple) -> bool:
+            """한 병합체의 두 구성원이 함께 선택될 수 있는가. 같은 specialization의 서로 다른 대안 아래이면 아니다."""
+            i = 0
+            while i < min(len(y), len(z)) and y[i] == z[i]:
+                i += 1
+            return i == len(y) or i == len(z) or y[i] != z[i]
 
-    def one_of(nodes):
-        return sel(nodes[0]) if len(nodes) == 1 else f_or(*(sel(n) for n in nodes))
+        plain = Tree(kinds, labels)
+        rivals: dict = {}                            # 구성원에서, 함께 선택될 수 있고 분해를 가진 다른 구성원들로
+        for e in components(plain):
+            owners = [y for y in members(plain, e) if y in decomps]
+            for y in owners:
+                rivals[y] = [z for z in owners if z != y and together(y, z)]
+                if any(above(pb, pa) for z in rivals[y] for *_, pb in decomps[z] for *_, pa in decomps[y]):
+                    kinds[y + (NO_ASPECT,)] = ASP
+        tree = self.tree = Tree(kinds, labels)
 
-    # 분해의 규칙과 우선순위는 살아 있는 구성요소에서만 적용된다. 없음이 된 구성요소나 그 아래의 것은 만들어지지
-    # 않으므로 거기서 두 규칙이 함께 참이 되어도 변이를 지우지 않는다. 고전 절차도 그런 곳은 평가하지 않는다
-    for y, mine in decomps.items():
-        alive = f_and(sel(y), live_formula(tree, gone, component_of(tree, y)))
-        out = y + (NO_ASPECT,)
-        pushed = sel(out) if out in tree.nodes else None
-        ruled = [(d, tr(d[2])) for d in mine if d[2] is not None]
+        def one_of(nodes):
+            return sel(nodes[0]) if len(nodes) == 1 else f_or(*(sel(n) for n in nodes))
 
-        def beaten(d):
-            """같은 엔티티에서 우선순위가 더 높은 분해의 규칙이 참이다."""
-            return [f for other, f in ruled if other is not d and above(other[3], d[3])]
+        # 분해의 규칙과 우선순위는 살아 있는 구성요소에서만 적용된다. 없음이 된 구성요소나 그 아래의 것은 만들어지지
+        # 않으므로 거기서 두 규칙이 함께 참이 되어도 변이를 지우지 않는다. 고전 절차도 그런 곳은 평가하지 않는다
+        for y, mine in decomps.items():
+            alive = f_and(sel(y), live_formula(tree, gone, component_of(tree, y)))
+            out = y + (NO_ASPECT,)
+            pushed = sel(out) if out in tree.nodes else None
+            ruled = [(d, self.tr(d[2])) for d in mine if d[2] is not None]
 
-        for d, holds_ in ruled:                      # 규칙이 참이면 그 분해를 고른다. 더 앞선 규칙이 참이면 물러선다
-            guard = [alive, holds_] + [f_not(f) for f in beaten(d)] + ([f_not(pushed)] if pushed is not None else [])
-            clauses.append(f_imp(f_and(*guard), one_of(d[1])))
-        for d in mine:                               # 다른 구성원의 더 앞선 분해와 함께 고를 수 없다
-            for z in rivals.get(y, ()):
-                for other in decomps[z]:
-                    if above(other[3], d[3]):
-                        clauses.append(f_imp(alive, f_not(f_and(one_of(d[1]), one_of(other[1])))))
-        if pushed is not None:                       # 밀려나려면, 고를 수 있었던 분해가 실제로 밀려야 한다
-            no_rule = f_not(f_or(*(f for _, f in ruled)))
-            reasons = []
-            for d in mine:
-                mine_ok = f_or(no_rule, *([f_and(next(f for o, f in ruled if o is d), *(f_not(f) for f in beaten(d)))]
-                                          if d[2] is not None else []))
-                winners = [one_of(other[1]) for z in rivals[y] for other in decomps[z] if above(other[3], d[3])]
-                if winners:
-                    reasons.append(f_and(mine_ok, f_or(*winners)))
-            clauses.append(f_imp(f_and(alive, pushed), f_or(*reasons)))
+            def beaten(d):
+                """같은 엔티티에서 우선순위가 더 높은 분해의 규칙이 참이다."""
+                return [f for other, f in ruled if other is not d and above(other[3], d[3])]
 
-    def chosen(e: m.Selected):
+            for d, holds_ in ruled:                  # 규칙이 참이면 그 분해를 고른다. 더 앞선 규칙이 참이면 물러선다
+                guard = [alive, holds_] + [f_not(f) for f in beaten(d)] + ([f_not(pushed)] if pushed is not None else [])
+                self.clauses.append(f_imp(f_and(*guard), one_of(d[1])))
+            for d in mine:                           # 다른 구성원의 더 앞선 분해와 함께 고를 수 없다
+                for z in rivals.get(y, ()):
+                    for other in decomps[z]:
+                        if above(other[3], d[3]):
+                            self.clauses.append(f_imp(alive, f_not(f_and(one_of(d[1]), one_of(other[1])))))
+            if pushed is not None:                   # 밀려나려면, 고를 수 있었던 분해가 실제로 밀려야 한다
+                no_rule = f_not(f_or(*(f for _, f in ruled)))
+                reasons = []
+                for d in mine:
+                    mine_ok = f_or(no_rule, *([f_and(next(f for o, f in ruled if o is d), *(f_not(f) for f in beaten(d)))]
+                                              if d[2] is not None else []))
+                    winners = [one_of(other[1]) for z in rivals[y] for other in decomps[z] if above(other[3], d[3])]
+                    if winners:
+                        reasons.append(f_and(mine_ok, f_or(*winners)))
+                self.clauses.append(f_imp(f_and(alive, pushed), f_or(*reasons)))
+
+    # 선택에 대한 제약 ---------------------------------------------------
+
+    def chosen(self, e: m.Selected):
         """selected: 가리키는 선택지 노드가 골라졌고, 그 선택 지점이 실제로 있는 구성요소의 것이다."""
+        tree, gone, doc = self.tree, self.gone, self.doc
         if e.path is None:
             def_name, _, group = e.node.partition("/")
             hosts = [(y, def_name) for y in occurrences(tree, def_name)]
@@ -440,6 +495,8 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
             elif kind == "aspect":
                 options += [f_and(sel(a), live_formula(tree, gone, c))
                             for a in tree.aspects(y) if family(a[-1]) == choice]
+        if self.sigma is not None:
+            return f_or(*options)                    # 결정된 변이 하나에서는 가리키는 곳이 없어도 거짓일 뿐이다
         if not hosts:
             raise AlgebraError(f"selected 가 가리키는 곳이 없다: {'/'.join(e.path) if e.path else e.node}")
         if not found:
@@ -447,16 +504,90 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
                                f"{group or '분해'}={e.choice}")
         return f_or(*options)
 
-    for c in doc.constraints:
-        body = f_and(*([tr(c.require, chosen)] if c.require is not None else []),
-                     *([f_not(tr(c.forbid, chosen))] if c.forbid is not None else []))
-        clauses.append(f_imp(tr(c.when, chosen), body) if c.when is not None else body)
-    ann = Ann(ports, frozenset(void), coup)
-    validate(tree, ann)
-    typed = {name: {str(v): v for v in _domain(doc, name)} for name in doc.variables}
-    return {"ses": SES(tree, f_and(*clauses)), "ann": ann, "attrs": attrs, "typed": typed,
-            "labels": {p: labels[p] for p in attrs},
-            "templates": templates, "layouts": layouts, "items": items}
+    def constraints(self) -> None:
+        for c in self.doc.constraints:
+            body = f_and(*([self.tr(c.require, self.chosen)] if c.require is not None else []),
+                         *([f_not(self.tr(c.forbid, self.chosen))] if c.forbid is not None else []))
+            self.clauses.append(f_imp(self.tr(c.when, self.chosen), body) if c.when is not None else body)
+
+    def result(self) -> dict:
+        ann = Ann(self.ports, frozenset(self.void), self.coup)
+        validate(self.tree, ann)
+        typed = {name: {str(v): v for v in self.domain(name)} for name in self.doc.variables}
+        return {"ses": SES(self.tree, f_and(*self.clauses)), "ann": ann, "attrs": self.attrs, "typed": typed,
+                "labels": {p: self.labels[p] for p in self.attrs},
+                "templates": self.templates, "layouts": self.layouts, "items": self.items}
+
+
+def _unfold(doc: m.SesDocument, functions=None) -> dict:
+    u = Unfolding(doc, functions)
+    u.rec(doc.root.name, u.root)
+    u.variables()
+    u.rules()
+    u.constraints()
+    return u.result()
+
+
+def reachable(doc: m.SesDocument) -> list:
+    """뿌리에서 닿는 정의들. 펼친 나무에 나타나는 정의는 이것들뿐이다."""
+    seen, stack = {}, [doc.root.name]
+    while stack:
+        name = stack.pop()
+        if name in seen or name not in doc.entities:
+            continue
+        e = seen[name] = doc.entities[name]
+        stack += [p.def_name for a in e.aspects.values() for p in a.parts]
+        stack += [ma.part.def_name for ma in e.multi_aspects.values()]
+        stack += [alt for sp in e.specializations.values() for alt in sp.alternatives]
+    return list(seen.values())
+
+
+def extensions_of(doc: m.SesDocument) -> set:
+    """족 전체를 펼쳤을 때 얹힐 확장의 이름들. 펼치지 않고 문서만 보고 정한다.
+
+    변이 하나만 만든 나무에는 주석이 하나도 없는 확장이 있을 수 있다. 그때도 족과 같은 확장을 얹어야
+    해석의 모양이 같다.
+    """
+    out = set()
+    for e in reachable(doc):
+        if e.ports or any(a.couplings for a in e.aspects.values()):
+            out.add("devs")
+        for ma in e.multi_aspects.values():
+            c = ma.cardinality
+            top = c.n if isinstance(c, m.Fixed) else max(_domain(doc, c.var)) if isinstance(c, m.VarCard) \
+                else (c.max if c.max is not None else max(c.min, 2))
+            n = min(top, 2)                          # 복제본이 둘이면 결합 틀의 모든 항이 결합을 낸다
+            if _instantiate_pattern(ma, [_replica_name(ma, i, n) for i in range(n)]):
+                out.add("devs")
+        if e.attributes:
+            out.add("attr")
+        text = e.metadata.get("text") if e.metadata else None
+        if isinstance(text, str) or (isinstance(text, dict) and "template" in text):
+            out.add("text")
+        if e.kind is not None or e.fields or e.links:
+            out.add("domain")
+    if doc.profile is not None:
+        out.add("domain")
+    return out
+
+
+def layered(doc: m.SesDocument, u: dict, profile: Profile = None, present=()) -> Layered:
+    """펼친 결과에 정준 문서가 담은 확장들을 얹는다. present 는 주석이 없어도 얹을 확장의 이름들이다."""
+    ann = u["ann"]
+    exts = []
+    if ann.ports or ann.coup or "devs" in present:
+        exts.append(Coupling(ann.ports, ann.coup))
+    if u["attrs"] or "attr" in present:
+        exts.append(Attributes(u["attrs"], u["typed"], u["labels"]))
+    if u["templates"] or "text" in present:
+        exts.append(Text(u["templates"], u["layouts"]))
+    if doc.profile is not None or u["items"] or "domain" in present:
+        if profile is None:
+            raise AlgebraError(f"문서가 프로파일 {doc.profile} 을 따른다. 프로파일을 함께 주어야 한다")
+        if doc.profile is not None and doc.profile != profile.name:
+            raise AlgebraError(f"문서의 프로파일은 {doc.profile} 인데 {profile.name} 이 주어졌다")
+        exts.append(Domain(profile, u["items"]))
+    return Layered(u["ses"], ann.void, tuple(exts))
 
 
 def unfold_annotated(doc: m.SesDocument, functions=None) -> tuple:
@@ -477,22 +608,7 @@ def unfold_layered(doc: m.SesDocument, profile: Profile = None, functions=None) 
     kind, fields, links 를 그 프로파일로 해석하는 범용 확장(Domain)을 얹는다.
     쓰이지 않는 확장은 얹지 않는다. functions 는 식의 call 이 부르는 함수들이다.
     """
-    u = _unfold(doc, functions)
-    ann = u["ann"]
-    exts = []
-    if ann.ports or ann.coup:
-        exts.append(Coupling(ann.ports, ann.coup))
-    if u["attrs"]:
-        exts.append(Attributes(u["attrs"], u["typed"], u["labels"]))
-    if u["templates"]:
-        exts.append(Text(u["templates"], u["layouts"]))
-    if doc.profile is not None or u["items"]:
-        if profile is None:
-            raise AlgebraError(f"문서가 프로파일 {doc.profile} 을 따른다. 프로파일을 함께 주어야 한다")
-        if doc.profile is not None and doc.profile != profile.name:
-            raise AlgebraError(f"문서의 프로파일은 {doc.profile} 인데 {profile.name} 이 주어졌다")
-        exts.append(Domain(profile, u["items"]))
-    return Layered(u["ses"], ann.void, tuple(exts))
+    return layered(doc, _unfold(doc, functions), profile)
 
 
 def pruning_patterns(doc: m.SesDocument) -> list:

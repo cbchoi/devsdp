@@ -144,6 +144,27 @@ def _with_attributes(doc, node: dict, sigma: dict, functions, path: tuple, repli
                 attr_clash=sorted(bad_type | bad_value))
 
 
+def decompositions(owners: list, sigma: dict, functions=None) -> list:
+    """병합체의 구성원들 가운데 그 구성요소의 분해가 될 수 있는 (정의, 분해)들.
+
+    owners 는 분해(aspect 나 multi-aspect)를 가진 구성원의 정의들이다. 구성원마다 규칙이 허락하는
+    분해를 구하고, 병합으로 형제가 된 분해들 가운데 우선순위가 가장 높은 것만 남긴다. 다른 구성원은
+    모두 밀려야 한다. 가르지 못하면 아무것도 남지 않는다.
+    """
+    allowed, real = {}, {}
+    for e in owners:
+        fams = list(e.aspects.values()) + list(e.multi_aspects.values())
+        forced = [a for a in fams if a.rule is not None and _eval(a.rule, sigma, functions)]
+        if not forced:
+            allowed[e.name] = real[e.name] = fams             # 참인 규칙이 없으면 어느 것이나 고를 수 있다
+            continue
+        top = [a for a in forced if not any(_above(b.priority, a.priority) for b in forced)]
+        allowed[e.name] = top                                 # 우선순위가 가장 높은 것. 가르지 못하면 여럿이다
+        real[e.name] = top if len(top) == 1 else []           # 두 규칙이 서로 다른 분해를 요구하면 고를 수 없다
+    return [(e, a) for e in owners for a in real[e.name]
+            if all(any(_above(a.priority, b.priority) for b in allowed[z.name]) for z in owners if z is not e)]
+
+
 def enumerate_classic(doc: m.SesDocument, functions=None, overrides=()) -> list:
     """절차적 가지치기와 조립으로 얻는 (변수 값, 구조)의 목록.
 
@@ -178,6 +199,16 @@ def enumerate_classic(doc: m.SesDocument, functions=None, overrides=()) -> list:
             if s is not None and all(satisfied(c, sigma, picks) for c in late):
                 out.append((sigma, _with_attributes(doc, s, sigma, functions, (doc.root.name,), (), by_def, by_path)))
     return out
+
+
+def counts_of(ma: m.MultiAspect, sigma: dict) -> list:
+    """변수 값이 sigma 일 때 그 multi-aspect 가 가질 수 있는 복제본의 수."""
+    card = ma.cardinality
+    if isinstance(card, m.Fixed):
+        return [card.n]
+    if isinstance(card, m.VarCard):
+        return [sigma[card.var]]
+    return list(range(card.min, card.max + 1))
 
 
 def _clusters(doc, def_name: str, sigma: dict, functions=None) -> list:
@@ -223,37 +254,18 @@ def _build(doc, def_name: str, sigma: dict, memo: dict, functions=None) -> list:
         if not owners:
             results.append((dict(base, children={}, eic=[], eoc=[], ic=[]), chosen))
             continue
-        # 구성원마다, 규칙이 허락하는 분해들과 그 가운데 실제로 고를 수 있는 것들
-        allowed, real = {}, {}
-        for e in owners:
-            fams = list(e.aspects.values()) + list(e.multi_aspects.values())
-            forced = [a for a in fams if a.rule is not None and _eval(a.rule, sigma, functions)]
-            if not forced:
-                allowed[e.name] = real[e.name] = fams         # 참인 규칙이 없으면 어느 것이나 고를 수 있다
-                continue
-            top = [a for a in forced if not any(_above(b.priority, a.priority) for b in forced)]
-            allowed[e.name] = top                             # 우선순위가 가장 높은 것. 가르지 못하면 여럿이다
-            real[e.name] = top if len(top) == 1 else []       # 두 규칙이 서로 다른 분해를 요구하면 고를 수 없다
         choices = []                                          # (부분의 (이름, 정의) 목록, 결합, 이때 한 선택, 복제본의 번호)
-        for e in owners:
-            for a in real[e.name]:
-                # 병합으로 형제가 된 분해들 가운데 우선순위가 가장 높은 것이 구성요소의 분해다.
-                # 다른 구성원은 모두 밀려야 한다. 가르지 못하면 합칠 수 없다
-                if not all(any(_above(a.priority, b.priority) for b in allowed[z.name]) for z in owners if z is not e):
-                    continue
-                if isinstance(a, m.Aspect):
-                    ks = [((c.src.part, c.src.port), (c.dst.part, c.dst.port)) for c in a.couplings]
-                    choices.append(([(p.part_name, p.def_name) for p in a.parts], ks,
-                                    {("aspect", e.name, "", a.name)}, {}))
-                    continue
-                card = a.cardinality
-                counts = [card.n] if isinstance(card, m.Fixed) else [sigma[card.var]] \
-                    if isinstance(card, m.VarCard) else range(card.min, card.max + 1)
-                for n in counts:
-                    replicas = [_replica_name(a, i, n) for i in range(n)]
-                    choices.append(([(r, a.part.def_name) for r in replicas], list(_instantiate_pattern(a, replicas)),
-                                    {("aspect", e.name, "", a.name), ("count", e.name, a.name, n)},
-                                    {r: (i, n) for i, r in enumerate(replicas)}))
+        for e, a in decompositions(owners, sigma, functions):
+            if isinstance(a, m.Aspect):
+                ks = [((c.src.part, c.src.port), (c.dst.part, c.dst.port)) for c in a.couplings]
+                choices.append(([(p.part_name, p.def_name) for p in a.parts], ks,
+                                {("aspect", e.name, "", a.name)}, {}))
+                continue
+            for n in counts_of(a, sigma):
+                replicas = [_replica_name(a, i, n) for i in range(n)]
+                choices.append(([(r, a.part.def_name) for r in replicas], list(_instantiate_pattern(a, replicas)),
+                                {("aspect", e.name, "", a.name), ("count", e.name, a.name, n)},
+                                {r: (i, n) for i, r in enumerate(replicas)}))
         for parts, ks, mine, numbered in choices:
             for combo in product(*(_build(doc, d, sigma, memo, functions) for _, d in parts)):
                 kids = {name: c for (name, _), (c, _) in zip(parts, combo) if c is not None}
