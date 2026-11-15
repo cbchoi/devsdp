@@ -22,6 +22,8 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | 16_cevsim_executor.md | cevsim 실행기: 계약과 쓰는 법, cevsim의 main(45e7fa9)에서 확인한 엔진의 성질과 앞선 커밋(a9886a6)과의 차이, C++ 엔진과 Python 사이의 다리, 공통 모델 기반을 올리는 방법, 참조 시뮬레이터와의 사건 기록 대조, 한계와 결정이 필요한 것 |
 | 17_time_unit.md | 시간 단위: 바인딩에 적는 시간 단위와 눈금으로 세는 시각의 계약, 눈금을 엔진의 시각에 맞추는 방법, 시간 값의 정적 검사(B5), 세 실행기의 기록 대조, 한계와 결정이 필요한 것 |
 | patches/cevsim_a9886a6_schedule_and_messages.patch | cevsim a9886a6의 두 결함(일정 목록과 메시지 묶음에서 열쇠로 지우기)을 고치는 제안. 그 커밋의 사본에서 확인했다. cevsim의 main(45e7fa9)은 같은 문제를 다른 방법으로 고쳤으므로 main에는 맞지 않는다. 기록으로 둔다 |
+| patches/cevsim_45e7fa9_gxx_linux_issue.md | cevsim에 알릴 글(영어). cevsim의 main(45e7fa9)의 자체 시험이 g++ 13.3과 리눅스에서 컴파일되지 않거나 실패하는 곳, 원인 셋, 사본에서 확인한 고치는 길 셋, long double의 폭에 따라 결과가 달라지는 예. cevsim 저장소에는 올리지 않았다 |
+| patches/cevsim_45e7fa9_gxx_linux_tests.patch | 위의 글에 딸린 수정 제안. 시험 코드만 고친다(파일 7개, 17줄). 45e7fa9의 사본에서 등록된 시험 24개가 모두 통과하는 것을 확인했다 |
 | schema/profile.schema.json | 도메인 프로파일의 JSON Schema 초안 |
 | schema/binding.schema.json | 바인딩과 모듈 라이브러리의 JSON Schema 초안 |
 | schema/decisions.schema.json | 결정 집합의 JSON Schema 초안 |

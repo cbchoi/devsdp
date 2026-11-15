@@ -1,0 +1,157 @@
+Proposed change for cevsim 45e7fa9 (main). It makes the repository's tests build and pass with g++ 13.3 on Linux x86-64.
+Test sources only: 7 files, 17 lines. The engine sources are not touched.
+Verified on a copy of the commit: all 24 CTest entries pass. Before the change 16 pass. Not built with MSVC or Clang.
+Two of the files are under benchmarks/. If they must stay byte-identical, leave out the changes to those two files
+and use variant B or C of the report (cevsim_45e7fa9_gxx_linux_issue.md in the same folder).
+Everything above the first "diff --git" line is ignored by patch and git apply.
+
+(한국어) cevsim에 알릴 글에 딸린 수정 제안이다. 설명은 docs/ses-platform/16_cevsim_executor.md의 2.1절에 있다.
+cevsim 저장소에는 올리지 않았다.
+
+diff --git a/benchmarks/repair/component_reuse_20261114/tests/component_tests.cpp b/benchmarks/repair/component_reuse_20261114/tests/component_tests.cpp
+index a12b339..9423e45 100644
+--- a/benchmarks/repair/component_reuse_20261114/tests/component_tests.cpp
++++ b/benchmarks/repair/component_reuse_20261114/tests/component_tests.cpp
+@@ -50,7 +50,7 @@ struct Packet {
+     std::int32_t node = 0;
+     std::int16_t timer = 0, hops = 0;
+     std::int64_t value = 0, sequence = 0;
+-    Time time = 0;
++    double time = 0;
+     Packet()=default;
+     Packet(std::int64_t source,std::int64_t payload,std::int64_t serial,std::int64_t is_timer,Time timestamp,std::int16_t hop=0)
+         :node(std::int32_t(source)),timer(std::int16_t(is_timer)),hops(hop),value(payload),sequence(serial),time(timestamp){}
+diff --git a/benchmarks/repair/structural_effects_20261114/tests/effect_tests.cpp b/benchmarks/repair/structural_effects_20261114/tests/effect_tests.cpp
+index 3760604..ccb1257 100644
+--- a/benchmarks/repair/structural_effects_20261114/tests/effect_tests.cpp
++++ b/benchmarks/repair/structural_effects_20261114/tests/effect_tests.cpp
+@@ -33,9 +33,9 @@ bool same_trace(const std::vector<db::Observation>&a,const std::vector<db::Obser
+ struct Action {std::uint64_t kind=0;std::string target;std::vector<db::LogicValue> values;CEVSIM_CHECKPOINT_DATA(kind,target,values)};
+ struct Record {std::uint64_t input=0;Time time=0;std::vector<db::LogicValue> state;std::vector<Action> actions;CEVSIM_CHECKPOINT_DATA(input,time,state,actions)};
+ bool same_records(const std::vector<Record>&a,const std::vector<Record>&b){if(a.size()!=b.size())return false;for(std::size_t i=0;i<a.size();++i){if(a[i].input!=b[i].input||a[i].time!=b[i].time||!same_values(a[i].state,b[i].state)||a[i].actions.size()!=b[i].actions.size())return false;for(std::size_t k=0;k<a[i].actions.size();++k){const auto&x=a[i].actions[k];const auto&y=b[i].actions[k];if(x.kind!=y.kind||x.target!=y.target||!same_values(x.values,y.values))return false;}}return true;}
+-struct Packet {std::uint32_t action=0,element=0,target=0,type=0;std::uint64_t bits=0;Time time=0;CEVSIM_CHECKPOINT_DATA(action,element,target,type,bits,time) friend bool operator==(const Packet&,const Packet&)=default;};
++struct Packet {std::uint32_t action=0,element=0,target=0,type=0;std::uint64_t bits=0;double time=0;CEVSIM_CHECKPOINT_DATA(action,element,target,type,bits,time) friend bool operator==(const Packet&,const Packet&)=default;};
+ struct Timer {std::string target;Time due=0;CEVSIM_CHECKPOINT_DATA(target,due) friend bool operator==(const Timer&,const Timer&)=default;};
+-Packet packet(std::uint32_t action,std::uint32_t element,std::uint32_t target,const db::LogicValue&value,Time time){Packet p{action,element,target,std::uint32_t(value.index()),0,time};if(auto v=std::get_if<bool>(&value))p.bits=*v;else if(auto v=std::get_if<std::int64_t>(&value))p.bits=std::bit_cast<std::uint64_t>(*v);else p.bits=std::bit_cast<std::uint64_t>(std::get<double>(value));return p;}
++Packet packet(std::uint32_t action,std::uint32_t element,std::uint32_t target,const db::LogicValue&value,Time time){Packet p{action,element,target,std::uint32_t(value.index()),0,static_cast<double>(time)};if(auto v=std::get_if<bool>(&value))p.bits=*v;else if(auto v=std::get_if<std::int64_t>(&value))p.bits=std::bit_cast<std::uint64_t>(*v);else p.bits=std::bit_cast<std::uint64_t>(std::get<double>(value));return p;}
+ struct Flags {bool catch_errors=false;std::optional<std::size_t> outside_site;bool nested_notifications=false;};
+ 
+ class Source final:public CAtomicModel {
+@@ -66,7 +66,7 @@ public:
+             for(const auto&a:result.actions)if(a.kind==K::Schedule){require(a.values.size()==1,"Schedule requires one delay");const auto&v=a.values.front();const auto delay=std::holds_alternative<double>(v)?std::get<double>(v):std::holds_alternative<std::int64_t>(v)?double(std::get<std::int64_t>(v)):-1;require(std::isfinite(delay)&&delay>=0,"Schedule delay outside finite nonnegative contract");}
+             state=result.state;Record record{index,now(),state,{}};
+             for(const auto&a:result.actions){record.actions.push_back({std::uint64_t(a.kind),a.target,a.values});
+-                if(a.kind==K::Output){const auto id=std::uint32_t(serial++);if(a.values.empty())pending.push_back({id,0,target_id(a.target),3,0,now()});for(std::size_t j=0;j<a.values.size();++j)pending.push_back(packet(id,std::uint32_t(j),target_id(a.target),a.values[j],now()));}
++                if(a.kind==K::Output){const auto id=std::uint32_t(serial++);if(a.values.empty())pending.push_back({id,0,target_id(a.target),3,0,static_cast<double>(now())});for(std::size_t j=0;j<a.values.size();++j)pending.push_back(packet(id,std::uint32_t(j),target_id(a.target),a.values[j],now()));}
+                 if(a.kind==K::Schedule){std::erase_if(timers,[&](const Timer&t){return t.target==a.target;});const auto&v=a.values.front();timers.push_back({a.target,now()+(std::holds_alternative<double>(v)?std::get<double>(v):double(std::get<std::int64_t>(v)))});}}
+             records.push_back(std::move(record));
+             if(flags.outside_site)outside=sites[*flags.outside_site].evaluate(entry);
+@@ -74,7 +74,7 @@ public:
+     }
+     void output_function(MessageDeliverer& deliverer)override{
+         auto send=[&](const Packet&p){auto value=ValueMessage::make(this,output,p,now());retained=value.as<Packet>().retain();alias=retained;emitted.push_back(p);deliverer.insert_value(value);};
+-        for(const auto&p:pending)send(p);for(const auto&t:timers)if(t.due<=now())send({std::uint32_t(serial++),0,target_id(t.target),4,0,now()});
++        for(const auto&p:pending)send(p);for(const auto&t:timers)if(t.due<=now())send({std::uint32_t(serial++),0,target_id(t.target),4,0,static_cast<double>(now())});
+     }
+     void internal_transition()override{++internals;pending.clear();std::erase_if(timers,[&](const Timer&t){return t.due<=now();});}
+     CEVSIM_CHECKPOINT_FIELDS(sites,state,records,pending,timers,emitted,retained,alias,calls,errors,serial,internals,outside)
+diff --git a/tests/checkpoint_layout_tests.cpp b/tests/checkpoint_layout_tests.cpp
+index b47e14a..621ee12 100644
+--- a/tests/checkpoint_layout_tests.cpp
++++ b/tests/checkpoint_layout_tests.cpp
+@@ -29,7 +29,7 @@ TEST(CheckpointRestoreLayout, ImmutableComparisonUsesTheNormalCodecAndLimits) {
+     limited = refs; limited.limits.max_container_elements = manifest.size() - 1;
+     checkpoint::Reader container(writer.buffer(), limited);
+     EXPECT_THROW(container.matches_immutable_fields(std::uint32_t{1}, ExecutionBackend::Flat, manifest), checkpoint::ArchiveError);
+-    limited = refs; limited.limits.max_string_bytes = 1;
++    limited = refs; limited.limits.max_string_bytes = 0;
+     checkpoint::Reader string(writer.buffer(), limited);
+     EXPECT_THROW(string.matches_immutable_fields(std::uint32_t{1}), checkpoint::ArchiveError);
+     limited = refs; limited.limits.max_depth = 1;
+@@ -121,8 +121,8 @@ TEST(CheckpointRestoreLayout, LateDecodeFailureRollsBackMutableBodyAndMessageAli
+         EXPECT_EQ(target.graph.a->data.random, oracle.graph.a->data.random);
+         EXPECT_EQ(target.graph.a->data.normal, oracle.graph.a->data.normal);
+         EXPECT_NO_THROW(target.engine->save_state());
+-        ASSERT_EQ(target.engine->simulate(2), 2.1);
+-        ASSERT_EQ(oracle.engine->simulate(2), 2.1);
++        ASSERT_EQ(target.engine->simulate(2), Time(0.1) + 2);
++        ASSERT_EQ(oracle.engine->simulate(2), Time(0.1) + 2);
+         EXPECT_EQ(target.trace, oracle.trace);
+     }
+ }
+diff --git a/tests/checkpoint_numeric_tests.cpp b/tests/checkpoint_numeric_tests.cpp
+index a69443a..8712313 100644
+--- a/tests/checkpoint_numeric_tests.cpp
++++ b/tests/checkpoint_numeric_tests.cpp
+@@ -29,7 +29,7 @@ TEST(CheckpointRestoreNumeric, ImmutableComparisonUsesTheNormalCodecAndLimits) {
+     limited = refs; limited.limits.max_container_elements = manifest.size() - 1;
+     checkpoint::Reader container(writer.buffer(), limited);
+     EXPECT_THROW(container.matches_immutable_fields(std::uint32_t{1}, ExecutionBackend::Flat, manifest), checkpoint::ArchiveError);
+-    limited = refs; limited.limits.max_string_bytes = 1;
++    limited = refs; limited.limits.max_string_bytes = 0;
+     checkpoint::Reader string(writer.buffer(), limited);
+     EXPECT_THROW(string.matches_immutable_fields(std::uint32_t{1}), checkpoint::ArchiveError);
+     limited = refs; limited.limits.max_depth = 1;
+@@ -187,8 +187,8 @@ TEST(CheckpointRestoreNumeric, LateDecodeFailureRollsBackMutableBodyAndMessageAl
+         EXPECT_EQ(target.graph.a->data.random, oracle.graph.a->data.random);
+         EXPECT_EQ(target.graph.a->data.normal, oracle.graph.a->data.normal);
+         EXPECT_NO_THROW(target.engine->save_state());
+-        ASSERT_EQ(target.engine->simulate(2), 2.1);
+-        ASSERT_EQ(oracle.engine->simulate(2), 2.1);
++        ASSERT_EQ(target.engine->simulate(2), Time(0.1) + 2);
++        ASSERT_EQ(oracle.engine->simulate(2), Time(0.1) + 2);
+         EXPECT_EQ(target.trace, oracle.trace);
+     }
+ }
+@@ -394,7 +394,7 @@ TEST(CheckpointRestoreNumeric, NumericOnlyEnvelopeAndBodyRollbackPreserveContinu
+         EXPECT_THROW(target.engine->restore_state(damaged,numeric),checkpoint::ArchiveError);
+         fast::expect_aliases(target,91,.05); EXPECT_EQ(*retained,91u);
+         EXPECT_EQ(profile.index_builds,1u); EXPECT_GT(profile.rollback_ms,0);
+-        ASSERT_EQ(target.engine->simulate(2),2.1); ASSERT_EQ(oracle.engine->simulate(2),2.1);
++        ASSERT_EQ(target.engine->simulate(2),Time(0.1)+2); ASSERT_EQ(oracle.engine->simulate(2),Time(0.1)+2);
+         EXPECT_EQ(target.trace,oracle.trace);
+         target.engine->restore_state(image,numeric); oracle.engine->restore_state(image);
+         fast::expect_aliases(target,17,.125);
+diff --git a/tests/include/debugging_fixture.hpp b/tests/include/debugging_fixture.hpp
+index 2b894b4..b207071 100644
+--- a/tests/include/debugging_fixture.hpp
++++ b/tests/include/debugging_fixture.hpp
+@@ -119,7 +119,7 @@ public:
+         const Reply payload{pending_ticket, static_cast<double>(requested_at),
+                             static_cast<double>(deadline), cancelled};
+         const auto packet = ValueMessage::make(this, reply, payload, deadline);
+-        retained_reply = packet.as<Reply>().retain();
++        retained_reply = packet.template as<Reply>().retain();
+         messages.insert_value(packet);
+         ++responses;
+     }
+diff --git a/tests/include/test_checkpoint_restore_body.hpp b/tests/include/test_checkpoint_restore_body.hpp
+index 589b327..af28de5 100644
+--- a/tests/include/test_checkpoint_restore_body.hpp
++++ b/tests/include/test_checkpoint_restore_body.hpp
+@@ -159,8 +159,8 @@ TEST(CheckpointRestoreBody, LateDecodeFailureResetsSharedTablesAndRollsBackExact
+             EXPECT_EQ(target.graph.a->data.random, oracle.graph.a->data.random);
+             EXPECT_EQ(target.graph.a->data.normal, oracle.graph.a->data.normal);
+             EXPECT_NO_THROW(target.engine->save_state());
+-            ASSERT_EQ(target.engine->simulate(2), 2.1);
+-            ASSERT_EQ(oracle.engine->simulate(2), 2.1);
++            ASSERT_EQ(target.engine->simulate(2), Time(0.1) + 2);
++            ASSERT_EQ(oracle.engine->simulate(2), Time(0.1) + 2);
+             EXPECT_EQ(target.trace, oracle.trace);
+             EXPECT_EQ(target.graph.a->sequence, oracle.graph.a->sequence);
+             EXPECT_EQ(target.graph.b->sequence, oracle.graph.b->sequence);
+diff --git a/tests/include/test_checkpoint_restore_fast.hpp b/tests/include/test_checkpoint_restore_fast.hpp
+index 416fa26..285e07a 100644
+--- a/tests/include/test_checkpoint_restore_fast.hpp
++++ b/tests/include/test_checkpoint_restore_fast.hpp
+@@ -143,8 +143,8 @@ TEST(CheckpointRestoreFast, DecodeFailureAfterLoadedAliasesRollsBackAndCanContin
+         EXPECT_EQ(before_shared->count, 91);
+         EXPECT_EQ(*before_retained, 91u);
+         EXPECT_NO_THROW(target.engine->save_state());
+-        ASSERT_EQ(target.engine->simulate(2), 2.1);
+-        ASSERT_EQ(oracle.engine->simulate(2), 2.1);
++        ASSERT_EQ(target.engine->simulate(2), Time(0.1) + 2);
++        ASSERT_EQ(oracle.engine->simulate(2), Time(0.1) + 2);
+         EXPECT_EQ(target.trace, oracle.trace);
+         EXPECT_EQ(target.graph.a->sequence, oracle.graph.a->sequence);
+         EXPECT_EQ(target.graph.b->sequence, oracle.graph.b->sequence);
