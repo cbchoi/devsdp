@@ -9,12 +9,16 @@ DEVS 실행기를 붙이면 시뮬레이션 모델(SES/MB)이, 하드웨어 실�
 - 바인딩: 정의 이름에서 모듈로 가는 부분 사상. 고전 SES/MB의 모델베이스 참조다.
 - 계획: 변이의 실현 모델을 바인딩이 닿는 곳(전선)에서 자른 구조. 실행기는 이것만 받는다.
 
+시간이 있는 실행기는 시간 단위를 함께 받는다. 바인딩이 적어 둔 시간 단위가 계획에 실려 가고,
+실행기는 시각을 그 단위의 눈금으로 센다 (ticks, time_unit).
+
 바인딩과 실행 가능성 검사는 확장 계약(extension.py)을 따르는 확장 하나로 구현한다.
 그래서 핵의 정리(내재성과 보존, 적격 핵, 합성)가 모든 실행기에 대해 성립한다.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
 
@@ -24,7 +28,8 @@ from .coupling import PortDecl
 from .ext_attr import AttrDecl
 from .extension import Extension, Layered, View, interpret, violations, wf_core
 
-_TYPES = {"int": (int,), "float": (int, float), "str": (str,), "bool": (bool,)}
+# 매개변수의 타입. time은 시간 값이다. 수이고, 시간 단위의 음이 아닌 정수배이거나 무한이어야 한다
+_TYPES = {"int": (int,), "float": (int, float), "str": (str,), "bool": (bool,), "time": (int, float)}
 
 
 @dataclass(frozen=True)
@@ -33,7 +38,8 @@ class Module:
 
     SES 쪽에서 보이는 것은 인터페이스(포트, 필수 입력, 매개변수)뿐이다. body는 실행기만
     아는 본체(시뮬레이션 모델의 클래스, 부품 번호)이고 어떤 검사도 들여다보지 않는다.
-    매개변수의 선언은 (타입,) 또는 (타입, 기본값)이다.
+    매개변수의 선언은 (타입,) 또는 (타입, 기본값)이다. 타입 time은 본체가 시간 전진으로 쓰는 값이라는
+    선언이며, 그 값이 시간 단위의 정수배인지를 계획에서 검사한다(B5).
     """
     name: str
     ports: Mapping[str, tuple] = field(default_factory=dict)
@@ -50,21 +56,32 @@ class Bind:
 
 @dataclass(frozen=True)
 class Binding:
-    """정의 이름에서 모듈로 가는 부분 사상. 실행기마다 하나씩 둔다."""
+    """정의 이름에서 모듈로 가는 부분 사상. 실행기마다 하나씩 둔다.
+
+    time_unit은 시간 단위다. 모듈들의 시간 전진이 모두 그 정수배라는 선언이며, 실행기는 시각을 그
+    단위의 눈금으로 센다. 적지 않으면 1이다. 시간이 없는 실행기(하드웨어)의 바인딩에는 적지 않는다.
+    """
     executor: str
     map: Mapping[str, Bind]
     target: Optional[str] = None
+    time_unit: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if self.time_unit is not None and not _is_unit(self.time_unit):
+            raise ValueError(f"시간 단위 {self.time_unit!r} 는 0보다 큰 유한한 수여야 한다")
 
     @staticmethod
     def from_dict(d: dict) -> "Binding":
         entries = {name: Bind(e["module"], dict(e.get("params") or {}))
                    for name, e in (d.get("map") or {}).items()}
-        return Binding(d["executor"], entries, d.get("target"))
+        return Binding(d["executor"], entries, d.get("target"), d.get("time_unit"))
 
     def to_dict(self) -> dict:
         out: dict = {"binding": "1.0", "executor": self.executor}
         if self.target is not None:
             out["target"] = self.target
+        if self.time_unit is not None:
+            out["time_unit"] = self.time_unit
         out["map"] = {name: dict(module=b.module, **({"params": dict(b.params)} if b.params else {}))
                       for name, b in self.map.items()}
         return out
@@ -89,7 +106,75 @@ def load_library_dict(d: dict, bodies: Optional[Mapping] = None) -> dict:
 
 
 class OffGrid(ValueError):
-    """사건 시각이 실행기의 시간 격자 위에 없다. 시간 간격의 배수인 시각만 처리하는 엔진에서 난다."""
+    """시간 전진이나 사건 시각이 시간 단위의 정수배가 아니다."""
+
+
+def _is_unit(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value < math.inf
+
+
+def grid(value: float, unit: float) -> Optional[int]:
+    """값이 시간 단위의 몇 배인지. 정수배가 아니면 None이다.
+
+    부동소수점의 끝자리 차이(상대 오차 1e-9)는 정수배로 본다. 참조 시뮬레이터와 모든 실행기가 이 함수
+    하나로 판정한다. 그래서 같은 값은 어디서나 같은 눈금이 된다.
+    """
+    k = value / unit
+    if not math.isfinite(k):
+        return None
+    n = round(k)
+    return n if abs(k - n) <= 1e-9 * max(1.0, abs(k)) else None
+
+
+def ticks(who: str, ta: float, unit: float) -> Optional[int]:
+    """시간 전진을 눈금의 수로 바꾼다. 무한이면 None이다. 시간 단위의 정수배가 아니면 OffGrid다."""
+    if ta == math.inf:
+        return None
+    if not ta >= 0:
+        raise ValueError(f"{who}: 시간 전진 {ta} 이 음수이거나 수가 아니다")
+    n = grid(ta, unit)
+    if n is None:
+        raise OffGrid(f"{who}: 시간 전진 {ta} 이 시간 단위 {unit} 의 배수가 아니다")
+    return n
+
+
+def last_tick(until: float, unit: float) -> int:
+    """시각 until까지 돌릴 때 처리할 마지막 눈금.
+
+    until이 어떤 눈금의 시각이면(끝자리 차이는 같은 것으로 본다) 그 눈금이고, 아니면 그 앞의 눈금이다.
+    """
+    n = grid(until, unit)
+    return n if n is not None else math.floor(until / unit)
+
+
+def _off_grid(value, unit: float) -> bool:
+    """시간 값이 시간 단위의 음이 아닌 정수배도 무한도 아닌가. 수가 아닌 값은 타입 검사(B4)가 맡는다."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value == math.inf:
+        return False
+    return not value >= 0 or grid(value, unit) is None
+
+
+def same_unit(*units) -> float:
+    """여러 자리에 적힌 시간 단위가 가리키는 하나의 값. 적히지 않은 자리는 None이다.
+
+    적힌 것이 서로 다르면 오류다. 어디에도 적히지 않았으면 1이다.
+    """
+    declared = {u for u in units if u is not None}
+    if len(declared) > 1:
+        raise ValueError(f"시간 단위가 서로 다르다: {sorted(declared)}")
+    unit = declared.pop() if declared else 1.0
+    if not _is_unit(unit):
+        raise ValueError(f"시간 단위 {unit!r} 는 0보다 큰 유한한 수여야 한다")
+    return float(unit)
+
+
+def time_unit(plan: dict, given: Optional[float] = None) -> float:
+    """계획을 돌릴 시간 단위.
+
+    바인딩이 적어 둔 시간 단위는 계획의 구성요소에 실려 온다. 실행기를 만들 때 준 값(given)이 있으면
+    그것과 같아야 한다. 어디에도 없으면 1이다.
+    """
+    return same_unit(given, *(c.get("time_unit") for _, c in st.walk(plan)))
 
 
 class Executor:
@@ -134,10 +219,11 @@ class Bound(Extension):
     """
 
     def __init__(self, name: str, label: Callable, ports: Mapping, coup: Mapping, attrs: Mapping,
-                 binding: Binding, library: Mapping, conventions=()) -> None:
+                 binding: Binding, library: Mapping, conventions=(), time_unit: Optional[float] = None) -> None:
         self.name = name
         self._label, self.ports, self.coup, self.attrs = label, ports, coup, attrs
         self.binding, self.library, self.conventions = binding, library, tuple(conventions)
+        self.unit = same_unit(binding.time_unit, time_unit)  # 바인딩이 적은 것과 실행기에 준 것. 둘 다 없으면 1
 
     # 주석과 병합 ----------------------------------------------------------
 
@@ -177,6 +263,10 @@ class Bound(Extension):
                        tuple(label for _, (_, label) in bound)), []
 
     # 계획 ---------------------------------------------------------------
+
+    def _unit(self) -> dict:
+        """바인딩이 시간 단위를 적어 두었으면 계획의 구성요소에 싣는다. 실행기가 거기서 읽는다."""
+        return {} if self.binding.time_unit is None else {"time_unit": self.binding.time_unit}
 
     def _kind(self, v: View) -> str:
         if v.ann.bound:
@@ -228,8 +318,10 @@ class Bound(Extension):
                     params[name] = decl[1]
                 else:
                     say("B4", f"모듈 {mod.name} 의 매개변수 {name} 에 줄 값이 없다")
+                if decl[0] == "time" and name in params and _off_grid(params[name], self.unit):
+                    say("B5", f"매개변수 {name} 의 값 {params[name]!r} 이 시간 단위 {self.unit} 의 음이 아닌 정수배가 아니다")
         return st.node(ports, required=required, name=v.name, path=v.path, labels=v.comp.labels,
-                       module=module, params=params)
+                       module=module, params=params, **self._unit())
 
     def _composite(self, v: View, kids: Mapping, found: Optional[list] = None) -> dict:
         m: _Merged = v.ann
@@ -249,7 +341,7 @@ class Bound(Extension):
             else:
                 ic.append(((sw, sp), (dw, dp)))
         return st.node(ports, kids, eic, eoc, ic, [p for p, d in m.ports.items() if d.required],
-                       name=v.name, path=v.path, labels=v.comp.labels, module=None, params={})
+                       name=v.name, path=v.path, labels=v.comp.labels, module=None, params={}, **self._unit())
 
     def _plan(self, v: View, found: list) -> dict:
         if self._kind(v) != "composite":
@@ -287,7 +379,8 @@ def attach(L: Layered, executor: Executor, binding: Binding, library: Mapping) -
     attrs = next((x for x in L.extensions if x.name == "attr"), None)
     ext = Bound(f"exec:{executor.name}", L.ses.tree.label,
                 structure.ports if structure else {}, structure.coup if structure else {},
-                attrs.decls if attrs else {}, binding, library, executor.conventions())
+                attrs.decls if attrs else {}, binding, library, executor.conventions(),
+                getattr(executor, "time_unit", None))
     return L.plus(ext), ext
 
 

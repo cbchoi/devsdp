@@ -24,7 +24,7 @@ struct Params {
 
     bool has(const std::string& key) const { return values.count(key) > 0; }
     std::string text(const std::string& key, const std::string& fallback = "") const;
-    long double number(const std::string& key, long double fallback = 0) const;
+    long double number(const std::string& key, long double fallback = 0) const;                // 배정밀도로 읽은 값이다
     evsim::Time time(const std::string& key, evsim::Time fallback = evsim::Infinity) const;    // inf는 evsim::Infinity가 된다
 };
 

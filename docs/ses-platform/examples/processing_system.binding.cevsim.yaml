@@ -7,6 +7,7 @@
 binding: "1.0"
 executor: cevsim
 target: ProcessingSystem
+time_unit: 1.0          # 도착 간격과 서비스 시간이 모두 이 값의 정수배다
 
 map:
   Generator: {module: Generator}

@@ -17,18 +17,28 @@ cevsim은 C++ 라이브러리다. 이 모듈은 cevsim의 소스와 다리(cevsi
   모델이 오른다. 엔진이 일정과 전달을 맡고 전이는 Python에서 한다. 값은 Python에 두고, 받는 쪽이
   메시지의 출처를 보고 찾아 읽는다. 고유 모델이나 밖에서 온 메시지는 값이 None인 입력 하나가 된다.
 
-시각은 엔진의 것을 그대로 쓴다. cevsim은 사건 시각을 정확한 값으로 지키고 시간 격자를 두지 않는다.
-두 사건이 같은 시각인지는 엔진이 가진 시각이 정확히 같은지로 정해진다.
+시각. 공통 모델의 시각은 시간 단위의 눈금으로 센다. 참조 시뮬레이터와 같은 방법이다(executor.ticks).
+시간 단위는 계획에 실려 온 것(바인딩이 적은 것)이다. 엔진의 시계는 모델의 시간을 그대로 쓰고 격자가
+없다. 공통 모델은 엔진에 다음 사건의 눈금의 시각(눈금 수와 시간 단위의 곱)에서 엔진의 지금 시각을 뺀
+만큼의 시간 전진을 내놓고, 어느 눈금인지는 엔진의 시각을 시간 단위로 나눠서 안다. 그래서 엔진의 시각은
+사건마다 눈금의 시각으로 돌아오고, 엔진이 시각을 더하면서 생기는 끝자리의 오차가 쌓이지 않는다. 같은
+눈금인지는 정수의 비교로 정해지므로 그 끝자리 차이가 결과에 들어오지도 않는다. 고유 모델은 엔진의 시각을
+그대로 쓴다. 고유 모델이나 밖에서 온 입력이 눈금 위에 없는 시각에 공통 모델에 닿으면 OffGrid다.
 
 공통 모델 기반을 올릴 때 병렬 DEVS의 규약을 지키는 방법. cevsim은 같은 시각의 모델을 모델 번호의
 순서로 하나씩 처리하고, 병렬 DEVS는 그 시각에 임박한 모델이 모두 출력한 뒤에 함께 전이한다.
 - 출력은 전이하기 전의 상태에서 내고, 받은 것은 묶음에 모아 두기만 한다.
 - 차례가 온 모델은 전이를 맡는 모델을 깨운다. 그 모델은 맨 나중에 올려서 번호가 가장 크다. 그래서
   그 시각에 임박한 모델이 모두 출력한 뒤에 차례가 와서 모든 공통 모델에 전이 신호를 보내고, 신호를
-  받은 모델이 모아 둔 전이를 한다.
-- 아무도 전이를 맡는 모델을 깨우지 않은 시각에 입력을 받은 모델은 그 시각에 차례를 청한다. 그 차례에는
-  내지 않고 깨우기만 한다.
-- 입력을 받고도 전이하지 않은 모델은 엔진에 잡혀 있던 다음 사건 시각을 그대로 둔다.
+  받은 모델이 모아 둔 전이를 한다. 신호를 받은 모델은 모두 그 시각을 기준으로 다음 사건 시각을 다시
+  잡는다. 그래서 같은 눈금에 낼 모델들은 엔진에서도 정확히 같은 시각에 잡힌다.
+- 아무도 전이를 맡는 모델을 깨우지 않은 시각에 입력을 받은 모델은 그 시각에 차례를 청한다. 그 눈금이
+  낼 차례가 아니면 내지 않고 깨우기만 한다.
+- 전이를 맡는 모델은 차례가 왔을 때 그 눈금에 낼 차례인데 아직 차례가 오지 않은 모델이 있으면 먼저
+  그 모델들에 차례를 준다. 고유 모델의 사건 시각이 공통 모델의 것과 끝자리만 다를 때 생기는 일이다.
+- 엔진은 공통 모델이 메시지를 받거나 차례를 마칠 때마다 다음 사건까지 남은 시간을 다시 묻는다. 그때마다
+  그 모델의 눈금에서 셈해 준다. 차례를 마쳤으면 무한, 차례를 청했거나 이 눈금에 낼 차례이면 0, 그 밖에는
+  다음 사건의 눈금의 시각에서 엔진의 지금 시각을 뺀 값이다.
 그래서 엔진에는 계획에 없는 것이 오른다. 전이를 맡는 모델 하나와, 공통 모델마다 깨우는 연결과
 전이 신호의 연결 하나씩이다. observe와 connections는 이것을 빼고 읽고, Simulation.infrastructure가
 따로 내놓는다.
@@ -49,8 +59,8 @@ from dataclasses import dataclass, field
 from typing import Mapping, Optional, Sequence
 
 from . import structure as st
-from .devs import INF, Atomic
-from .executor import Executor
+from .devs import Atomic
+from .executor import Executor, OffGrid, grid, last_tick, ticks, time_unit
 
 BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cevsim_bridge")
 WAKE, COMMIT = "__wake__", "__commit__"          # 전이를 맡는 모델과 주고받는 포트의 이름. 계획에서는 쓸 수 없다
@@ -61,7 +71,7 @@ MARK = "value_message.hpp"                       # 이 실행기가 맞춘 cevsi
 
 _TA = ctypes.CFUNCTYPE(ctypes.c_double, ctypes.c_int)
 _OUT = ctypes.CFUNCTYPE(None, ctypes.c_int)
-_EXT = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p)
+_EXT = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p)
 _NOTE = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p)
 
 _LOADED: dict = {}
@@ -160,10 +170,10 @@ def load(cevsim_home: Optional[str] = None, sources: Sequence[str] = (), cache: 
     lib.ses_add_port.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
     lib.ses_couple.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p]
     lib.ses_emit.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p]
-    lib.ses_inject.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_double]
-    lib.ses_due.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    lib.ses_inject.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_double, ctypes.c_int]
     lib.ses_stop.argtypes = [ctypes.c_void_p]
-    lib.ses_run.argtypes = [ctypes.c_void_p, ctypes.c_double]
+    lib.ses_run.argtypes = [ctypes.c_void_p, ctypes.c_double, ctypes.c_int]
+    lib.ses_step.argtypes = [ctypes.c_void_p]
     lib.ses_time.restype = ctypes.c_double
     lib.ses_time.argtypes = [ctypes.c_void_p]
     lib.ses_dump.restype = ctypes.c_char_p
@@ -186,16 +196,16 @@ def modules(lib: ctypes.CDLL) -> list:
 
 @dataclass
 class _Cell:
-    """엔진에 올린 공통 모델 하나: Python에 남은 모델과, 한 시각 동안의 사정."""
+    """엔진에 올린 공통 모델 하나: Python에 남은 모델과, 한 눈금 동안의 사정."""
     atom: Atomic
     path: tuple
     name: str
     outs: frozenset
-    last: float = 0.0                                # 마지막으로 전이한 시각
-    woke: bool = False                               # 이 시각의 차례를 마쳤다. 전이 신호를 기다린다
+    due: Optional[int] = None                        # 다음 내부 사건의 눈금. 쉬고 있으면 None
+    last: int = 0                                    # 마지막으로 전이한 눈금
+    woke: bool = False                               # 이 눈금에서 제 차례를 마쳤다. 전이 신호를 기다린다
     fired: bool = False                              # 그 차례에 출력했다
     asked: bool = False                              # 입력을 받아서 차례를 청했다
-    due: bool = False                                # 차례를 청할 때 이미 이 시각에 낼 차례였다
     inbox: dict = field(default_factory=dict)        # 포트에서 (출처, 값)의 목록으로
     outbox: dict = field(default_factory=dict)       # 방금 낸 것: 포트에서 값의 목록으로. 받는 쪽이 여기서 읽는다
 
@@ -203,8 +213,8 @@ class _Cell:
 class Simulation:
     """cevsim 실행기의 산출물: 모델과 연결이 올라간 cevsim 엔진 하나."""
 
-    def __init__(self, lib: ctypes.CDLL, max_rounds: int) -> None:
-        self.lib, self.max_rounds = lib, max_rounds
+    def __init__(self, lib: ctypes.CDLL, unit: float, max_rounds: int) -> None:
+        self.lib, self.unit, self.max_rounds = lib, unit, max_rounds
         self.cells: dict = {}                        # 번호에서 공통 모델로
         self.keeper: Optional[int] = None            # 전이를 맡는 모델의 번호
         self.models: dict = {}                       # 경로에서 번호로
@@ -212,22 +222,50 @@ class Simulation:
         self.names: dict = {}                        # 번호에서 엔진에 올린 이름으로
         self.types: dict = {}                        # 경로에서 {포트: 타입}으로. cevsim의 포트에는 타입이 없다
         self.log: list = []                          # 출력 사건: (시각, 원자의 경로, 포트, 값). 고유 모델의 값은 None
+        self.turns = 0                               # 엔진이 공통 모델에 준 차례의 수. 내지 않고 깨우기만 한 차례도 센다
         self.error: Optional[BaseException] = None
-        self._awake, self._at, self._rounds = False, None, 0
+        self._awake, self._giving, self._at, self._rounds = False, False, None, 0
         self._calls = (_TA(self._guard(self._ta, -1.0)), _OUT(self._guard(self._out)),
-                       _EXT(self._guard(self._ext, 0)), _NOTE(self._guard(self._note)))
+                       _EXT(self._guard(self._ext)), _NOTE(self._guard(self._note)))
         self.handle = lib.ses_new(*self._calls)
 
-    # 실행 ---------------------------------------------------------------
+    # 시계 ---------------------------------------------------------------
 
     def now(self) -> float:
         """엔진의 시각."""
         return self.lib.ses_time(self.handle)
 
+    def tick(self) -> int:
+        """엔진의 시각이 몇째 눈금인가. 눈금 위에 없으면 OffGrid다 (고유 모델만 있는 시각)."""
+        return self._tick(self.now())
+
+    def _tick(self, t: float) -> int:
+        n = grid(t, self.unit)
+        if n is None:
+            raise OffGrid(f"엔진의 시각 {t} 이 시간 단위 {self.unit} 의 정수배가 아니다")
+        return n
+
+    def _stamp(self, t: float) -> float:
+        """기록에 적을 시각. 눈금 위의 시각은 눈금 수에 시간 단위를 곱한 값으로 적는다. 공통 모델의 기록과 같은 꼴이다."""
+        n = grid(t, self.unit)
+        return t if n is None else n * self.unit
+
+    # 실행 ---------------------------------------------------------------
+
     def run(self, until: float) -> list:
-        """시각 until까지 돌린다. 그 시각의 사건도 처리한다. 출력 사건의 기록을 돌려준다."""
+        """시각 until까지 돌린다. 그 시각의 사건도 처리한다. 출력 사건의 기록을 돌려준다.
+
+        공통 모델의 사건은 눈금으로 센다. until이 어떤 눈금의 시각이면(끝자리 차이는 같은 것으로 본다)
+        그 눈금의 사건까지 처리한다.
+        """
+        last = last_tick(until, self.unit)
         if self.error is None:
-            failed = self.lib.ses_run(self.handle, until)
+            here = grid(self.now(), self.unit)
+            failed = self.lib.ses_run(self.handle, until, int(here is not None and here <= last))
+            # 공통 모델의 사건은 엔진에 눈금의 시각으로 잡힌다. 그 값이 until보다 끝자리만큼 뒤일 수 있다
+            # (0.1의 세 배는 0.3보다 크다). 눈금으로는 until 안이므로 그 사건까지 돌린다
+            while not failed and self.error is None and any(c.due is not None and c.due <= last for c in self.cells.values()):
+                failed = self.lib.ses_step(self.handle)
             if self.error is None and failed:
                 raise RuntimeError(self.lib.ses_last_error(self.handle).decode())
         if self.error is not None:
@@ -239,8 +277,13 @@ class Simulation:
         return {c.path: c.atom for c in self.cells.values()}
 
     def inject(self, port: str, at: float = 0.0) -> None:
-        """뿌리의 입력 포트로 밖에서 입력을 넣는다. 받는 공통 모델에는 값이 None인 입력이 된다."""
-        code = self.lib.ses_inject(self.handle, port.encode(), at)
+        """뿌리의 입력 포트로 밖에서 입력을 넣는다. 받는 공통 모델에는 값이 None인 입력이 된다.
+
+        at이 엔진의 시각과 같은 눈금이면 지금의 입력으로 넣는다. 엔진의 시각이 눈금의 시각보다 끝자리만큼
+        뒤에 있어도 지난 시각으로 보지 않는다.
+        """
+        n = grid(at, self.unit)
+        code = self.lib.ses_inject(self.handle, port.encode(), at, int(n is not None and n == grid(self.now(), self.unit)))
         if code == -1:
             raise ValueError(f"엔진의 경계에 입력 포트 {port} 가 없다")
         if code != 0:
@@ -251,7 +294,7 @@ class Simulation:
 
         엔진의 경계에서 받아 적은 것이다. 값은 없다. 기록하지 않는 고유 모델이 낸 것은 경로가 None이다.
         """
-        return [(t, port, self.paths.get(i)) for t, port, i in self.dump()["outputs"]]
+        return [(self._stamp(t), port, self.paths.get(i)) for t, port, i in self.dump()["outputs"]]
 
     def close(self) -> None:
         if self.handle is not None:
@@ -322,89 +365,97 @@ class Simulation:
                 return fallback
         return call
 
-    def _due(self, i: int) -> bool:
-        """엔진의 일정에서 이 모델의 다음 사건 시각이 정확히 지금인가."""
-        return bool(self.lib.ses_due(self.handle, i))
-
     def _ta(self, i: int) -> float:
-        """다음 사건까지 남은 시간. 음수는 무한이다. 다리는 모델이 전이하지 않고 잡혀 있던 시각을 지킬 때에는 묻지 않는다."""
+        """다음 사건까지 남은 시간. 음수는 무한이다. 엔진은 모델이 메시지를 받거나 차례를 마칠 때마다 묻는다."""
         if i == self.keeper:
             return 0.0 if self._awake else -1.0
-        c = self.cells[i]
+        c, t = self.cells[i], self.now()
+        n = self._tick(t)
         if c.woke:
-            return -1.0                              # 이 시각의 차례를 마쳤다. 전이 신호가 올 때까지 쉰다
-        if c.inbox:
-            return 0.0                               # 받은 것이 있다. 이 시각에 차례를 청한다
-        ta = c.atom.ta()                             # 막 만들어졌거나 막 전이했다
-        if ta == INF:
+            return -1.0                              # 제 차례를 마쳤다. 전이 신호가 올 때까지 쉰다
+        if c.asked:
+            return 0.0                               # 입력을 받았다. 이 시각에 차례를 청한다
+        if c.due is None:
             return -1.0
-        if not ta >= 0:
-            raise ValueError(f"{c.name}: 시간 전진 {ta} 이 음수이거나 수가 아니다")
-        return float(ta)
+        if c.due < n:
+            raise RuntimeError(f"{c.name}: 눈금 {c.due} 의 사건을 엔진이 지나쳤다")
+        if c.due == n:
+            return 0.0                               # 이 눈금에 낼 차례다. 엔진의 이 시각에 차례를 청한다
+        # 그 눈금의 시각에서 엔진의 지금 시각을 뺀 값이다. 남은 눈금 수에 시간 단위를 곱한 값을 주면 엔진이
+        # 그것을 더해 갈 때마다 끝자리의 오차가 쌓여, 실행이 길어지면 엔진의 시각이 눈금에서 멀어진다. 이렇게 주면
+        # 엔진의 시각이 사건마다 눈금의 시각으로 돌아온다. n이 t에 가장 가까운 눈금이므로 이 값은 0보다 크다
+        return c.due * self.unit - t
 
     def _out(self, i: int) -> None:
-        now = self.now()
-        if i == self.keeper:                         # 전이 신호를 모든 공통 모델에 보낸다
-            if now != self._at:
-                self._at, self._rounds = now, 0
-            self._rounds += 1
-            if self._rounds > self.max_rounds:
-                raise RuntimeError("시뮬레이션이 정해진 걸음 수 안에 끝나지 않았다. 시간 전진이 0인 전이가 되풀이된다")
-            self._awake = False                      # 다시 깨울 때까지 쉰다
+        n = self.tick()
+        if i == self.keeper:
+            # 이 눈금에 낼 차례인데 엔진이 아직 차례를 주지 않은 모델이 있으면 먼저 차례를 준다. 없으면 전이 신호를 보낸다
+            self._giving = any(c.due == n and not c.woke for c in self.cells.values())
+            if not self._giving:
+                if n != self._at:
+                    self._at, self._rounds = n, 0
+                self._rounds += 1
+                if self._rounds > self.max_rounds:
+                    raise RuntimeError("시뮬레이션이 정해진 걸음 수 안에 끝나지 않았다. 시간 전진이 0인 전이가 되풀이된다")
+                self._awake = False                  # 다시 깨울 때까지 쉰다
             self.lib.ses_emit(self.handle, i, COMMIT.encode())
             return
         c = self.cells[i]
+        if not c.asked and c.due != n:
+            raise RuntimeError(f"{c.name}: 눈금 {c.due} 의 사건을 엔진이 눈금 {n} 에 처리했다")
+        self.turns += 1
         c.woke = True
         # 전이를 맡는 모델을 먼저 깨운다. 그 모델의 차례는 이 시각에 임박한 모델이 모두 출력한 뒤에 온다
         self.lib.ses_emit(self.handle, i, WAKE.encode())
-        if c.asked and not c.due:
-            return                                   # 입력을 받아 청한 차례다. 낼 때가 아니다
-        c.atom.now = now
+        if c.due != n:
+            return                                   # 입력을 받아 청한 차례다. 낼 눈금이 아니다
+        c.atom.now = n * self.unit
         c.fired, c.outbox = True, {}
         for port, values in sorted((c.atom.output() or {}).items()):
             values = list(values)
-            self.log.extend((now, c.path, port, v) for v in values)
+            self.log.extend((c.atom.now, c.path, port, v) for v in values)
             if values and port in c.outs:            # 값이 없는 출력은 보내지 않는다
                 c.outbox[port] = values
                 self.lib.ses_emit(self.handle, i, port.encode())
 
-    def _ext(self, i: int, port: bytes, src: int, src_port: bytes) -> int:
-        """입력 하나를 받는다. 전이했거나 차례를 청하면 1을, 잡혀 있던 다음 사건 시각을 그대로 두려면 0을 돌려준다."""
+    def _ext(self, i: int, port: bytes, src: int, src_port: bytes) -> None:
+        """메시지 하나를 받는다. 이 뒤에 엔진이 다음 사건까지 남은 시간을 다시 묻는다(_ta)."""
         if i == self.keeper:
             self._awake = True
-            return 1
+            return
         c, port, src_port = self.cells[i], port.decode(), src_port.decode()
         if port == COMMIT:
-            if not c.woke and self._due(i):          # 전이를 맡는 모델의 번호가 가장 크므로 일어나지 않아야 한다
-                raise RuntimeError(f"{c.name}: 이 시각에 낼 차례가 남았는데 전이 신호가 먼저 왔다")
-            if not c.woke and not c.inbox:
-                return 0                             # 이 시각에 아무 일도 없었다
-            self._commit(c)
-            return 1
+            # 차례를 주는 신호이면 전이하지 않는다. 어느 신호든 모든 공통 모델이 받고, 받은 뒤에 엔진이 다음 사건
+            # 시각을 이 시각을 기준으로 다시 잡는다. 그래서 같은 눈금에 낼 모델들이 엔진에서 같은 시각에 잡히고,
+            # 이 눈금에 낼 모델은 지금 차례가 온다
+            if not self._giving and (c.woke or c.inbox):
+                self._commit(c, self.tick())
+            return
+        if grid(self.now(), self.unit) is None:
+            raise OffGrid(f"{c.name}: 시각 {self.now()} 에 입력을 받았다. 시간 단위 {self.unit} 의 정수배가 아니다")
         sender = self.cells.get(src)                 # 값은 보낸 모델이 방금 낸 것에서 읽는다. 고유 모델과 밖에서 온 것은 None이다
         values = sender.outbox.get(src_port, []) if sender is not None else [None]
         key = (0, sender.path, src_port) if sender is not None else (1, self.names.get(src, ""), src_port)
         c.inbox.setdefault(port, []).extend(((key, k), v) for k, v in enumerate(values))
-        if c.woke or c.asked or self._awake:
-            return 0                                 # 전이 신호가 올 것이다
-        c.asked, c.due = True, self._due(i)          # 아무도 전이를 맡는 모델을 깨우지 않았다. 이 시각에 차례를 청한다
-        return 1
+        if not self._awake:                          # 깨어 있으면 전이 신호가 올 것이다. 차례를 청할 까닭이 없다
+            c.asked = True                           # 아무도 전이를 맡는 모델을 깨우지 않았다. 이 시각에 차례를 청한다
 
-    def _commit(self, c: _Cell) -> None:
-        now = self.now()
+    def _commit(self, c: _Cell, n: int) -> None:
         bag = {port: [v for _, v in sorted(items, key=lambda x: x[0])] for port, items in sorted(c.inbox.items())}
-        c.atom.now = now
+        c.atom.now = n * self.unit
         if c.fired and bag:
             c.atom.confluent(bag)
         elif c.fired:
             c.atom.internal()
         else:
-            c.atom.external(now - c.last, bag)
-        c.last, c.inbox = now, {}
-        c.woke = c.fired = c.asked = c.due = False
+            c.atom.external((n - c.last) * self.unit, bag)
+        c.last, c.inbox = n, {}
+        c.woke = c.fired = c.asked = False
+        k = ticks(c.name, c.atom.ta(), self.unit)
+        c.due = None if k is None else n + k
 
     def _note(self, i: int, port: bytes) -> None:
-        self.log.append((self.now(), self.paths[i], port.decode(), None))
+        self.log.append((self._stamp(self.now()), self.paths[i], port.decode(), None))
 
 
 # ---------------------------------------------------------------------------
@@ -414,15 +465,19 @@ class Simulation:
 class CevsimExecutor(Executor):
     """계획을 cevsim 엔진으로 만든다.
 
-    sources는 고유 모델을 등록하는 C++ 소스들이다. 라이브러리는 처음 조립할 때 컴파일한다. record가 거짓이면
-    고유 모델의 출력을 기록하지 않는다. max_rounds는 한 시각에 도는 전이의 차례 수의 한도다.
+    시간 단위는 계획에 실려 온 것(바인딩이 적은 것)을 쓴다. time_unit을 주면 그것과 같아야 하고, 어디에도
+    없으면 1이다. 공통 모델 기반의 시간 전진은 그 정수배여야 한다. sources는 고유 모델을 등록하는 C++
+    소스들이다. 라이브러리는 처음 조립할 때 컴파일한다. record가 거짓이면 고유 모델의 출력을 기록하지
+    않는다. max_rounds는 한 눈금에 도는 전이의 차례 수의 한도다.
     """
 
     name = "cevsim"
 
-    def __init__(self, cevsim_home: Optional[str] = None, sources: Sequence[str] = (), record: bool = True,
-                 max_rounds: int = 100000, cache: Optional[str] = None) -> None:
-        self.cevsim_home, self.sources = cevsim_home, tuple(sources)
+    def __init__(self, cevsim_home: Optional[str] = None, time_unit: Optional[float] = None, sources: Sequence[str] = (),
+                 record: bool = True, max_rounds: int = 100000, cache: Optional[str] = None) -> None:
+        if time_unit is not None and not time_unit > 0:
+            raise ValueError("시간 단위는 0보다 커야 한다")
+        self.cevsim_home, self.time_unit, self.sources = cevsim_home, time_unit, tuple(sources)
         self.record, self.max_rounds, self.cache = record, max_rounds, cache
         self._lib: Optional[ctypes.CDLL] = None
 
@@ -448,7 +503,8 @@ class CevsimExecutor(Executor):
         clash = self.check(plan)
         if clash:
             raise ValueError("cevsim으로 만들 수 없는 계획이다: " + "; ".join(msg for _, _, msg in clash))
-        sim = Simulation(self.lib, self.max_rounds)
+        unit = time_unit(plan, self.time_unit)
+        sim = Simulation(self.lib, unit, self.max_rounds)
         try:
             self._fill(sim, plan, library)
         except Exception:
@@ -467,7 +523,8 @@ class CevsimExecutor(Executor):
             outs = [p for p, (_, d) in n["ports"].items() if d == st.OUT]
             if isinstance(body, type) and issubclass(body, Atomic):
                 i = lib.ses_add_hosted(h, label.encode(), "\n".join(ins + [COMMIT]).encode(), "\n".join(outs + [WAKE]).encode())
-                sim.cells[i] = _Cell(body(ref(path) or n.get("name", ""), **n["params"]), path, label, frozenset(outs))
+                atom = body(ref(path) or n.get("name", ""), **n["params"])
+                sim.cells[i] = _Cell(atom, path, label, frozenset(outs), ticks(label, atom.ta(), sim.unit))
             else:
                 module = body.module if isinstance(body, Native) else body
                 if not isinstance(module, str):

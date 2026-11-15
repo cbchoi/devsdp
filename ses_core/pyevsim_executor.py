@@ -22,8 +22,8 @@ Adapted가 하는 일. pyevsim의 엔진은 같은 시각의 사건을 객체 �
 - 받은 것(ext_trans)은 묶음에 모아 두기만 한다. 값이 없는 출력은 보내지 않는다.
 - 그 시각에 임박한 모델 가운데 마지막 것이 출력을 마치면(int_trans) 모아 둔 전이를 한꺼번에
   한다. 임박했고 받은 것이 있으면 겹친 전이, 임박했을 뿐이면 내부 전이, 받기만 했으면 외부 전이다.
-- 시각은 눈금의 정수로 센다. 같은 시각의 모델들이 엔진에 똑같은 요청 시각을 내놓게 하기
-  위해서다. 시간 전진이 격자(time_step의 배수) 위에 없으면 OffGrid로 알린다.
+- 시각은 시간 단위의 눈금으로 센다. 참조 시뮬레이터와 같은 방법이다(executor.ticks). 엔진의
+  시간 간격을 시간 단위로 맞춘다. 시간 전진이 시간 단위의 정수배가 아니면 OffGrid로 알린다.
 엔진에 더하는 것은 없다. 모델도 연결도 계획에 있는 것뿐이다.
 """
 
@@ -39,8 +39,8 @@ from pyevsim import BehaviorModelExecutor, Infinite, SysMessage, SystemSimulator
 from pyevsim.system_executor import SysExecutor
 
 from . import structure as st
-from .devs import INF, Atomic
-from .executor import Executor, OffGrid
+from .devs import Atomic
+from .executor import Executor, OffGrid, last_tick, ticks, time_unit
 
 _SERIAL = itertools.count(1)
 
@@ -66,12 +66,7 @@ class _Hub:
 
     def ticks(self, who: str, ta: float) -> Optional[int]:
         """시간 전진을 눈금의 수로 바꾼다. 무한이면 None."""
-        if ta == INF:
-            return None
-        k = ta / self.sim.step
-        if ta < 0 or abs(k - round(k)) > 1e-9 * max(1.0, abs(k)):
-            raise OffGrid(f"{who}: 시간 전진 {ta} 이 시간 간격 {self.sim.step} 의 배수가 아니다")
-        return round(k)
+        return ticks(who, ta, self.sim.step)
 
     def waiting(self, n: int) -> bool:
         """이 시각에 임박했는데 아직 출력하지 않은 모델이 있는가."""
@@ -195,7 +190,7 @@ class Simulation:
 
     engine: SysExecutor
     name: str                                    # 엔진 이름. SystemSimulator.get_engine(name)으로 찾을 수 있다
-    step: float
+    step: float                                  # 엔진의 시간 간격. 계획의 시간 단위다
     models: dict = field(default_factory=dict)   # 경로에서 pyevsim 모델로
     where: dict = field(default_factory=dict)    # 모델(의 id)에서 경로로
     names: dict = field(default_factory=dict)    # 모델 이름에서 경로로
@@ -214,7 +209,7 @@ class Simulation:
 
         pyevsim의 simulate(T)는 T보다 앞선 시각만 처리하므로 마지막 눈금의 반 칸 뒤까지 돌린다.
         """
-        last = math.floor(until / self.step + 1e-9)
+        last = last_tick(until, self.step)
         span = (last + 0.5) * self.step - self.engine.global_time
         if span > 0:
             self.engine.simulate(span, _tm=False)
@@ -299,17 +294,18 @@ _MODEL_NAMES, _ENGINE_NAMES = _reserved()
 class PyevsimExecutor(Executor):
     """계획을 pyevsim 엔진으로 만든다.
 
-    time_step은 엔진의 시간 간격이다. 모든 사건 시각이 그 배수여야 한다. engine_name을 주면 그
-    이름으로 엔진을 등록하고(같은 이름의 앞선 엔진을 대신한다), 주지 않으면 조립할 때마다 새 이름을 쓴다.
+    시간 단위는 계획에 실려 온 것(바인딩이 적은 것)을 쓴다. time_unit을 주면 그것과 같아야 하고, 어디에도
+    없으면 1이다. 엔진의 시간 간격을 그 값으로 둔다. 모든 사건 시각이 그 정수배여야 한다. engine_name을
+    주면 그 이름으로 엔진을 등록하고(같은 이름의 앞선 엔진을 대신한다), 주지 않으면 조립할 때마다 새 이름을 쓴다.
     """
 
     name = "pyevsim"
 
-    def __init__(self, time_step: float = 1.0, engine_name: Optional[str] = None, record: bool = True,
+    def __init__(self, time_unit: Optional[float] = None, engine_name: Optional[str] = None, record: bool = True,
                  max_rounds: int = 100000) -> None:
-        if not time_step > 0:
-            raise ValueError("시간 간격은 0보다 커야 한다")
-        self.time_step, self.engine_name, self.record, self.max_rounds = time_step, engine_name, record, max_rounds
+        if time_unit is not None and not time_unit > 0:
+            raise ValueError("시간 단위는 0보다 커야 한다")
+        self.time_unit, self.engine_name, self.record, self.max_rounds = time_unit, engine_name, record, max_rounds
 
     # 규약 -------------------------------------------------------------------
 
@@ -338,8 +334,9 @@ class PyevsimExecutor(Executor):
         clash = self.check(plan)
         if clash:
             raise ValueError("pyevsim으로 만들 수 없는 계획이다: " + "; ".join(msg for _, _, msg in clash))
+        unit = time_unit(plan, self.time_unit)
         name = self.engine_name or f"ses-{next(_SERIAL)}"
-        sim = Simulation(SystemSimulator.register_engine(name, "VIRTUAL_TIME", self.time_step), name, self.time_step)
+        sim = Simulation(SystemSimulator.register_engine(name, "VIRTUAL_TIME", unit), name, unit)
         try:
             self._fill(sim, plan, library)
         except Exception:

@@ -27,7 +27,7 @@ from pyevsim import BehaviorModelExecutor, Infinite, SysMessage, SystemSimulator
 from pyevsim.structural_model import StructuralModel  # noqa: E402
 from pyevsim.system_executor import SysExecutor  # noqa: E402
 from pdevs_models import NOTE, Burst, Keep, Pair, Ring, Spin, as_plan, flat_plan, note  # noqa: E402
-from test_executor import Sometimes, Witness, generic, library_of, quirky, state  # noqa: E402
+from test_executor import UNIT, Sometimes, Witness, generic, library_of, quirky, state  # noqa: E402
 from test_structure import rand_structure  # noqa: E402
 
 from examples import processing_mb, processing_pyevsim, sensor_node_mb  # noqa: E402
@@ -77,8 +77,8 @@ def faithful(px: PyevsimExecutor, sim, plan: dict, exact_ports: bool = True) -> 
     assert st.violations(seen) == []
 
 
-def on_both(plan: dict, lib: dict, until: float, step: float = 0.25, **options) -> tuple:
-    """같은 계획과 같은 라이브러리를 두 실행기로 만들어 돌린다."""
+def on_both(plan: dict, lib: dict, until: float, step: float = None, **options) -> tuple:
+    """같은 계획과 같은 라이브러리를 두 실행기로 만들어 돌린다. 시간 단위는 계획에 적힌 것을 쓴다."""
     model = DevsExecutor().build(plan, lib)
     log = simulate(model, until)
     px = PyevsimExecutor(step, **options)
@@ -97,7 +97,7 @@ def attach_both(doc_name: str, binding_name: str, library: dict, step: float = 1
     b = X.load_binding(os.path.join(EXAMPLES, binding_name))
     dx, px = DevsExecutor(), PyevsimExecutor(step)
     L, de = X.attach(L, dx, b, library)
-    L, pe = X.attach(L, px, Binding("pyevsim", b.map, b.target), px_library or library)
+    L, pe = X.attach(L, px, Binding("pyevsim", b.map, b.target, b.time_unit), px_library or library)
     return L, (dx, de), (px, pe)
 
 
@@ -236,8 +236,9 @@ def test_random_documents_faithful_and_same_log(seed):
     rng = random.Random(seed)
     d = rand_system_document(rng)
     b, mods = rand_binding(rng, d, "pyevsim")
-    dx, px = DevsExecutor(), PyevsimExecutor(0.25)
+    dx, px = DevsExecutor(), PyevsimExecutor()
     L = unfold_layered(load_ses_dict(d))
+    b = dict(b, time_unit=UNIT)                              # 시간 단위는 바인딩에 적는다. 두 실행기가 계획에서 읽는다
     L, de = X.attach(L, dx, Binding.from_dict(b), library_of(mods))
     L, pe = X.attach(L, px, Binding.from_dict(b), library_of(mods))
     variants = sem(L.ses)
@@ -309,16 +310,27 @@ def test_endless_zero_time_transitions_are_stopped():
     sim.close()
 
 
-def test_time_advance_must_be_on_the_grid():
-    plan, lib = as_plan(st.node({}, {"b": st.node({"o": ("T", "out")})}))        # 이 모델의 지연은 0.5다
-    for step, ok in ((0.25, True), (0.125, True), (1.0, False), (0.4, False)):
+def test_time_advance_must_be_a_multiple_of_the_time_unit():
+    # 이 모델의 지연은 0.5다. 계획에 시간 단위를 적지 않고 실행기에 준다. 주지 않으면 1이다
+    plan, lib = as_plan(st.node({}, {"b": st.node({"o": ("T", "out")})}), unit=None)
+    for step, ok in ((0.25, True), (0.125, True), (0.5, True), (1.0, False), (0.4, False), (None, False)):
         if ok:
             sim = PyevsimExecutor(step).build(plan, lib)
-            assert sim.run(4.0) == simulate(DevsExecutor().build(plan, lib), 4.0)
+            assert sim.run(4.0) == simulate(DevsExecutor(step).build(plan, lib), 4.0) == [(0.5, ("b",), "o", ("b", 0, 0))]
+            assert sim.step == step
             sim.close()
         else:
             with pytest.raises(OffGrid, match="배수"):
                 PyevsimExecutor(step).build(plan, lib).run(4.0)
+            with pytest.raises(OffGrid, match="b: 시간 전진 0.5 이 시간 단위"):     # 참조 시뮬레이터도 같은 판정을 한다
+                simulate(DevsExecutor(step).build(plan, lib), 4.0)
+    declared, _ = as_plan(st.node({}, {"b": st.node({"o": ("T", "out")})}))       # 계획에 시간 단위 0.25가 적혀 있다
+    sim = PyevsimExecutor().build(declared, lib)
+    assert sim.step == UNIT and len(sim.run(4.0)) == 1
+    sim.close()
+    for px in (PyevsimExecutor(0.5), DevsExecutor(0.5)):     # 실행기에 준 값이 계획의 것과 다르면 조립하지 않는다
+        with pytest.raises(ValueError, match="시간 단위가 서로 다르다"):
+            px.build(declared, lib)
 
     class Drift(Atomic):                                     # 처음에는 격자 위에 있다가 벗어난다
         PORTS = {"o": ("T", "out")}
@@ -339,7 +351,7 @@ def test_time_advance_must_be_on_the_grid():
     sim.close()
     with pytest.raises(ValueError):
         PyevsimExecutor(0)
-    plan, lib = as_plan(st.node({}, {"b": st.node({"o": ("T", "out")})}))
+    plan, lib = as_plan(st.node({}, {"b": st.node({"o": ("T", "out")})}), unit=None)
     with pytest.raises(OffGrid):
         PyevsimExecutor(1.0, engine_name="half").build(plan, lib)
     assert "half" not in SystemSimulator.get_engine_map()   # 만들다 만 엔진이 등록부에 남지 않는다
@@ -364,7 +376,7 @@ def test_request_time_is_the_engines_own_clock_value():
 
 
 def test_a_plan_that_is_one_atom():
-    plan = st.node({"o": ("T", "out")}, module="G", params={}, name="Solo")
+    plan = st.node({"o": ("T", "out")}, module="G", params={}, name="Solo", time_unit=UNIT)
     lib = {"G": Module("G", {"o": ("T", "out")}, (), {}, generic({"o": ("T", "out")}))}
     ref, log, _, leaves = on_both(plan, lib, 6.0)
     assert log == ref and len(log) == 1 and list(leaves) == [()]

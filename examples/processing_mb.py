@@ -3,6 +3,9 @@
 SES는 구조만 정한다. 구성요소가 무엇을 하는지는 여기 있다. 클래스마다 인터페이스
 (PORTS, REQUIRED, PARAMS)를 선언하고, 바인딩이 정의 이름을 이 클래스들에 잇는다.
 
+시간 전진으로 쓰는 매개변수(도착 간격, 서비스 시간)는 타입을 time으로 적는다. 그 값은 바인딩이
+적은 시간 단위의 정수배여야 하고, 아니면 그 변이는 실행 가능하지 않다(B5).
+
 서버 풀의 결합은 일감을 모든 서버에 뿌린다. 그래서 버퍼가 일감에 받을 서버의 이름을 적고,
 서버는 자기 이름이 적힌 일감만 받는다. 서버는 비게 되면 버퍼에 알린다.
 """
@@ -14,7 +17,7 @@ from ses_core.devs import INF, Atomic, module_of
 
 class Generator(Atomic):
     PORTS = {"out": ("Job", "out")}
-    PARAMS = {"interarrival": ("float", 1.0), "seed": ("int", 0)}
+    PARAMS = {"interarrival": ("time", 1.0), "seed": ("int", 0)}
 
     def init(self):
         self.rng = random.Random(self.seed)
@@ -76,7 +79,7 @@ class PriorityBuffer(FifoBuffer):
 class Server(Atomic):
     PORTS = {"in": ("Job", "in"), "out": ("Job", "out"), "done": ("Ack", "out")}
     REQUIRED = ("in",)
-    PARAMS = {"service_time": ("float", 2.0)}
+    PARAMS = {"service_time": ("time", 2.0)}
 
     def init(self):
         self.phase, self.job, self.served, self.left = "announce", None, 0, 0.0
@@ -118,7 +121,7 @@ class Pool(Atomic):
     """서버 풀 전체를 모델 하나로 본 것. 서버 풀 정의에 바로 묶으면 그 아래는 펼치지 않는다."""
     PORTS = {"in": ("Job", "in"), "out": ("Job", "out"), "done": ("Ack", "out")}
     REQUIRED = ("in",)
-    PARAMS = {"service_time": ("float", 2.0)}
+    PARAMS = {"service_time": ("time", 2.0)}
 
     init = Server.init
     ta = Server.ta

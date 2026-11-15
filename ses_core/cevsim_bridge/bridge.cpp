@@ -12,9 +12,11 @@
 // cevsim의 main(45e7fa9)에 맞췄다. 이 파일이 기대는 엔진의 성질은 다음과 같다.
 // - 사건 시각은 정확한 값 그대로다. 시간 격자가 없다. 음수인 시간 전진은 예외가 된다.
 // - 같은 시각의 모델은 모델 번호의 순서, 곧 만든 순서로 하나씩 처리된다.
-// - 모델이 set_cancel_reschedule(true)를 해 두면 엔진은 잡혀 있던 다음 사건 시각과 새로 청한 시각
-//   가운데 이른 것을 지킨다. Hosted는 입력을 받고도 전이하지 않았을 때 이것으로 잡혀 있던 시각을 그대로 둔다.
+// - 엔진은 모델이 메시지를 받거나 차례를 마칠 때마다 그 모델의 시간 전진을 다시 묻는다.
 // - 엔진은 등록한 모델을 넘겨받아 스스로 지운다.
+//
+// 공통 모델의 시각을 눈금으로 세는 일은 Python 쪽이 한다. 엔진의 시계는 모델의 시간(초 등)을 그대로 쓴다.
+// 이 파일은 엔진의 시각을 알려 주고, 공통 모델의 다음 사건 시각까지 엔진을 돌리는 일만 거든다.
 
 #include <cstdio>
 #include <cstdlib>
@@ -37,7 +39,7 @@
 extern "C" {
 typedef double (*ses_ta_fn)(int id);                                             // 다음 사건까지 남은 시간. 음수이면 무한
 typedef void (*ses_out_fn)(int id);                                              // 낼 포트를 ses_emit으로 알린다
-typedef int (*ses_ext_fn)(int id, const char* port, int src, const char* src_port);      // 0이면 잡혀 있던 다음 사건 시각을 지킨다
+typedef void (*ses_ext_fn)(int id, const char* port, int src, const char* src_port);
 typedef void (*ses_note_fn)(int id, const char* port);                           // 고유 모델이 낸 메시지 하나
 }
 
@@ -65,10 +67,12 @@ std::string Params::text(const std::string& key, const std::string& fallback) co
     return it == values.end() ? fallback : it->second;
 }
 
+// 수는 배정밀도로 읽는다. 계획에 적힌 값이 배정밀도이고, 글자는 그 값으로 정확히 되돌아가게 적혀 온다.
+// long double로 읽으면 0.1 같은 값이 계획의 값과 끝자리가 다른 수가 되고, 그 차이가 플랫폼마다 다르다.
 long double Params::number(const std::string& key, long double fallback) const
 {
     auto it = values.find(key);
-    return it == values.end() ? fallback : std::strtold(it->second.c_str(), nullptr);
+    return it == values.end() ? fallback : std::strtod(it->second.c_str(), nullptr);
 }
 
 evsim::Time Params::time(const std::string& key, evsim::Time fallback) const
@@ -76,7 +80,7 @@ evsim::Time Params::time(const std::string& key, evsim::Time fallback) const
     auto it = values.find(key);
     if (it == values.end())
         return fallback;
-    long double v = std::strtold(it->second.c_str(), nullptr);
+    double v = std::strtod(it->second.c_str(), nullptr);
     return v > evsim::Infinity ? evsim::Infinity : v;
 }
 
@@ -123,8 +127,7 @@ public:
     void external_transition(evsim::Port& port, evsim::Message& msg) override
     {
         auto src = host->ids.find(msg->get_source());
-        if (!host->ext(id, port.m_name.c_str(), src == host->ids.end() ? -1 : src->second, msg->get_out_port()->m_name.c_str()))
-            set_cancel_reschedule(true);                      // 전이하지 않았다. 엔진이 잡혀 있던 시각을 지킨다
+        host->ext(id, port.m_name.c_str(), src == host->ids.end() ? -1 : src->second, msg->get_out_port()->m_name.c_str());
     }
 
     // 전이는 전이 신호를 받았을 때 Python에서 한다. 여기서는 출력의 전달이 끝났음만 적는다.
@@ -149,10 +152,9 @@ public:
         }
     }
 
+    // 엔진은 이 모델이 메시지를 받거나 차례를 마칠 때마다 묻는다. 답은 Python이 가진 눈금에서 나온다
     evsim::Time time_advance() override
     {
-        if (is_cancel_reschedule())                           // 엔진은 이 값과 잡혀 있던 시각 가운데 이른 것을 고른다
-            return evsim::Infinity;
         double left = host->ta(id);
         return left < 0 ? evsim::Infinity : (evsim::Time)left;
     }
@@ -425,15 +427,19 @@ int ses_couple(void* handle, int src, const char* src_port, int dst, const char*
 }
 
 // 엔진의 경계로 밖에서 입력을 넣는다. at은 전달할 시각이다. 이 메시지에는 값이 없다.
-int ses_inject(void* handle, const char* port, double at)
+// snap이면 엔진의 시각보다 앞선 at을 엔진의 시각으로 올린다. 같은 눈금 안의 끝자리 차이를 지금의 입력으로 받기 위해서다.
+int ses_inject(void* handle, const char* port, double at, int snap)
 {
     Host* host = (Host*)handle;
     auto it = host->engine_in.find(port);
     if (it == host->engine_in.end())
         return -1;
+    evsim::Time when = (evsim::Time)at, now = host->se->get_global_time();
+    if (snap && when < now)
+        when = now;
     try
     {
-        host->se->insert_external_event(host->se->create_message(*it->second, (evsim::Time)at));
+        host->se->insert_external_event(host->se->create_message(*it->second, when));
     }
     catch (const std::exception&)                             // 이미 지난 시각이거나 유한한 수가 아니다
     {
@@ -450,36 +456,50 @@ void ses_emit(void* handle, int id, const char* port)
         host->pending[id].push_back(port);
 }
 
-// 엔진의 일정에서 이 모델의 다음 사건 시각이 정확히 지금인가.
-int ses_due(void* handle, int id)
-{
-    Host* host = (Host*)handle;
-    if (id < 0 || id >= (int)host->models.size())
-        return 0;
-    auto& live = ses::Peek::live(*host->se);
-    auto it = live.find(host->models[id]);
-    return it != live.end() && it->second->get_req_time() == host->se->get_global_time();
-}
-
 // 실행을 멈추게 한다. 엔진은 처리하던 사건을 마치고 돌아온다.
 void ses_stop(void* handle)
 {
     ((Host*)handle)->se->stop();
 }
 
+static int advance(Host* host, evsim::Time span)
+{
+    try
+    {
+        host->se->simulate(span);
+    }
+    catch (const std::exception& e)
+    {
+        host->fail(std::string("실행 중의 예외: ") + e.what());
+    }
+    return host->error.empty() ? 0 : -1;
+}
+
 // 시각 until까지 돌린다. 그 시각의 사건도 처리한다. 이미 지난 시각이면 아무것도 하지 않는다.
-int ses_run(void* handle, double until)
+// 다만 flush이면 지금 시각에 남은 사건은 처리한다. until과 지금 시각이 같은 눈금일 때 쓴다.
+int ses_run(void* handle, double until, int flush)
 {
     Host* host = (Host*)handle;
     if (!host->error.empty())
         return -1;
     evsim::Time now = host->se->get_global_time(), goal = (evsim::Time)until;
     if (!(goal >= now))
-        return 0;
+        return flush ? advance(host, 0) : 0;
+    // 엔진은 지금 시각에 이 값을 더한 시각까지 돌린다. goal이 배정밀도 수이면 그 합은 goal과 정확히 같다
+    return advance(host, goal - now);
+}
+
+// 엔진의 다음 사건 시각 하나를 처리한다. 공통 모델의 사건 시각은 엔진이 더해서 정한 값이라 눈금의 시각과
+// 끝자리가 다를 수 있다. 그래서 정한 시각까지가 아니라 "다음 사건까지" 돌리는 길을 따로 둔다.
+int ses_step(void* handle)
+{
+    Host* host = (Host*)handle;
+    if (!host->error.empty())
+        return -1;
     try
     {
-        // 엔진은 지금 시각에 이 값을 더한 시각까지 돌린다. goal이 배정밀도 수이면 그 합은 goal과 정확히 같다
-        host->se->simulate(goal - now);
+        if (host->se->schedule() >= evsim::Infinity)
+            host->fail("엔진의 일정에 남은 사건이 없다");
     }
     catch (const std::exception& e)
     {

@@ -388,6 +388,9 @@ def test_example_files_conform_to_the_binding_schema():
 # 무작위 문서와 무작위 바인딩
 # ---------------------------------------------------------------------------
 
+UNIT = 0.25                                                 # generic과 quirky의 시간 전진은 모두 이 시간 단위의 정수배다
+
+
 def generic(ports: dict):
     """인터페이스만으로 움직이는 모델. 받은 것의 수가 내보내는 값에 들어가므로 전달이 달라지면 기록이 달라진다."""
     class Generic(Atomic):
@@ -477,7 +480,7 @@ def setup(seed, executors=("x",)):
     exts = []
     for name in executors:
         b, mods = rand_binding(rng, d, name)
-        L, ext = X.attach(L, named(name), Binding.from_dict(b), library_of(mods))
+        L, ext = X.attach(L, named(name), Binding.from_dict(dict(b, time_unit=UNIT)), library_of(mods))
         exts.append(ext)
     return rng, d, L, exts
 
@@ -535,7 +538,6 @@ def test_theorem19_executable_core_and_two_executors(seed):
     if sub is not None:
         assert var(X.exec_core(sub, a)) == var(sub) & A
         if core_a is not None:
-            from test_decisions import rand_decisions
             assert var(X.exec_core(sub, a)) == {V for V in var(core_a) if V in var(sub)}
     STATS["both"] += len(A & B)
     STATS["only_one"] += len(A ^ B)
@@ -565,8 +567,8 @@ def test_devs_closure_under_coupling(seed):
     """계층대로 실행한 것과 평탄화해서 실행한 것의 사건 기록이 같다. 문헌의 정리를 확인만 한다."""
     n = rand_structure(random.Random(seed))
     hier, flat = model_of(n), model_of(n)
-    log = simulate(hier, until=8.0)
-    assert log == simulate(flat, until=8.0, flat=True)
+    log = simulate(hier, until=8.0, unit=UNIT)
+    assert log == simulate(flat, until=8.0, flat=True, unit=UNIT)
     assert state(devs._leaves(hier)) == state(devs._leaves(flat))
     STATS["events"] += len(log)
     STATS["delivered"] += sum(1 for _, _, _, (_, _, seen) in log if seen > 0)
@@ -577,8 +579,8 @@ def test_devs_closure_with_empty_and_multiple_outputs(seed):
     """출력이 값을 0개, 1개, 2개 가질 때에도 두 실행이 같다. 상태까지 본다."""
     n = rand_structure(random.Random(seed))
     hier, flat = model_of(n, body=quirky), model_of(n, body=quirky)
-    log = simulate(hier, until=8.0)
-    assert log == simulate(flat, until=8.0, flat=True)
+    log = simulate(hier, until=8.0, unit=UNIT)
+    assert log == simulate(flat, until=8.0, flat=True, unit=UNIT)
     assert state(devs._leaves(hier)) == state(devs._leaves(flat))
     heard = [h for a in devs._leaves(hier).values() for h in a.heard if h[0] != "both"]
     STATS["quirky_events"] += len(log)
@@ -693,7 +695,7 @@ def test_a_coupling_written_twice_is_one_coupling():
     assert [n["ic"] for _, n in classic.enumerate_classic(load_ses_dict(TWICE))] == [[one]]
     lib = library_of({"MA": {"ports": {"o": ("T", "out")}, "required": [], "params": {}},
                       "MB": {"ports": {"i": ("T", "in")}, "required": [], "params": {}}})
-    L, ext = X.attach(L0, DevsExecutor(), Binding("devs", {"A": Bind("MA"), "B": Bind("MB")}), lib)
+    L, ext = X.attach(L0, DevsExecutor(), Binding("devs", {"A": Bind("MA"), "B": Bind("MB")}, time_unit=UNIT), lib)
     p = X.plan(L, ext, V)
     assert p["ic"] == [one] and st.flatten(p) == {((("A",), "o"), (("B",), "i")): 1}
     received = []

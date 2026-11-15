@@ -71,6 +71,16 @@ SES_MODULE(Tick, [](const std::string& name, const ses::Params& p) -> CAtomicMod
 
 SES_MODULE(Relay, [](const std::string& name, const ses::Params&) -> CAtomicModel* { return new CRelay(name); });
 
+// 다리가 매개변수를 읽은 결과를 낼 포트로 알려 준다. 주기 1로 out에 내고, 읽은 값이 모두 기대와 같으면 out2로도 낸다.
+// 기대: 무한인 시간 값은 엔진의 Infinity가 된다. 없는 매개변수에는 준 기본값이 오고, 기본값을 주지 않은 시간 값은 Infinity다.
+SES_MODULE(Reads, [](const std::string& name, const ses::Params& p) -> CAtomicModel* {
+    bool fine = p.has("never") && p.time("never") == Infinity && p.time("never", 5) == Infinity
+                && !p.has("absent") && p.time("absent", 7) == 7 && p.time("absent") == Infinity
+                && p.number("absent", 3) == 3 && p.number("absent") == 0 && p.text("absent", "x") == "x"
+                && p.number("count") == 12 && p.text("label") == "abc";
+    return new CTick(name, 1, false, fine);
+});
+
 SES_MODULE(Nothing, [](const std::string&, const ses::Params&) -> CAtomicModel* { return nullptr; });
 
 // 주기마다 지금까지 낸 횟수를 값 메시지로 낸다.

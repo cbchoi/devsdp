@@ -51,7 +51,7 @@ class Powered(Atomic):
 class Probe(Powered):
     PORTS = {"pwr": ("Power", "in"), "data": ("Reading", "out")}
     REQUIRED = ("pwr",)
-    PARAMS = {"address": ("int",), "period": ("float", 1.0), "load_ma": ("int", 1)}
+    PARAMS = {"address": ("int",), "period": ("time", 1.0), "load_ma": ("int", 1)}
 
     def output(self):
         return {"data": [{"address": self.address, "value": self.address * 10 + self.ticks}]}
@@ -61,7 +61,7 @@ class Controller(Powered):
     PORTS = {"pwr": ("Power", "in"), "sense": ("Reading", "in"),
              "tx": ("Packet", "out"), "show": ("Frame", "out")}
     REQUIRED = ("pwr", "sense")
-    PARAMS = {"period": ("float", 1.0), "load_ma": ("int", 20)}
+    PARAMS = {"period": ("time", 1.0), "load_ma": ("int", 20)}
 
     def init(self):
         super().init()

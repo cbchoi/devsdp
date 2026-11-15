@@ -9,14 +9,18 @@ SES에 DEVS 실행기를 붙이면 SES/MB가 된다는 것을 실제로 돌려 �
 - 평탄 실행: 계층을 풀어 원자 모델과 평탄화된 연결만으로 나른다.
 두 방식의 사건 기록이 같다는 것이 결합에 대한 닫힘이다. 문헌의 정리이며 여기서는
 무작위 구조에서 확인만 한다.
+
+시각은 시간 단위의 눈금으로 센다. 원자 모델의 시간 전진은 시간 단위의 정수배여야 하고, 모델과
+기록에 보이는 시각은 눈금의 수에 시간 단위를 곱한 값이다. 실수의 덧셈으로 시각을 쌓지 않으므로
+같은 시각인지가 정수의 비교로 정해진다. 다른 실행기(pyevsim, cevsim)도 같은 방법으로 센다.
 """
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Mapping, Optional
 
 from . import structure as st
-from .executor import Executor
+from .executor import Executor, last_tick, same_unit, ticks, time_unit
 
 INF = float("inf")
 
@@ -39,7 +43,7 @@ class Atomic:
         """초기 상태."""
 
     def ta(self) -> float:
-        """다음 내부 사건까지 남은 시간."""
+        """다음 내부 사건까지 남은 시간. 시간 단위의 음이 아닌 정수배이거나 INF여야 한다."""
         return INF
 
     def output(self) -> dict:
@@ -50,7 +54,7 @@ class Atomic:
         """내부 전이."""
 
     def external(self, elapsed: float, bag: dict) -> None:
-        """외부 전이. bag은 포트 이름에서 값의 목록으로."""
+        """외부 전이. elapsed는 마지막 전이에서 흐른 시간이고 bag은 포트 이름에서 값의 목록으로."""
 
     def confluent(self, bag: dict) -> None:
         """내부 사건과 입력이 같은 시각에 겹쳤을 때. 기본은 내부 전이 뒤에 외부 전이."""
@@ -85,34 +89,44 @@ def _bag(inbox: dict) -> dict:
     return {port: [v for _, v in sorted(items, key=lambda x: x[0])] for port, items in sorted(inbox.items())}
 
 
-def _fire(atom: Atomic, t: float, last: dict, path: tuple, imminent: bool, inbox: dict) -> None:
-    atom.now = t
+def _fire(atom: Atomic, n: int, unit: float, last: dict, path: tuple, imminent: bool, inbox: dict) -> None:
+    """눈금 n에서의 전이. 모델에 주는 시각과 흐른 시간은 눈금의 수에 시간 단위를 곱한 값이다."""
+    atom.now = n * unit
     if imminent and inbox:
         atom.confluent(_bag(inbox))
     elif imminent:
         atom.internal()
     elif inbox:
-        atom.external(t - last[path], _bag(inbox))
+        atom.external((n - last[path]) * unit, _bag(inbox))
     else:
         return
-    last[path] = t
+    last[path] = n
 
 
-def simulate(model, until: float, flat: bool = False, max_steps: int = 100000) -> list:
-    """시뮬레이션을 돌리고 원자 모델의 출력 사건을 (시각, 원자의 경로, 포트, 값)의 목록으로 돌려준다."""
+def simulate(model, until: float, flat: bool = False, max_steps: int = 100000, unit: Optional[float] = None) -> list:
+    """시뮬레이션을 돌리고 원자 모델의 출력 사건을 (시각, 원자의 경로, 포트, 값)의 목록으로 돌려준다.
+
+    unit은 시간 단위다. 주지 않으면 모델에 적힌 것(DevsExecutor가 적는다)을 쓰고, 그것도 없으면 1이다.
+    둘 다 있으면 같아야 한다. 시각 until까지 돌린다. 그 시각의 사건도 처리한다. until이 INF이면 사건이 없어질
+    때까지 돌린다.
+    """
+    u = same_unit(unit, getattr(model, "_time_unit", None))
     leaves = _leaves(model)
-    last = {p: 0.0 for p in leaves}
-    due = {p: a.ta() for p, a in leaves.items()}
+    who = {p: "/".join(p) or getattr(a, "name", "") for p, a in leaves.items()}
+    last = {p: 0 for p in leaves}                         # 마지막으로 전이한 눈금
+    due = {p: ticks(who[p], a.ta(), u) for p, a in leaves.items()}      # 다음 내부 사건의 눈금. 쉬고 있으면 None
+    end = INF if until == INF else last_tick(until, u)
     routes: dict = {}
     if flat:                                              # 평탄화된 연결: (출발 자리)에서 도착 자리들로
         for (s, t), k in st.flatten(observe(model)).items():
             routes.setdefault(s, []).extend([t] * k)
     log: list = []
     for _ in range(max_steps):
-        t = min(due.values(), default=INF)
-        if t == INF or t > until:
+        n = min((d for d in due.values() if d is not None), default=None)
+        if n is None or n > end:
             return log
-        imminent = sorted(p for p in leaves if due[p] == t)
+        t = n * u
+        imminent = sorted(p for p in leaves if due[p] == n)
         emitted: dict = {}                                # (경로, 포트)에서 값의 목록으로
         for p in imminent:
             leaves[p].now = t
@@ -130,9 +144,10 @@ def simulate(model, until: float, flat: bool = False, max_steps: int = 100000) -
         else:
             _route(model, (), emitted, inbox)
         for p in leaves:
-            if due[p] == t or inbox[p]:
-                _fire(leaves[p], t, last, p, due[p] == t, inbox[p])
-                due[p] = t + leaves[p].ta()
+            if due[p] == n or inbox[p]:
+                _fire(leaves[p], n, u, last, p, due[p] == n, inbox[p])
+                k = ticks(who[p], leaves[p].ta(), u)
+                due[p] = None if k is None else n + k
     raise RuntimeError("시뮬레이션이 정해진 걸음 수 안에 끝나지 않았다")
 
 
@@ -184,11 +199,20 @@ def module_of(cls, name: str = None):
 
 
 class DevsExecutor(Executor):
-    """계획을 DEVS 모델로 만든다. 원자 구성요소는 모델베이스의 클래스를, 결합 모델은 계획의 구조를 쓴다."""
+    """계획을 DEVS 모델로 만든다. 원자 구성요소는 모델베이스의 클래스를, 결합 모델은 계획의 구조를 쓴다.
+
+    시간 단위는 계획에 실려 온 것(바인딩이 적은 것)을 쓴다. time_unit을 주면 그것과 같아야 한다.
+    만든 모델에 적어 두고 simulate가 읽는다.
+    """
 
     name = "devs"
 
+    def __init__(self, time_unit: Optional[float] = None) -> None:
+        self.time_unit = time_unit
+
     def build(self, plan: dict, library: Mapping):
+        unit = time_unit(plan, self.time_unit)
+
         def rec(n: dict, path: tuple):
             if st.is_atom(n):
                 model = library[n["module"]].body("/".join(path) or n.get("name", ""), **n["params"])
@@ -198,7 +222,9 @@ class DevsExecutor(Executor):
                            {name: rec(c, path + (name,)) for name, c in n["children"].items()},
                            n["eic"], n["eoc"], n["ic"])
 
-        return rec(plan, ())
+        model = rec(plan, ())
+        model._time_unit = unit
+        return model
 
     def observe(self, artifact) -> dict:
         return observe(artifact)

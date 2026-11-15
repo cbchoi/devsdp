@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from test_executor import generic  # noqa: E402
+from test_executor import UNIT, generic  # noqa: E402
 
 from ses_core import devs  # noqa: E402
 from ses_core import structure as st  # noqa: E402
@@ -17,9 +17,14 @@ from ses_core.devs import INF, Atomic  # noqa: E402
 from ses_core.executor import Module  # noqa: E402
 
 
-def as_plan(n: dict, body=generic) -> tuple:
-    """구조의 원자마다 그 인터페이스에 맞는 모듈을 붙여 (계획, 라이브러리)로 만든다."""
+def as_plan(n: dict, body=generic, unit=UNIT) -> tuple:
+    """구조의 원자마다 그 인터페이스에 맞는 모듈을 붙여 (계획, 라이브러리)로 만든다.
+
+    unit은 계획에 적을 시간 단위다. 바인딩이 적어 준 것처럼 뿌리에 싣는다. None이면 적지 않는다.
+    """
     plan, lib = st.copy(n), {}
+    if unit is not None:
+        plan["time_unit"] = unit
     for path, c in st.walk(plan):
         if st.is_atom(c):
             c["module"], c["params"] = "M_" + "_".join(path), {}
@@ -122,7 +127,7 @@ class Spin(Atomic):
 class Note(Atomic):
     """받은 것을 적는 공통 모델 기반의 모델. 주기가 있으면 스스로도 낸다."""
     PORTS = {"i": ("T", "in"), "o": ("T", "out")}
-    PARAMS = {"period": ("float", INF)}
+    PARAMS = {"period": ("time", INF)}
 
     def init(self):
         self.left, self.seen, self.k = self.period, [], 0

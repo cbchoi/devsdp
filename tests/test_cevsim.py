@@ -9,10 +9,7 @@ cevsim의 소스와 C++ 컴파일러가 있어야 돈다. 환경 변수 CEVSIM_H
 """
 
 import collections
-import ctypes
-import fractions
 import glob
-import itertools
 import os
 import random
 import shutil
@@ -33,7 +30,7 @@ if not C.available(HOME):
 
 from docgen import rand_binding, rand_system_document  # noqa: E402
 from pdevs_models import NOTE, Burst, Keep, Pair, Ring, Spin, as_plan, flat_plan, note  # noqa: E402
-from test_executor import Sometimes, Witness, generic, library_of, quirky, state  # noqa: E402
+from test_executor import UNIT, Sometimes, Witness, generic, library_of, quirky, state  # noqa: E402
 from test_structure import rand_structure  # noqa: E402
 
 from examples import processing_mb, sensor_node_mb  # noqa: E402
@@ -45,7 +42,7 @@ from ses_core.algebra import sem  # noqa: E402
 from ses_core.cevsim_executor import BuildError, CevsimExecutor, Native  # noqa: E402
 from ses_core.devs import INF, Atomic, DevsExecutor, simulate  # noqa: E402
 from ses_core.diagnose import analyze  # noqa: E402
-from ses_core.executor import Bind, Binding, Module  # noqa: E402
+from ses_core.executor import Bind, Binding, Module, OffGrid  # noqa: E402
 from ses_core.decisions import load_decisions, patterns  # noqa: E402
 from ses_core.extension import interpret, prune, violations  # noqa: E402
 from ses_core.unfold import unfold_layered  # noqa: E402
@@ -136,7 +133,7 @@ def attach_both(doc_name: str, binding_name: str, library: dict):
     b = X.load_binding(os.path.join(EXAMPLES, binding_name))
     dx, cx = DevsExecutor(), executor()
     L, de = X.attach(L, dx, b, library)
-    L, ce = X.attach(L, cx, Binding("cevsim", b.map, b.target), library)
+    L, ce = X.attach(L, cx, Binding("cevsim", b.map, b.target, b.time_unit), library)
     return L, (dx, de), (cx, ce)
 
 
@@ -268,6 +265,7 @@ def test_random_documents_faithful_and_same_log(seed):
     b, mods = rand_binding(rng, d, "cevsim")
     dx, cx = DevsExecutor(), executor()
     L = unfold_layered(load_ses_dict(d))
+    b = dict(b, time_unit=UNIT)                              # 시간 단위는 바인딩에 적는다. 두 실행기가 계획에서 읽는다
     L, de = X.attach(L, dx, Binding.from_dict(b), library_of(mods))
     L, ce = X.attach(L, cx, Binding.from_dict(b), library_of(mods))
     variants = sem(L.ses)
@@ -297,6 +295,15 @@ def test_confluent_transition_is_the_models_own():
     for p in r_leaves:
         assert leaves[p].trace == r_leaves[p].trace
     assert [kind for kind, *_ in leaves[("a",)].trace] == ["con"] * 4      # 둘이 늘 같은 시각에 낸다
+
+
+def test_a_model_that_only_receives_does_not_take_a_turn():
+    """공통 모델끼리 주고받을 때 받기만 한 모델에는 차례가 오지 않는다. 낸 모델이 전이를 맡는 모델을 이미 깨웠기 때문이다."""
+    plan, lib = flat_plan({"p": Pair, "k": Keep}, ic=[(("p", "o"), ("k", "i"))])
+    sim = executor().build(plan, lib)
+    assert len(sim.run(5.0)) == 10 and len(sim.leaves()[("k",)].seen) == 5
+    assert sim.turns == 5                                    # p가 다섯 번 냈다. k는 한 번도 차례를 받지 않았다
+    sim.close()
 
 
 def test_bag_order_and_path_counts():
@@ -335,29 +342,59 @@ def test_output_on_an_undeclared_port_is_recorded_and_goes_nowhere():
     """모듈이 계획에 없는 포트로 낸 것은 기록에 남고 어디에도 전달되지 않는다. 참조 시뮬레이터와 같다."""
     wide = {"o": ("T", "out"), "spare": ("T", "out")}
     plan = st.node({}, {"g": st.node({"o": ("T", "out")}, module="G", params={}), "w": st.node(Witness.PORTS, module="W", params={})},
-                   ic=[(("g", "o"), ("w", "i"))])
+                   ic=[(("g", "o"), ("w", "i"))], time_unit=UNIT)
     lib = {"G": Module("G", wide, (), {}, generic(wide)), "W": devs.module_of(Witness, "W")}
     ref, log, r_leaves, leaves = on_both(plan, lib, 4.0)
     assert log == ref and sorted(port for _, _, port, _ in log) == ["o", "spare"]
     assert leaves[("w",)].seen == r_leaves[("w",)].seen and len(leaves[("w",)].seen) == 1
 
 
-def test_the_transition_signal_never_comes_before_a_due_model():
-    """전이를 맡는 모델의 차례는 그 시각에 임박한 모델이 모두 낸 뒤에 온다. 엔진이 그 순서를 지키지 않으면 드러난다."""
+def test_ticks_and_engine_times_must_agree():
+    """공통 모델의 눈금과 엔진의 시각이 어긋나면 드러난다. 엔진이 사건을 지나쳤거나 다른 눈금에 차례를 준 경우다."""
     plan, lib = flat_plan({"r": Ring})
     sim = executor().build(plan, lib)
     i = sim.models[("r",)]
-    assert sim._ta(i) == 1.0 and sim._ta(sim.keeper) == -1.0     # 한 단위 뒤에 낸다. 전이를 맡는 모델은 쉬고 있다
-    assert not sim._due(i)                                   # 엔진이 아직 이 모델의 일정을 잡지 않았다
+    c = sim.cells[i]
+    assert sim._ta(i) == 1.0 and sim._ta(sim.keeper) == -1.0     # 한 눈금 뒤에 낸다. 전이를 맡는 모델은 쉬고 있다
     sim.run(3.0)
-    assert not sim._due(i)                                   # 다음 사건은 시각 4다
-    signal = (i, C.COMMIT.encode(), sim.keeper, C.COMMIT.encode())
-    assert sim._ext(*signal) == 0                            # 아무 일도 없던 모델은 전이 신호를 받아도 전이하지 않는다
-    assert sim.leaves()[("r",)].trace == [("int", 1.0), ("int", 2.0), ("int", 3.0)]
-    sim._due = lambda i: True                                # 엔진이 이 모델의 낼 차례가 남았다고 답한다면
-    with pytest.raises(RuntimeError, match="전이 신호가 먼저 왔다"):
-        sim._ext(*signal)
+    assert (sim.tick(), c.due, c.last) == (3, 4, 3) and sim._ta(i) == 1.0
+    sim._ext(i, C.COMMIT.encode(), sim.keeper, C.COMMIT.encode())    # 전이 신호: 아무 일도 없던 모델은 전이하지 않는다
+    assert sim.leaves()[("r",)].trace == [("int", 1.0), ("int", 2.0), ("int", 3.0)] and (c.due, c.last) == (4, 3)
+    assert sim.turns == 3                                    # 낼 때마다 차례가 한 번씩 왔다
+    c.due = 2
+    with pytest.raises(RuntimeError, match="r: 눈금 2 의 사건을 엔진이 지나쳤다"):
+        sim._ta(i)
+    with pytest.raises(RuntimeError, match="r: 눈금 2 의 사건을 엔진이 눈금 3 에 처리했다"):
+        sim._out(i)
     sim.close()
+
+
+def test_the_transition_model_first_gives_a_turn_to_a_model_that_is_due():
+    """전이를 맡는 모델의 차례가 왔는데 그 눈금에 낼 모델이 아직 내지 않았으면, 전이 신호 대신 차례를 주는 신호를 보낸다."""
+    plan, lib = flat_plan({"a": Ring, "b": Ring})
+    sim = executor().build(plan, lib)
+    a, b = sim.models[("a",)], sim.models[("b",)]
+    sim.run(0.0)                                             # 엔진이 모델을 올렸다. 시각 0이고 둘 다 눈금 1에 낸다
+    sim.cells[a].due = sim.cells[b].due = 0                  # 둘 다 지금 낼 차례인데 엔진이 차례를 주지 않았다고 하자
+    sim._awake = True
+    sim._out(sim.keeper)
+    assert sim._giving and sim._awake                        # 차례를 주는 신호를 보냈고, 다시 차례를 받으려고 깨어 있다
+
+    def signal(i):
+        return (i, C.COMMIT.encode(), sim.keeper, C.COMMIT.encode())
+
+    sim.cells[b].due = 5
+    sim._ext(*signal(a))
+    sim._ext(*signal(b))                                     # 신호를 받은 뒤에 엔진이 다음 사건까지 남은 시간을 다시 묻는다
+    assert sim._ta(a) == 0.0 and sim._ta(b) == 5.0           # 낼 차례인 모델은 지금, 아닌 모델은 제 눈금에
+    assert sim.leaves()[("a",)].trace == [] and sim._rounds == 0     # 누구도 전이하지 않았고 차례 수에도 세지 않는다
+    sim.close()
+    passive = executor().build(*flat_plan({"k": Echo}))      # 엔진에 잡힌 사건이 없는데 낼 눈금이 남았다면 드러난다
+    passive.run(1.0)
+    passive.cells[passive.models[("k",)]].due = 1
+    with pytest.raises(RuntimeError, match="엔진의 일정에 남은 사건이 없다"):
+        passive.run(1.0)
+    passive.close()
 
 
 def test_endless_zero_time_transitions_are_stopped():
@@ -392,27 +429,94 @@ class Tenth(Atomic):
         self.k += 1
 
 
-def test_event_times_are_the_engines_own():
-    """시간 격자가 없다. 사건 시각은 엔진이 셈한 값 그대로다."""
-    plan, lib = as_plan(st.node({}, {"b": st.node({"o": ("T", "out")})}))        # 이 모델의 지연은 0.5다
-    sim = executor().build(plan, lib)
-    assert sim.run(4.0) == simulate(DevsExecutor().build(plan, lib), 4.0) and len(sim.log) == 1
-    sim.close()
-    # 시각이 이진수로 정확히 적히지 않으면 참조 시뮬레이터와 끝자리가 달라진다. 참조는 배정밀도로 더한다.
-    # 엔진의 시각은 long double이고, 그것이 배정밀도보다 넓은 곳(x86-64 리눅스의 g++ 등)에서는 더 정확하게 더한다
-    plan, lib = flat_plan({"d": Tenth})
-    ref = simulate(DevsExecutor().build(plan, lib), 1.0)
-    sim = executor().build(plan, lib)
+def test_common_model_time_is_counted_in_ticks():
+    """공통 모델의 시각은 시간 단위의 눈금이다. 엔진이 시각을 더하면서 생기는 끝자리 차이가 기록에 들어오지 않는다."""
+    plan, lib = flat_plan({"d": Tenth})                      # 0.1마다 낸다. 0.1은 이진수로 정확히 적히지 않는다
+    with pytest.raises(OffGrid, match="d: 시간 전진 0.1 이 시간 단위 1.0 의 배수가 아니다"):
+        executor().build(plan, lib)                          # 시간 단위를 적지 않으면 1이다
+    ref = simulate(DevsExecutor(0.1).build(plan, lib), 1.0)
+    sim = executor(time_unit=0.1).build(plan, lib)
     log = list(sim.run(1.0))
-    assert [t for t, *_ in ref] == list(itertools.accumulate([0.1] * 10))        # 참조: 열 번째가 0.9999999999999999
-    assert ref[7][0] == 0.7999999999999999 and len(ref) == 10
-    if ctypes.sizeof(ctypes.c_longdouble) > 8:
-        assert [t for t, *_ in log] == [float(fractions.Fraction(0.1) * k) for k in range(1, 10)]     # 엔진: 정확한 합
-        assert log[7][0] == 0.8 and len(log) == 9            # 엔진에서는 열 번째 사건이 시각 1.0보다 조금 뒤다
-    else:
-        assert log == ref                                    # long double이 배정밀도인 곳에서는 참조와 같다
-    assert [e[1:] for e in sim.run(1.05)] == [e[1:] for e in ref]
-    assert sim.now() == 1.05                                 # 시계는 끝 시각에 정확히 선다
+    assert log == ref and [t for t, *_ in log] == [k * 0.1 for k in range(1, 11)]      # 눈금 수에 시간 단위를 곱한 값
+    # 엔진에서 열째 사건의 시각은 0.1을 열 번 더한 값이고 1.0보다 끝자리만큼 뒤다. 그래도 눈금 10의 사건으로 처리한다
+    assert sim.tick() == 10 and sim.cells[sim.models[("d",)]].due == 11
+    assert sim.run(1.0) == ref and sim.run(0.5) == ref       # 같은 끝 시각이나 지난 시각으로 다시 불러도 그대로다
+    assert [t for t, *_ in sim.run(1.2)][10:] == [11 * 0.1, 12 * 0.1]
+    sim.close()
+    with pytest.raises(ValueError, match="시간 단위가 서로 다르다"):       # 계획에 적힌 것과 실행기에 준 것이 다르다
+        executor(time_unit=0.5).build(*as_plan(st.node({}, {"b": st.node({"o": ("T", "out")})})))
+    with pytest.raises(ValueError, match="0보다 커야 한다"):
+        executor(time_unit=0)
+
+
+def test_an_input_at_the_tick_of_the_engines_clock_is_an_input_now():
+    """엔진의 시계가 눈금의 시각보다 끝자리만큼 뒤에 있어도, 그 눈금의 시각으로 넣은 입력은 지금의 입력이다."""
+    plan = st.node({"x": ("T", "in")}, {"d": st.node(Tenth.PORTS, module="Tenth", params={}),
+                                        "k": st.node(Echo.PORTS, module="Echo", params={})}, eic=[("x", ("k", "i"))], time_unit=0.1)
+    sim = executor().build(plan, {"Tenth": devs.module_of(Tenth), "Echo": devs.module_of(Echo)})
+    sim.run(0.3)
+    assert sim.tick() == 3 and [e[0] for e in sim.log] == [0.1, 0.2, 3 * 0.1]
+    sim.inject("x", 0.3)                                     # 0.3은 엔진의 시각(0.1을 세 번 더한 값)보다 끝자리만큼 앞이다
+    assert sim.run(0.3)[3:] == [(3 * 0.1, ("k",), "o", "k")]
+    assert sim.leaves()[("k",)].seen == [(3 * 0.1, 3 * 0.1, {"i": [None]})]
+    with pytest.raises(ValueError, match="이미 지난 시각"):
+        sim.inject("x", 0.2)                                 # 앞선 눈금은 지난 시각이다
+    sim.close()
+
+
+def test_a_native_event_off_the_grid_cannot_reach_a_common_model():
+    """고유 모델은 눈금 밖의 시각에도 낼 수 있다. 그 출력이 공통 모델에 닿으면 OffGrid다."""
+    alone = st.node({}, {"n": tick(period=0.5)})
+    sim = executor().build(alone, NATIVE)
+    assert sim.run(1.0) == [(0.5, ("n",), "out", None), (1.0, ("n",), "out", None)]      # 눈금 밖의 시각은 그대로 적는다
+    with pytest.raises(OffGrid, match="엔진의 시각 1.5"):
+        sim.run(1.5) and sim.tick()
+    sim.close()
+    mixed = st.node({}, {"n": tick(period=0.5), "w": st.node(Witness.PORTS, module="W", params={})}, ic=[(("n", "out"), ("w", "i"))])
+    sim = executor().build(mixed, {**NATIVE, "W": devs.module_of(Witness, "W")})
+    with pytest.raises(OffGrid, match="w: 시각 0.5 에 입력을 받았다. 시간 단위 1.0 의 정수배가 아니다"):
+        sim.run(2.0)
+    sim.close()
+    fine = executor(time_unit=0.5).build(mixed, {**NATIVE, "W": devs.module_of(Witness, "W")})
+    fine.run(1.0)
+    assert fine.leaves()[("w",)].seen == [(0.5, 0.5, {"i": [None]}), (1.0, 0.5, {"i": [None]})]
+    fine.close()
+
+
+def test_a_native_event_a_last_digit_away_joins_the_round_of_its_tick():
+    """고유 모델의 사건 시각이 공통 모델의 것과 끝자리만 다르면 같은 눈금의 한 차례로 처리한다.
+
+    시간 단위 0.1에서 고유 모델은 0.3을 더해 가고 공통 모델은 눈금 3의 시각(0.1의 세 배)에 잡힌다. 두 값은
+    끝자리가 다르고 고유 모델의 것이 앞선다. 전이를 맡는 모델이 그 눈금에 낼 공통 모델에 먼저 차례를 준다.
+    """
+    plan = st.node({}, {"h1": note(period=0.3), "h2": note(), "n": tick(period=0.3)},
+                   ic=[(("n", "out"), ("h2", "i")), (("h1", "o"), ("h2", "i"))], time_unit=0.1)
+    cx = executor()
+    sim = cx.build(plan, {**NATIVE, "Note": NOTE})
+    log = sim.run(0.6)
+    t3, t6 = 3 * 0.1, 6 * 0.1
+    assert log == [(t3, ("n",), "out", None), (t3, ("h1",), "o", ("h1", 0)),      # 고유 모델이 끝자리만큼 먼저다
+                   (t6, ("n",), "out", None), (t6, ("h1",), "o", ("h1", 1))]
+    # h2는 눈금마다 두 입력을 한 묶음으로 받는다. 따로 받았다면 전이가 두 번이다
+    assert sim.leaves()[("h2",)].seen == [("ext", t3, t3, [("h1", 0), None]), ("ext", t6, t6 - t3, [("h1", 1), None])]
+    faithful(cx, sim, plan, exact_ports=False)
+    sim.close()
+
+
+def test_common_models_return_to_the_grid_after_a_native_event_a_little_off():
+    """고유 모델의 사건이 눈금에서 허용 폭 안으로 벗어난 시각에 공통 모델에 닿아도, 공통 모델의 다음 사건은 눈금의 시각에 잡힌다.
+
+    엔진에는 시간 전진을 그 눈금의 시각에서 엔진의 지금 시각을 뺀 값으로 내놓는다. 남은 눈금 수에 시간 단위를 곱한 값을
+    내놓으면 벗어난 만큼이 그 뒤의 사건에 그대로 이어지고, 엔진이 더해 가면서 생기는 끝자리의 오차도 쌓인다.
+    """
+    off = 0.3 * (1 + 1e-10)                                  # 눈금 3에서 3e-10눈금 뒤다. 허용 폭(3e-9눈금) 안이다
+    plan = st.node({}, {"h": note(period=0.6), "n": tick(period=off)}, ic=[(("n", "out"), ("h", "i"))], time_unit=0.1)
+    sim = executor().build(plan, {**NATIVE, "Note": NOTE})
+    t3, t6 = 3 * 0.1, 6 * 0.1
+    assert sim.run(0.6) == [(t3, ("n",), "out", None), (t6, ("h",), "o", ("h", 0))]      # 벗어난 시각의 사건도 눈금 3의 것이다
+    assert sim.leaves()[("h",)].seen == [("ext", t3, t3, [None])]
+    assert off + t3 != t6                                    # 벗어난 만큼이 이어졌다면 엔진의 시각이 이 값이다
+    assert sim.now() == t6                                   # 엔진의 시각이 눈금 6의 시각으로 돌아왔다
     sim.close()
 
 
@@ -483,7 +587,7 @@ def test_an_exception_in_a_native_model_comes_back_from_run():
 
 
 def test_a_plan_that_is_one_atom():
-    plan = st.node({"o": ("T", "out")}, module="G", params={}, name="Solo")
+    plan = st.node({"o": ("T", "out")}, module="G", params={}, name="Solo", time_unit=UNIT)
     lib = {"G": Module("G", {"o": ("T", "out")}, (), {}, generic({"o": ("T", "out")}))}
     ref, log, _, leaves = on_both(plan, lib, 6.0)
     assert log == ref and len(log) == 1 and list(leaves) == [()]
@@ -491,7 +595,7 @@ def test_a_plan_that_is_one_atom():
     sim = cx.build(plan, lib)
     assert sim.names[sim.models[()]] == "Solo" and cx.observe(sim)["ports"] == {}
     sim.close()
-    nameless = cx.build(st.node({"o": ("T", "out")}, module="G", params={}), lib)
+    nameless = cx.build(st.node({"o": ("T", "out")}, module="G", params={}, time_unit=UNIT), lib)
     assert nameless.names[nameless.models[()]] == "root"
     nameless.close()
 
@@ -531,7 +635,7 @@ def relay() -> dict:
 
 def test_native_modules_are_built_from_registered_factories():
     cx = executor()
-    assert C.modules(cx.lib) == ["Again", "Count", "Even", "Nothing", "Relay", "Thrower", "Tick"]
+    assert C.modules(cx.lib) == ["Again", "Count", "Even", "Nothing", "Reads", "Relay", "Thrower", "Tick"]
     plan = st.node({"x": ("T", "in"), "y": ("T", "out")}, {"a": tick(period=2.0), "b": relay(), "c": relay()},
                    eic=[("x", ("c", "inp"))], eoc=[(("b", "out"), "y"), (("c", "out"), "y")], ic=[(("a", "out"), ("b", "inp"))])
     sim = cx.build(plan, NATIVE)
@@ -556,6 +660,32 @@ def test_native_modules_are_built_from_registered_factories():
     assert quiet.run(2.0) == [(1.0, ("h",), "o", ("h", 0)), (2.0, ("h",), "o", ("h", 1))]
     assert quiet.outputs() == [(1.0, "y", ("h",)), (1.0, "y", None), (2.0, "y", ("h",)), (2.0, "y", None)]
     quiet.close()
+
+
+def test_native_parameters_arrive_as_the_doubles_written_in_the_plan():
+    """고유 모델의 매개변수는 계획에 적힌 배정밀도 값 그대로 간다.
+
+    주기가 0.1인 고유 모델의 셋째 사건 시각은 배정밀도의 0.1을 세 번 더한 값이다. 글자 0.1을 long double로 읽으면
+    계획의 값과 끝자리가 다른 수가 되어 셋째 시각이 0.3으로 나오고, 그 결과가 long double의 폭에 따라 달라진다.
+    """
+    sim = executor().build(st.node({}, {"n": tick(period=0.1)}), NATIVE)
+    third = 0.1 + 0.1 + 0.1
+    assert third != 0.3
+    assert sim.run(0.35) == [(0.1, ("n",), "out", None), (0.2, ("n",), "out", None), (third, ("n",), "out", None)]
+    sim.close()
+
+
+def test_the_bridge_reads_infinite_and_missing_parameters():
+    """다리가 고유 모델의 공장에 주는 매개변수: 무한인 시간 값은 엔진의 Infinity가 되고, 없는 것에는 기본값이 온다.
+
+    시험용 모듈 Reads는 읽은 값이 모두 기대와 같을 때에만 out2로도 낸다 (tests/cevsim_models.cpp).
+    """
+    ports = {**PORTS, "out2": ("T", "out")}
+    reads = Module("Reads", ports, (), {"never": ("float", INF), "count": ("int", 12), "label": ("str", "abc")}, Native("Reads"))
+    plan = st.node({}, {"r": st.node(ports, module="Reads", params={"never": INF, "count": 12, "label": "abc"})})
+    sim = executor().build(plan, {"Reads": reads})
+    assert sim.run(1.0) == [(1.0, ("r",), "out", None), (1.0, ("r",), "out2", None)]
+    sim.close()
 
 
 def test_native_module_must_exist_and_have_the_declared_interface():
@@ -707,6 +837,7 @@ def test_root_ports_are_the_engine_boundary():
     with pytest.raises(ValueError, match="유한한 수가 아니다"):
         sim.inject("x", INF)
     sim.inject("x", 5.0)                                     # 지금 시각의 입력은 받는다. 시각을 더 나아가지 않고 처리한다
+    assert len(sim.run(3.0)) == len(log) and len(k.seen) == 2        # 지난 시각까지 돌리라는 것으로는 처리하지 않는다
     assert [e for e in sim.run(5.0) if e[1] == ("k",)][2:] == [(5.0, ("k",), "o", "k")] and k.seen[2] == (5.0, 1.0, {"i": [None]})
     sim.close()
 
@@ -721,6 +852,7 @@ def test_external_input_to_an_idle_model_is_processed_at_that_time():
     assert sim.run(4.0) == [(2.0, ("k",), "o", "k")]
     assert sim.leaves()[("k",)].seen == [(2.0, 2.0, {"i": [None, None]})]
     assert sim.leaves()[("w",)].seen == [(2.0, 2.0, {"i": [None, None]})]
+    assert sim.turns == 3                                    # 입력을 받은 둘이 차례를 청해 깨웠고, k가 그 눈금에 한 번 냈다
     sim.close()
 
 
@@ -748,8 +880,8 @@ def test_the_bridge_answers_a_wrong_call_with_an_error_value():
     assert lib.ses_couple(h, -1, b"x", -1, b"y") == -1                                   # 경계에서 경계로
     assert lib.ses_couple(h, k, b"nope", -1, b"y") == -2 and lib.ses_couple(h, -1, b"x", k, b"nope") == -2     # 없는 포트
     assert lib.ses_couple(h, k, b"i", -1, b"y") == -2                                    # 입력 포트에서 나가는 결합
-    assert lib.ses_due(h, 99) == 0 and lib.ses_due(h, -1) == 0
-    lib.ses_emit(h, 99, b"o")                                                            # 없는 모델의 출력은 버린다
+    for nobody in (1 << 30, -(1 << 30), 99):
+        lib.ses_emit(h, nobody, b"o")                                                    # 없는 모델의 출력은 버린다
     assert lib.ses_last_error(h) == b"" and sim.connections() == st.flatten(plan)        # 결합은 그대로다
     sim.inject("x", 1.0)
     assert sim.run(2.0) == [(1.0, ("k",), "o", "k")]

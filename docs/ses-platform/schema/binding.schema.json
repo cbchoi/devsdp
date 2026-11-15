@@ -13,6 +13,11 @@
         "binding": {"type": "string", "description": "바인딩 형식 버전"},
         "executor": {"type": "string", "description": "실행기 이름"},
         "target": {"type": "string", "description": "대상 SES 문서의 이름"},
+        "time_unit": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "시간 단위. 모듈들의 시간 전진이 모두 이 값의 정수배라는 선언이다. 실행기는 시각을 이 단위의 눈금으로 센다. 적지 않으면 1이다."
+        },
         "map": {
           "type": "object",
           "description": "정의 이름에서 모듈로. 바탕 정의에 묶으면 대안이 물려받고, 더 구체적인 정의에 묶은 것이 이긴다. 분해를 가진 정의에 묶으면 그 아래는 펼치지 않는다.",
@@ -67,7 +72,7 @@
             "type": "object",
             "required": ["type"],
             "additionalProperties": false,
-            "properties": {"type": {"type": "string", "enum": ["int", "float", "str", "bool"]}, "default": {}}
+            "properties": {"type": {"type": "string", "enum": ["int", "float", "str", "bool", "time"]}, "default": {}}
           }
         }
       }
