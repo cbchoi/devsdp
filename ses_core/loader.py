@@ -74,6 +74,15 @@ def parse_expr(d: Any) -> m.Expr:
             if op in d:
                 return m.Compare(op, call, _operand(d[op]))   # 함수의 값을 견준다
         return call
+    if "replica" in d:
+        what, up = d["replica"], d.get("up", 0)
+        if what not in ("index", "count") or not isinstance(up, int) or isinstance(up, bool) or up < 0:
+            raise LoadError(f"replica 는 index 또는 count 이고 up 은 0 이상의 정수여야 한다: {d!r}")
+        replica = m.Replica(what, up)
+        for op in _CMP_OPS:
+            if op in d:
+                return m.Compare(op, replica, _operand(d[op]))
+        return replica
     raise LoadError(f"알 수 없는 표현식: {d!r}")
 
 
@@ -107,10 +116,30 @@ def _port(name: str, d: dict) -> m.Port:
 
 
 def _attribute(name: str, d: dict) -> m.Attribute:
+    if "expr" in d and "each" in d:
+        raise LoadError(f"속성 {name}: expr 과 each 를 함께 쓸 수 없다")
+    if "each" in d and not isinstance(d["each"], list):
+        raise LoadError(f"속성 {name}: each 는 복제본마다의 값을 적은 목록이어야 한다")
     return m.Attribute(
         name, _scalar(d["type"]), d.get("default"), d.get("unit"),
         parse_expr(d["expr"]) if "expr" in d else None,
-        tuple(d["values"]) if "values" in d else None, d.get("doc"))
+        tuple(d["values"]) if "values" in d else None, d.get("doc"),
+        tuple(d["each"]) if "each" in d else None)
+
+
+def fits(value: Any, type_: m.ScalarType) -> bool:
+    """값이 속성의 타입에 맞는가. bool은 수가 아니다. float 자리에는 정수도 온다."""
+    if type_ == m.ScalarType.BOOL:
+        return isinstance(value, bool)
+    if isinstance(value, bool):
+        return False
+    if type_ == m.ScalarType.INT:
+        return isinstance(value, int)
+    if type_ == m.ScalarType.FLOAT:
+        return isinstance(value, (int, float))
+    if type_ == m.ScalarType.STR:
+        return isinstance(value, str)
+    return isinstance(value, (str, int, float))          # enum: 허용 값은 values 가 정한다
 
 
 def _coupling(d: dict) -> m.Coupling:
@@ -236,11 +265,13 @@ def check_integrity(doc: m.SesDocument) -> None:
         if name not in ents:
             errors.append(f"{where}: 정의되지 않은 엔티티 참조 {name}")
 
-    def expr_vars(e: m.Expr | None, where: str, constraint: bool = False) -> None:
+    def expr_vars(e: m.Expr | None, where: str, constraint: bool = False, attribute: bool = False) -> None:
         if e is None:
             return
         if isinstance(e, m.Var) and e.name not in doc.variables:
             errors.append(f"{where}: 정의되지 않은 변수 {e.name}")
+        if isinstance(e, m.Replica) and not attribute:
+            errors.append(f"{where}: replica 는 속성의 식에서만 쓴다")
         if isinstance(e, m.Selected):
             if not constraint:
                 errors.append(f"{where}: selected 는 선택 제약(constraints)에서만 쓴다")
@@ -249,13 +280,13 @@ def check_integrity(doc: m.SesDocument) -> None:
                 if why:
                     errors.append(f"{where}: {why}")
         for child in getattr(e, "items", ()) or ():
-            expr_vars(child, where, constraint)
+            expr_vars(child, where, constraint, attribute)
         for attr in ("left", "right", "item"):
             if hasattr(e, attr):
-                expr_vars(getattr(e, attr), where, constraint)
+                expr_vars(getattr(e, attr), where, constraint, attribute)
         if isinstance(e, m.Call):
             for a in e.args:
-                expr_vars(a, where, constraint)
+                expr_vars(a, where, constraint, attribute)
 
     for name, ent in ents.items():
         # extends 와 순환
@@ -273,6 +304,12 @@ def check_integrity(doc: m.SesDocument) -> None:
         for p in ent.ports.values():
             if p.type not in doc.port_types:
                 errors.append(f"{name}.ports.{p.name}: 정의되지 않은 포트 타입 {p.type}")
+        # 속성의 식과 복제본마다의 값
+        for a in ent.attributes.values():
+            expr_vars(a.expr, f"{name}.attributes.{a.name}.expr", attribute=True)
+            for i, v in enumerate(a.each or ()):
+                if not fits(v, a.type) or (a.values is not None and v not in a.values):
+                    errors.append(f"{name}.attributes.{a.name}.each[{i}]: 값 {v!r} 이 타입 {a.type.value} 에 맞지 않다")
         # 상속 포트 재선언 검사
         if ent.extends in ents and ent.extends != name:
             parent_ports = doc.all_ports(ent.extends)

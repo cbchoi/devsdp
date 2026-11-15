@@ -17,6 +17,10 @@
 - specialization과 alternative: 그 specialization에서 남길 대안들.
 변수 값은 결정 집합의 variables에 따로 적는다.
 
+속성 값의 재정의(set)는 선택이 아니다. 변이를 줄이지 않고, 만들어지는 구성요소의 속성 값을 바꾼다.
+- at: 그 정의가 준 값을 바꾼다. 그 정의가 구성원인 모든 구성요소에 미치고, 병합 규칙을 그대로 따른다.
+- path: 그 구성요소의 값을 바꾼다. 구성원들이 준 값보다 앞선다. 복제본마다 다른 값을 줄 때 쓴다.
+
 결정은 원래의 SES를 기준으로 해석한다. 결정이 남기려는 선택지가 원래의 SES에 없으면
 낡은 결정으로 보고한다. 편집기의 상태는 (SES, 결정 집합)이고 가지치기된 SES는 그때마다
 다시 계산하는 파생물이다. 이미 가지치기된 SES에 결정을 덧붙여 적용하지 않는다.
@@ -26,11 +30,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field, replace
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
-from .algebra import (ASP, ENT, SPEC, SES, AlgebraError, Tree, determinate, interior,
+from .algebra import (ENT, SPEC, SES, AlgebraError, Tree, determinate, interior,
                       occurrences, prune, reduce, restrict)
-from .skeleton import NO_ASPECT, component_of, is_component, members, real_aspects
+from .skeleton import NO_ASPECT, component_path, is_component, members, real_aspects  # noqa: F401
 
 FALSE = ("or",)
 VAR_PREFIX = "$"
@@ -140,11 +144,53 @@ class Choice:
 
 
 @dataclass(frozen=True)
+class Override:
+    """속성 값의 재정의 하나. at(정의)과 path(구성요소 경로) 가운데 하나로 가리킨다."""
+    attribute: str
+    value: Any
+    at: Optional[str] = None
+    path: Optional[tuple] = None
+
+    @property
+    def key(self) -> tuple:
+        """같은 곳의 같은 속성을 가리키는 재정의는 열쇠가 같다."""
+        where = ("at", self.at) if self.at is not None else ("path", self.path)
+        return ("set",) + where + (self.attribute,)
+
+    def problems(self) -> list:
+        """형식의 문제. 대상 SES와 무관하게 판정된다."""
+        out = []
+        if (self.at is None) == (self.path is None):
+            out.append("at 과 path 가운데 정확히 하나가 있어야 한다")
+        if not isinstance(self.attribute, str) or not self.attribute:
+            out.append("attribute 에 속성의 이름이 있어야 한다")
+        if self.value is None or isinstance(self.value, (list, tuple, dict)):
+            out.append("value 는 값 하나여야 한다")
+        return out
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        if self.at is not None:
+            d["at"] = self.at
+        if self.path is not None:
+            d["path"] = list(self.path)
+        d["attribute"] = self.attribute
+        d["value"] = self.value
+        return d
+
+    @staticmethod
+    def from_dict(d: dict) -> "Override":
+        return Override(d.get("attribute"), d.get("value"), d.get("at"),
+                        tuple(d["path"]) if d.get("path") is not None else None)
+
+
+@dataclass(frozen=True)
 class DecisionSet:
     name: Optional[str] = None
     target: Optional[str] = None                                   # 대상 SES 문서의 이름
     variables: Mapping[str, tuple] = field(default_factory=dict)   # 변수에서 남길 값들로
     choose: tuple = ()
+    set: tuple = ()                                                # 속성 값의 재정의들
 
     def decide(self, choice: Choice) -> "DecisionSet":
         """결정을 더한다. 같은 선택 지점의 결정이 있으면 바꾼다."""
@@ -152,7 +198,13 @@ class DecisionSet:
         return replace(self, choose=rest + (choice,))
 
     def undecide(self, key: tuple) -> "DecisionSet":
-        return replace(self, choose=tuple(c for c in self.choose if c.key != key))
+        """결정이나 재정의 하나를 뺀다."""
+        return replace(self, choose=tuple(c for c in self.choose if c.key != key),
+                       set=tuple(o for o in self.set if o.key != key))
+
+    def override(self, o: Override) -> "DecisionSet":
+        """속성 값의 재정의를 더한다. 같은 곳의 같은 속성에 대한 것이 있으면 바꾼다."""
+        return replace(self, set=tuple(x for x in self.set if x.key != o.key) + (o,))
 
     def assign(self, variable: str, *values) -> "DecisionSet":
         """변수가 가질 수 있는 값을 정한다. 값이 없으면 제한을 푼다."""
@@ -190,6 +242,13 @@ class DecisionSet:
         sub = lambda xs: tuple(new if x == old else x for x in xs)        # noqa: E731
         if what == "variable":
             return replace(self, variables={(new if k == old else k): v for k, v in self.variables.items()})
+        if what == "attribute":                # 정의 수준의 재정의만 고친다. 경로 수준의 것은 problems가 알려 준다
+            return replace(self, set=tuple(replace(o, attribute=new) if o.at == owner and o.attribute == old else o
+                                           for o in self.set))
+        overrides = self.set
+        if what == "entity":
+            overrides = tuple(replace(o, at=new if o.at == old else o.at,
+                                      path=sub(o.path) if o.path is not None else None) for o in self.set)
         out = []
         for c in self.choose:
             if what == "entity":
@@ -204,7 +263,7 @@ class DecisionSet:
                     c = replace(c, aspect=sub(c.aspect),
                                 multi_aspect=new if c.multi_aspect == old else c.multi_aspect)
             out.append(c)
-        return replace(self, choose=tuple(out),
+        return replace(self, choose=tuple(out), set=overrides,
                        target=new if what == "entity" and self.target == old else self.target)
 
     def to_dict(self) -> dict:
@@ -217,13 +276,16 @@ class DecisionSet:
             d["variables"] = {k: _one(v) for k, v in self.variables.items()}
         if self.choose:
             d["choose"] = [c.to_dict() for c in self.choose]
+        if self.set:
+            d["set"] = [o.to_dict() for o in self.set]
         return d
 
     @staticmethod
     def from_dict(d: dict) -> "DecisionSet":
         return DecisionSet(d.get("name"), d.get("target"),
                            {k: _tuple(v) for k, v in (d.get("variables") or {}).items()},
-                           tuple(Choice.from_dict(c) for c in d.get("choose") or ()))
+                           tuple(Choice.from_dict(c) for c in d.get("choose") or ()),
+                           tuple(Override.from_dict(o) for o in d.get("set") or ()))
 
 
 def load_decisions(path: str) -> DecisionSet:
@@ -236,14 +298,8 @@ def load_decisions(path: str) -> DecisionSet:
 # 가지치기 SES로의 번역
 # ---------------------------------------------------------------------------
 
-def component_path(T: Tree, q: tuple) -> tuple:
-    """구성요소 경로: 뿌리에서 그 구성요소까지의 부분 이름들. aspect와 대안의 이름은 빠진다."""
-    q = component_of(T, q)
-    return (q[0],) + tuple(q[i] for i in range(1, len(q)) if T.kind(q[:i]) == ASP)
-
-
-def owners(T: Tree, c: Choice) -> list:
-    """결정이 가리키는 엔티티 노드들."""
+def owners(T: Tree, c) -> list:
+    """결정이나 재정의가 가리키는 엔티티 노드들."""
     if c.at is not None:
         return occurrences(T, c.at)
     if c.path is not None:
@@ -366,6 +422,87 @@ def patterns(S: SES, ds: DecisionSet, skip_invalid: bool = False) -> list:
 def apply(S: SES, ds: DecisionSet, skip_invalid: bool = False) -> Optional[SES]:
     """S에 결정 집합을 적용한 가지치기된 SES. 남는 변이가 없으면 None."""
     return prune(S, *patterns(S, ds, skip_invalid))
+
+
+# ---------------------------------------------------------------------------
+# 속성 값의 재정의
+# ---------------------------------------------------------------------------
+
+def _override_problem(T: Tree, decls: Mapping, o: Override) -> Optional[str]:
+    """재정의 하나가 대상에 맞지 않는 까닭. 맞으면 None."""
+    bad = o.problems()
+    if bad:
+        return "; ".join(bad)
+    ys = owners(T, o)
+    if not ys:
+        return "재정의가 가리키는 곳이 대상에 없다"
+    found = [decls[y][o.attribute] for y in ys if o.attribute in (decls.get(y) or {})]
+    if not found:
+        where = f"정의 {o.at}" if o.at is not None else f"구성요소 {'/'.join(o.path)}"
+        return f"{where} 에 속성 {o.attribute} 가 없다"
+    for d in found:
+        if not _fits(o.value, d.type):
+            return f"값 {o.value!r} 이 속성 {o.attribute} 의 타입 {d.type} 에 맞지 않다"
+    return None
+
+
+def _fits(value, type_: str) -> bool:
+    from . import model as m
+    from .loader import fits
+    try:
+        return fits(value, m.ScalarType(type_))
+    except ValueError:
+        return True                            # 문서 밖에서 만든 선언의 타입은 판정하지 않는다
+
+
+def _attr_extension(L):
+    return next((x for x in L.extensions if x.name == "attr"), None)
+
+
+def override_problems(L, ds: DecisionSet) -> list:
+    """대상에 맞지 않는 재정의: (열쇠, 설명)의 목록. L은 속성 확장이 얹힌 SES다."""
+    attr = _attr_extension(L)
+    decls = attr.decls if attr is not None else {}
+    out = []
+    for o in ds.set:
+        why = _override_problem(L.ses.tree, decls, o)
+        if why is not None:
+            out.append((o.key, why))
+    return out
+
+
+def with_overrides(L, ds: DecisionSet, skip_invalid: bool = False):
+    """결정 집합의 속성 재정의를 얹은 것. 변이의 집합은 바뀌지 않는다.
+
+    그 뒤에 붙이는 실행기(executor.attach)와 해석이 재정의된 값을 본다. 대상에 맞지 않는 재정의가 있으면
+    AlgebraError를 낸다. skip_invalid이면 그런 것을 빼고 얹는다.
+    """
+    if not ds.set:
+        return L
+    bad = dict(override_problems(L, ds))
+    if bad and not skip_invalid:
+        key, why = next(iter(bad.items()))
+        raise AlgebraError(f"{'/'.join('/'.join(x) if isinstance(x, tuple) else str(x) for x in key)}: {why}")
+    attr = _attr_extension(L)
+    if attr is None:
+        return L
+    good = [o for o in ds.set if o.key not in bad]
+    by_def = {(o.at, o.attribute): o.value for o in good if o.at is not None}
+    by_path = {(tuple(o.path), o.attribute): o.value for o in good if o.path is not None}
+    T = L.ses.tree
+    new = attr.overridden(by_def, by_path, {p: T.label(p) for p in attr.decls})
+    return type(L)(L.ses, L.void, tuple(new if x is attr else x for x in L.extensions))
+
+
+def decide(L, ds: DecisionSet, skip_invalid: bool = False):
+    """결정 집합 전체를 적용한 것: 선택으로 가지치기하고 속성 재정의를 얹는다. 남는 변이가 없으면 None.
+
+    재정의도 선택에 대한 결정처럼 원래의 SES를 기준으로 해석한다. 같은 결정 집합의 선택이 지운 곳을
+    가리키는 재정의는 낡은 것이 아니다. 그 변이들에서 쓰이지 않을 뿐이다.
+    """
+    over = with_overrides(L, ds, skip_invalid)
+    R = apply(L.ses, ds, skip_invalid)
+    return None if R is None else type(L)(R, over.void, over.extensions)
 
 
 # ---------------------------------------------------------------------------

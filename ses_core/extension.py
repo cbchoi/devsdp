@@ -9,6 +9,9 @@
 확장은 View만 받는다. 선택되지 않은 노드나 바깥의 나무를 볼 수 없으므로
 적격성은 변이 자체의 성질이 되고, 핵의 정리(보존, 적격 핵, 합성)가 모든
 확장에 대해 성립한다.
+
+주석은 변이의 변수 값에 달려 있을 수 있다(given). 변수 값은 변이가 고른 것이고 변이만으로
+정해지므로 위의 성질은 그대로다 (docs/ses-platform/18_classic_parity.md 4절).
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from typing import Any, Mapping, Optional
 
 from .algebra import ENT, SES, Tree, f_and, sem
 from .algebra import prune as _prune
-from .skeleton import Comp, core_psi, core_violations, skeleton
+from .skeleton import Comp, assignment, core_psi, core_violations, skeleton
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,13 @@ class Extension:
     """확장 X의 기반 클래스. 하위 클래스가 필요한 메서드를 채운다."""
 
     name = "x"
+
+    def given(self, env: Mapping) -> "Extension":
+        """변이의 변수 값이 env 일 때의 확장. env 는 변수 이름에서 값 노드의 이름으로 가는 사전이다.
+
+        주석이 변수 값에 달려 있지 않은 확장은 자신을 돌려준다.
+        """
+        return self
 
     def entity(self, path: tuple) -> Any:
         """엔티티 노드의 주석. 없으면 None."""
@@ -123,7 +133,8 @@ def violations(L: Layered, V: frozenset) -> list:
         for child in v.children.values():
             walk(ext, child)
 
-    for ext in L.extensions:
+    env = assignment(T, V)
+    for ext in (x.given(env) for x in L.extensions):
         root = view(ext, T, sk)
         walk(ext, root)
         out.extend((ext.name, code, path, msg) for code, path, msg in ext.check_tree(root))
@@ -152,7 +163,8 @@ def interpret(L: Layered, V: frozenset) -> Optional[dict]:
     def go(ext: Extension, v: View):
         return ext.interpret(v, {n: go(ext, c) for n, c in v.children.items()})
 
-    return {ext.name: go(ext, view(ext, T, sk)) for ext in L.extensions}
+    env = assignment(T, V)
+    return {ext.name: go(ext, view(ext, T, sk)) for ext in (x.given(env) for x in L.extensions)}
 
 
 def wf_pattern(L: Layered, syntactic: bool = True) -> SES:

@@ -131,6 +131,9 @@ Attribute
 | unit | str? | | 단위 문자열. 검증하지 않고 전달만 한다 |
 | expr | Expr? | | 변수에서 유도되는 값. default 와 동시 지정 시 expr 우선 |
 | values | List<Value>? | | enum 타입의 허용 값 |
+| each | List<Value>? | | 복제본마다의 값. 2026-11-15 추가 (18 문서의 4절). expr 과 함께 쓰지 못한다 |
+
+2026-11-15 추가. expr 은 이 날까지 읽기만 하고 쓰지 않았다. 지금은 변수, 등록한 함수, 복제본의 번호와 개수에서 값을 낸다.
 
 ### 4.6 Aspect
 
@@ -247,7 +250,7 @@ at 이 NodeId(정의 수준)이면 그 정의가 나타나는 모든 인스턴�
 
 2026-11-12 수정. 초안은 "둘 다 있으면 인스턴스 수준이 우선한다"고 적었으나 철회한다. 07 문서의 가지치기 대수에서 Configuration 은 가지치기 SES 의 직렬화이며, 정의 수준 결정과 인스턴스 수준 결정은 모두 적용되고 서로 모순이면 결과는 모순(⊥)이다. 덮어쓰기 규칙은 결과를 결정 순서에 의존하게 만들어 가지치기 연산의 교환 법칙을 깨뜨린다.
 
-2026-11-14 추가. 이 절의 values와 decisions는 13 문서의 결정 집합(ses_core/decisions.py)으로 구현되었다. values는 결정 집합의 variables, decisions는 choose에 해당하고, at이 NodeId인 결정은 at, InstancePath인 결정은 path로 적는다. 파일 형식과 스키마는 13 문서 7절과 schema/decisions.schema.json에 있다. overrides(속성 재정의)는 결정 집합에 넣지 않았다. 이 절의 표와 ses_core/model.py의 Configuration 선언은 초안으로 남아 있으며 어떤 코드도 쓰지 않는다. 6절의 PruningTrace는 결정을 순서 있는 열로 기록하는 설계인데, 결정 집합은 순서가 없는 집합이므로 그대로는 맞지 않는다.
+2026-11-14 추가. 이 절의 values와 decisions는 13 문서의 결정 집합(ses_core/decisions.py)으로 구현되었다. values는 결정 집합의 variables, decisions는 choose에 해당하고, at이 NodeId인 결정은 at, InstancePath인 결정은 path로 적는다. 파일 형식과 스키마는 13 문서 7절과 schema/decisions.schema.json에 있다. overrides(속성 재정의)는 결정 집합에 넣지 않았다. (2026-11-15: 결정 집합의 set으로 넣었다. 18 문서의 4절.) 이 절의 표와 ses_core/model.py의 Configuration 선언은 초안으로 남아 있으며 어떤 코드도 쓰지 않는다. 6절의 PruningTrace는 결정을 순서 있는 열로 기록하는 설계인데, 결정 집합은 순서가 없는 집합이므로 그대로는 맞지 않는다.
 
 ## 6. 기록 계층: PruningTrace
 

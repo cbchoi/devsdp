@@ -23,6 +23,11 @@
   분석은 함수의 값의 표만 본다. 함수는 같은 인자에 늘 같은 값을 내야 한다.
 - selected 는 선택 제약에서만 쓴다. 가리키는 선택지 노드가 골라졌고 그 선택 지점이 실제로 있는
   구성요소의 것일 때 참이다. 없음이 된 구성요소 아래에서 한 선택은 세지 않는다.
+
+속성의 값 (docs/ses-platform/18_classic_parity.md 4절)
+- each 는 복제본마다의 값이다. 가장 가까운 복제본의 번호로 고른다. 펼칠 때 정해진다.
+- expr 은 변수, 등록한 함수, 복제본의 번호와 개수(replica)에서 값을 낸다. 변수를 보지 않으면 펼칠 때
+  정해지고, 보면 변수 값의 조합마다의 값을 표로 적어 두었다가 변이의 변수 값으로 찾는다.
 """
 
 from __future__ import annotations
@@ -38,13 +43,29 @@ from .decisions import component_path, family
 from .ext_attr import AttrDecl, Attributes
 from .ext_text import Text
 from .extension import Layered
-from .loader import selected_target
+from .loader import fits, selected_target
 from .profile import Domain, Item, Profile
 from .skeleton import NO_ASPECT, component_of, components, is_component, live_formula, members, owner
 
 _OPS = {"eq": operator.eq, "ne": operator.ne, "lt": operator.lt, "le": operator.le,
         "gt": operator.gt, "ge": operator.ge, "in": lambda v, c: v in c}
 MAX_ROWS = 20000                 # 원자 하나의 표가 가질 수 있는 변수 값 조합의 수
+REPLICAS = "#replicas"           # 식을 평가할 때 복제본의 (번호, 개수)들을 바깥에서 안으로 적어 두는 자리
+
+
+def replica_levels(e) -> set:
+    """식이 묻는 복제본의 겹(up)들."""
+    if isinstance(e, m.Replica):
+        return {e.up}
+    out: set = set()
+    for x in getattr(e, "items", ()) or ():
+        out |= replica_levels(x)
+    for attr in ("left", "right", "item"):
+        if hasattr(e, attr):
+            out |= replica_levels(getattr(e, attr))
+    for a in getattr(e, "args", ()) or ():
+        out |= replica_levels(a)
+    return out
 
 
 def expr_vars(e) -> set:
@@ -68,6 +89,11 @@ def evaluate(e, env: dict, functions=None):
         return e.value
     if isinstance(e, m.Var):
         return env[e.name]
+    if isinstance(e, m.Replica):
+        stack = env.get(REPLICAS, ())
+        if e.up >= len(stack):
+            raise AlgebraError(f"복제본이 아닌 곳에서 복제본의 {e.what} 를 물었다 (up={e.up})")
+        return stack[-1 - e.up][0 if e.what == "index" else 1]
     if isinstance(e, m.Compare):
         left, right = evaluate(e.left, env, functions), evaluate(e.right, env, functions)
         try:
@@ -189,9 +215,47 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
     layouts: dict = {}
     items: dict = {}
     decomps: dict = {}                               # 엔티티 노드에서 그 분해들로: [이름, aspect 노드들, 규칙, 우선순위]
+    computed: dict = {}                              # (정의, 속성, 식이 본 복제본들)에서 그 속성의 선언으로
 
     def value(name: str, v) -> tuple:
         return root + (var_node(name), str(v))
+
+    def attribute(def_name: str, a: m.Attribute, replicas: tuple) -> AttrDecl:
+        """정의 def_name 의 속성 a 가 이 자리에서 가지는 값. replicas 는 바깥에서 안으로 적은 (번호, 개수)들이다."""
+        kind = a.type.value
+        if a.each is not None:
+            i = replicas[-1][0] if replicas else None
+            return AttrDecl(kind, a.each[i] if i is not None and i < len(a.each) else a.default)
+        if a.expr is None:
+            return AttrDecl(kind, a.default)
+        levels = replica_levels(a.expr)
+        if levels and max(levels) >= len(replicas):
+            raise AlgebraError(f"속성 {def_name}.{a.name} 의 식이 복제본의 번호를 쓰는데, "
+                               f"그 정의가 놓인 자리를 감싼 multi-aspect 가 {len(replicas)} 겹뿐이다")
+        key = (def_name, a.name, tuple(replicas[-1 - u] for u in sorted(levels)))
+        if key in computed:
+            return computed[key]
+        names = sorted(expr_vars(a.expr))
+        domains = [_domain(doc, n) for n in names]
+        rows = 1
+        for d in domains:
+            rows *= len(d)
+        if rows > MAX_ROWS:
+            raise AlgebraError(f"속성 {def_name}.{a.name} 의 표가 너무 크다. 변수 {names} 의 값 조합이 {rows} 가지다")
+        table = {}
+        for row in product(*domains):
+            v = evaluate(a.expr, dict(zip(names, row), **{REPLICAS: replicas}), functions)
+            if v is not None and (not fits(v, a.type) or (a.values is not None and v not in a.values)):
+                raise AlgebraError(f"속성 {def_name}.{a.name} 의 식이 타입 {kind} 에 맞지 않는 값 {v!r} 을 냈다"
+                                   + (f" (변수 값 {dict(zip(names, row))})" if names else ""))
+            table[row] = v
+        if not names:
+            decl = AttrDecl(kind, table[()])
+        else:
+            decl = AttrDecl(kind, None, False, lambda env, names=tuple(names), table=table:
+                            table[tuple(env[n] for n in names)])
+        computed[key] = decl
+        return decl
 
     def table(e: m.Expr):
         """변수에 대한 조건 하나를, 그것이 참이 되는 변수 값의 조합들로 적는다."""
@@ -232,12 +296,12 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
             rest = sel(sp_path + (other,))
         return f_and(f_imp(cond, sel(sp_path + (rule.then,))), f_imp(f_not(cond), rest))
 
-    def rec(def_name: str, path: tuple) -> None:
+    def rec(def_name: str, path: tuple, replicas: tuple = ()) -> None:
         kinds[path] = ENT
         labels[path] = def_name                      # 정의 표지: 이름과 별개
         e = doc.entities[def_name]
         if e.attributes:
-            attrs[path] = {n: AttrDecl(a.type.value, a.default) for n, a in e.attributes.items()}
+            attrs[path] = {n: attribute(def_name, a, replicas) for n, a in e.attributes.items()}
         if e.kind is not None or e.fields or e.links:
             items[path] = Item(e.kind, dict(e.fields), dict(e.links))
         text = e.metadata.get("text") if e.metadata else None
@@ -255,14 +319,14 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
             sp_path = path + (sp.name,)
             kinds[sp_path] = SPEC
             for alt in sp.alternatives:
-                rec(alt, sp_path + (alt,))
+                rec(alt, sp_path + (alt,), replicas)
             if sp.select is not None:
                 clauses.append(f_imp(sel(sp_path), select(sp.select, sp_path)))
         for a in e.aspects.values():
             a_path = path + (a.name,)
             kinds[a_path] = ASP
             for part in a.parts:
-                rec(part.def_name, a_path + (part.part_name,))
+                rec(part.def_name, a_path + (part.part_name,), replicas)
             layouts[a_path] = (tuple(p.part_name for p in a.parts), seps.get(a.name, ""))
             if a.couplings:
                 coup[a_path] = _plain(a.couplings)
@@ -274,8 +338,8 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
                 a_path = path + (f"{ma.name}[{n}]",)
                 kinds[a_path] = ASP
                 names = [_replica_name(ma, i, n) for i in range(n)]
-                for name in names:
-                    rec(ma.part.def_name, a_path + (name,))
+                for i, name in enumerate(names):
+                    rec(ma.part.def_name, a_path + (name,), replicas + ((i, n),))
                 layouts[a_path] = (tuple(names), seps.get(ma.name, ""))
                 ks = _instantiate_pattern(ma, names)
                 if ks:
@@ -389,7 +453,9 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
         clauses.append(f_imp(tr(c.when, chosen), body) if c.when is not None else body)
     ann = Ann(ports, frozenset(void), coup)
     validate(tree, ann)
-    return {"ses": SES(tree, f_and(*clauses)), "ann": ann, "attrs": attrs,
+    typed = {name: {str(v): v for v in _domain(doc, name)} for name in doc.variables}
+    return {"ses": SES(tree, f_and(*clauses)), "ann": ann, "attrs": attrs, "typed": typed,
+            "labels": {p: labels[p] for p in attrs},
             "templates": templates, "layouts": layouts, "items": items}
 
 
@@ -417,7 +483,7 @@ def unfold_layered(doc: m.SesDocument, profile: Profile = None, functions=None) 
     if ann.ports or ann.coup:
         exts.append(Coupling(ann.ports, ann.coup))
     if u["attrs"]:
-        exts.append(Attributes(u["attrs"]))
+        exts.append(Attributes(u["attrs"], u["typed"], u["labels"]))
     if u["templates"]:
         exts.append(Text(u["templates"], u["layouts"]))
     if doc.profile is not None or u["items"]:

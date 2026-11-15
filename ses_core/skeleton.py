@@ -61,6 +61,26 @@ def owner(T: Tree, a: tuple) -> tuple:
     return component_of(T, a[:-1])
 
 
+def component_path(T: Tree, q: tuple) -> tuple:
+    """구성요소 경로: 뿌리에서 그 구성요소까지의 부분 이름들. aspect와 대안의 이름은 빠진다."""
+    q = component_of(T, q)
+    return (q[0],) + tuple(q[i] for i in range(1, len(q)) if T.kind(q[:i]) == ASP)
+
+
+def assignment(T: Tree, V: frozenset) -> dict:
+    """변이 V가 고른 변수 값: 변수 이름에서 값 노드의 이름으로.
+
+    변수는 전역이다. 확장의 주석이 변수 값에 달려 있을 때(속성의 식) 확장이 이것을 받는다.
+    """
+    out = {}
+    for s in T.specs(T.root):
+        if s[-1].startswith(VARIABLE_PREFIX):
+            for c in T.children(s):
+                if c in V:
+                    out[s[-1][len(VARIABLE_PREFIX):]] = c[-1]
+    return out
+
+
 def components(T: Tree) -> list:
     return sorted(e for e in T.nodes if T.kind(e) == ENT and is_component(T, e))
 

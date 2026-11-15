@@ -101,6 +101,17 @@ class Call(Expr):
     args: tuple[Expr, ...] = ()
 
 
+@dataclass(frozen=True)
+class Replica(Expr):
+    """복제본의 번호나 개수. 속성의 식에서만 쓴다.
+
+    what은 index(0부터 센 번호) 또는 count(그 multi-aspect가 만든 복제본의 수)다. up은 몇 겹
+    바깥의 복제본인가이다. 0이면 그 구성요소 자신이거나 그것을 담은 가장 가까운 복제본이다.
+    """
+    what: str
+    up: int = 0
+
+
 # ---------------------------------------------------------------------------
 # 타입 계층
 # ---------------------------------------------------------------------------
@@ -147,9 +158,10 @@ class Attribute:
     type: ScalarType
     default: Optional[Value] = None
     unit: Optional[str] = None
-    expr: Optional[Expr] = None
-    values: Optional[tuple[Value, ...]] = None
+    expr: Optional[Expr] = None                    # 변수, 등록한 함수, 복제본의 번호에서 정해지는 값. default보다 앞선다
+    values: Optional[tuple[Value, ...]] = None     # enum 타입의 허용 값
     doc: Optional[str] = None
+    each: Optional[tuple[Value, ...]] = None       # 복제본마다의 값. i번째 복제본이 i번째 값을 가진다
 
 
 @dataclass(frozen=True)

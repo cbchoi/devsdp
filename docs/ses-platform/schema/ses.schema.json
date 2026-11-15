@@ -203,7 +203,11 @@
         },
         "expr": {
           "$ref": "#/$defs/expression",
-          "description": "SES 변수나 함수에서 유도되는 값"
+          "description": "SES 변수, 등록한 함수, 복제본의 번호에서 정해지는 값. default보다 앞선다. each와 함께 쓸 수 없다."
+        },
+        "each": {
+          "type": "array",
+          "description": "복제본마다의 값. multi-aspect의 i번째 복제본(과 그 아래)이 i번째 값을 가진다. 복제본이 아니거나 목록이 모자라면 default를 쓴다."
         },
         "doc": {
           "type": "string"
@@ -786,6 +790,34 @@
             }
           },
           "description": "이름으로 등록된 SES 함수 호출. 함수 본문은 코드(플러그인)에 있고 명세에는 이름만 둔다. 인자는 상수이거나 값으로 쓰는 식이다. 비교 연산자를 함께 적으면 함수의 값을 견준다. 함수는 같은 인자에 늘 같은 값을 내야 한다."
+        },
+        {
+          "required": [
+            "replica"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "replica": {
+              "enum": [
+                "index",
+                "count"
+              ]
+            },
+            "up": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "eq": {},
+            "ne": {},
+            "ge": {},
+            "gt": {},
+            "le": {},
+            "lt": {},
+            "in": {
+              "type": "array"
+            }
+          },
+          "description": "복제본의 번호(index, 0부터)나 그 multi-aspect가 만든 복제본의 수(count). 속성의 식에서만 쓴다. up은 몇 겹 바깥의 복제본인가이고 적지 않으면 0(자신이거나 자신을 담은 가장 가까운 복제본)이다."
         }
       ]
     }

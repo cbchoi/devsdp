@@ -25,7 +25,9 @@ from typing import Any, Callable, Mapping, Optional
 from . import structure as st
 from .algebra import sem
 from .coupling import PortDecl
-from .ext_attr import AttrDecl
+import copy
+
+from .ext_attr import AttrDecl, Attributes, combine
 from .extension import Extension, Layered, View, interpret, violations, wf_core
 
 # 매개변수의 타입. time은 시간 값이다. 수이고, 시간 단위의 음이 아닌 정수배이거나 무한이어야 한다
@@ -218,7 +220,7 @@ class Bound(Extension):
     해석: 계획. 전선에서 자른 구조에 모듈과 매개변수 값을 붙인 것.
     """
 
-    def __init__(self, name: str, label: Callable, ports: Mapping, coup: Mapping, attrs: Mapping,
+    def __init__(self, name: str, label: Callable, ports: Mapping, coup: Mapping, attrs: Optional[Attributes],
                  binding: Binding, library: Mapping, conventions=(), time_unit: Optional[float] = None) -> None:
         self.name = name
         self._label, self.ports, self.coup, self.attrs = label, ports, coup, attrs
@@ -227,8 +229,17 @@ class Bound(Extension):
 
     # 주석과 병합 ----------------------------------------------------------
 
+    def given(self, env):
+        """속성의 값이 변수 값에 달려 있으면 그 값으로 정한 확장을 돌려준다."""
+        attrs = self.attrs.given(env) if self.attrs is not None else None
+        if attrs is self.attrs:
+            return self
+        out = copy.copy(self)
+        out.attrs = attrs
+        return out
+
     def entity(self, path):
-        return (self.ports.get(path) or {}, self.attrs.get(path) or {},
+        return (self.ports.get(path) or {}, (self.attrs.entity(path) if self.attrs is not None else None) or {},
                 self.binding.map.get(self._label(path)), self._label(path))
 
     def aspect(self, path):
@@ -236,12 +247,9 @@ class Bound(Extension):
 
     def merge(self, tree, items):
         decls: dict = {}
-        values: dict = {}
-        for path, (ports, attrs, _, _) in items:
+        for path, (ports, _, _, _) in items:
             for p, d in ports.items():
                 decls.setdefault(p, []).append(d)
-            for name, d in attrs.items():
-                values.setdefault(name, []).append((path, d))
         ports = {p: PortDecl(ds[0].type, ds[0].direction, any(d.required for d in ds))
                  for p, ds in decls.items()}
         port_conflicts = tuple(p for p, ds in decls.items() if len({(d.type, d.direction) for d in ds}) > 1)
@@ -250,12 +258,11 @@ class Bound(Extension):
             """다른 것의 조상이 아닌 것들: 가장 구체적인 구성원이 준 것."""
             return [(p, x) for p, x in pairs if not any(q != p and q[:len(p)] == p for q, _ in pairs)]
 
-        attrs, attr_conflicts = {}, []
-        for name, lst in values.items():
-            setters = top([(p, d) for p, d in lst if d.value is not None])
-            if len({d.type for _, d in lst}) > 1 or len({repr(d.value) for _, d in setters}) > 1:
-                attr_conflicts.append(name)
-            attrs[name] = AttrDecl(lst[0][1].type, setters[0][1].value if setters else None)
+        # 속성은 속성 확장과 같은 규칙으로 합친다. 구성요소 수준의 재정의도 거기서 얹힌다
+        declared = [(path, a) for path, (_, a, _, _) in items if a]
+        attrs, types, values = (self.attrs.combine(tree, declared) if self.attrs is not None
+                                else combine(declared))
+        attr_conflicts = [name for name in attrs if name in types or name in values]
         bound = [(path, (b, label)) for path, (_, _, b, label) in items if b is not None]
         best = top(bound)
         return _Merged(ports, port_conflicts, attrs, tuple(attr_conflicts), bool(bound),
@@ -379,7 +386,7 @@ def attach(L: Layered, executor: Executor, binding: Binding, library: Mapping) -
     attrs = next((x for x in L.extensions if x.name == "attr"), None)
     ext = Bound(f"exec:{executor.name}", L.ses.tree.label,
                 structure.ports if structure else {}, structure.coup if structure else {},
-                attrs.decls if attrs else {}, binding, library, executor.conventions(),
+                attrs, binding, library, executor.conventions(),
                 getattr(executor, "time_unit", None))
     return L.plus(ext), ext
 

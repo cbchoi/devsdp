@@ -20,9 +20,27 @@
         ]
       }
     },
-    "choose": {"type": "array", "items": {"$ref": "#/$defs/choice"}}
+    "choose": {"type": "array", "items": {"$ref": "#/$defs/choice"}},
+    "set": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/override"},
+      "description": "속성 값의 재정의. 선택이 아니다. 변이를 줄이지 않고, 만들어지는 구성요소의 속성 값을 바꾼다."
+    }
   },
   "$defs": {
+    "override": {
+      "description": "속성 값의 재정의 하나. at은 그 정의가 준 값을 바꾸고(그 정의가 구성원인 모든 구성요소에 미친다), path는 그 구성요소의 값을 바꾼다(구성원들이 준 값보다 앞선다).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attribute", "value"],
+      "properties": {
+        "at": {"type": "string", "description": "정의 이름."},
+        "path": {"type": "array", "minItems": 1, "items": {"type": "string"}, "description": "구성요소 경로. 뿌리에서부터 부분 이름들."},
+        "attribute": {"type": "string"},
+        "value": {"$ref": "#/$defs/scalar"}
+      },
+      "oneOf": [{"required": ["at"]}, {"required": ["path"]}]
+    },
     "scalar": {"type": ["string", "number", "boolean"]},
     "names": {
       "oneOf": [
