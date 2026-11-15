@@ -53,6 +53,11 @@ def _eval(e: Optional[m.Expr], sigma: dict, functions=None, picks=None, doc=None
     raise ValueError(f"절차적 의미가 다루지 않는 식: {e!r}")
 
 
+def _above(p, q) -> bool:
+    """우선순위 p가 q보다 앞서는가. 수가 클수록 앞선다. 없는 것은 가장 뒤이고, 없는 것끼리는 가르지 못한다."""
+    return p is not None and (q is None or p > q)
+
+
 def _mentions_selected(e) -> bool:
     if isinstance(e, m.Selected):
         return True
@@ -80,7 +85,7 @@ def enumerate_classic(doc: m.SesDocument, functions=None) -> list:
 
     구조는 결합 확장의 해석과 같은 모양의 중첩 사전이고, 구성요소마다 합쳐진 정의들의 이름
     (labels)이 더 붙는다. 합칠 수 없는 경우(같은 이름의 포트를 다르게 선언, 엔티티와 고른
-    대안이 각자 분해를 가짐)와 뿌리가 없음이 되는 경우는 내놓지 않는다.
+    대안이 각자 분해를 가지는데 우선순위로 가를 수 없음)와 뿌리가 없음이 되는 경우는 내놓지 않는다.
 
     변수만 보는 제약은 조립하기 전에 검사한다. 선택에 대한 제약(selected)은 조립하면서 한 선택들을
     모아 두었다가 조립한 뒤에 검사한다. functions 는 식의 call 이 부르는 함수들이다.
@@ -140,30 +145,41 @@ def _build(doc, def_name: str, sigma: dict, memo: dict, functions=None) -> list:
                 if p.required:
                     required.add(p.name)
         owners = [e for e in ents if e.aspects or e.multi_aspects]
-        if clash or len(owners) > 1:
+        if clash:
             continue                                          # 합칠 수 없다
         base = {"labels": sorted(members), "ports": ports, "required": sorted(required)}
         if not owners:
             results.append((dict(base, children={}, eic=[], eoc=[], ic=[]), chosen))
             continue
-        e = owners[0]
-        forced = [a for a in e.aspects.values() if a.rule is not None and _eval(a.rule, sigma, functions)]
-        if len(forced) > 1:
-            continue                                          # 두 규칙이 서로 다른 aspect를 요구한다
-        choices = []                                          # (부분의 (이름, 정의) 목록, 결합, 이때 한 선택)
-        for a in e.aspects.values():
-            if forced and a is not forced[0]:
+        # 구성원마다, 규칙이 허락하는 분해들과 그 가운데 실제로 고를 수 있는 것들
+        allowed, real = {}, {}
+        for e in owners:
+            fams = list(e.aspects.values()) + list(e.multi_aspects.values())
+            forced = [a for a in fams if a.rule is not None and _eval(a.rule, sigma, functions)]
+            if not forced:
+                allowed[e.name] = real[e.name] = fams         # 참인 규칙이 없으면 어느 것이나 고를 수 있다
                 continue
-            ks = [((c.src.part, c.src.port), (c.dst.part, c.dst.port)) for c in a.couplings]
-            choices.append(([(p.part_name, p.def_name) for p in a.parts], ks, {("aspect", e.name, "", a.name)}))
-        for ma in ([] if forced else e.multi_aspects.values()):
-            card = ma.cardinality
-            counts = [card.n] if isinstance(card, m.Fixed) else [sigma[card.var]] \
-                if isinstance(card, m.VarCard) else range(card.min, card.max + 1)
-            for n in counts:
-                replicas = [_replica_name(ma, i, n) for i in range(n)]
-                choices.append(([(r, ma.part.def_name) for r in replicas], list(_instantiate_pattern(ma, replicas)),
-                                {("aspect", e.name, "", ma.name), ("count", e.name, ma.name, n)}))
+            top = [a for a in forced if not any(_above(b.priority, a.priority) for b in forced)]
+            allowed[e.name] = top                             # 우선순위가 가장 높은 것. 가르지 못하면 여럿이다
+            real[e.name] = top if len(top) == 1 else []       # 두 규칙이 서로 다른 분해를 요구하면 고를 수 없다
+        choices = []                                          # (부분의 (이름, 정의) 목록, 결합, 이때 한 선택)
+        for e in owners:
+            for a in real[e.name]:
+                # 병합으로 형제가 된 분해들 가운데 우선순위가 가장 높은 것이 구성요소의 분해다.
+                # 다른 구성원은 모두 밀려야 한다. 가르지 못하면 합칠 수 없다
+                if not all(any(_above(a.priority, b.priority) for b in allowed[z.name]) for z in owners if z is not e):
+                    continue
+                if isinstance(a, m.Aspect):
+                    ks = [((c.src.part, c.src.port), (c.dst.part, c.dst.port)) for c in a.couplings]
+                    choices.append(([(p.part_name, p.def_name) for p in a.parts], ks, {("aspect", e.name, "", a.name)}))
+                    continue
+                card = a.cardinality
+                counts = [card.n] if isinstance(card, m.Fixed) else [sigma[card.var]] \
+                    if isinstance(card, m.VarCard) else range(card.min, card.max + 1)
+                for n in counts:
+                    replicas = [_replica_name(a, i, n) for i in range(n)]
+                    choices.append(([(r, a.part.def_name) for r in replicas], list(_instantiate_pattern(a, replicas)),
+                                    {("aspect", e.name, "", a.name), ("count", e.name, a.name, n)}))
         for parts, ks, mine in choices:
             for combo in product(*(_build(doc, d, sigma, memo, functions) for _, d in parts)):
                 kids = {name: c for (name, _), (c, _) in zip(parts, combo) if c is not None}

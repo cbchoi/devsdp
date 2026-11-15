@@ -705,9 +705,15 @@ def _family(m: Model, L: Layered, domains: dict, result: Analysis) -> Analysis:
     base = choice_table(S, reduce(S), domains)
     core = choice_table(S, SES(restrict(T, frozenset().union(*good))), domains)
     result.table = core
+    present = frozenset().union(*good)
     for p_all, p_core in zip(base, core):
+        pushed = False
         if not p_core.active:
-            continue                                     # 이 지점 자체가 적격 변이에 없다. 위쪽 선택지가 보고된다
+            # 이 지점 자체가 적격 변이에 없다. 위쪽 선택지가 보고된다. 다만 엔티티는 나타나는데 그 분해가 하나도
+            # 나타나지 않는다면, 다른 구성원의 분해에 우선순위로 늘 밀리는 것이다 (18 문서)
+            pushed = p_core.kind == "aspect" and any(T.kind(q) == ENT and T.label(q) == p_core.owner for q in present)
+            if not pushed:
+                continue
         for (option, in_any), (_, in_good) in zip(p_all.options, p_core.options):
             if in_good:
                 continue
@@ -715,6 +721,8 @@ def _family(m: Model, L: Layered, domains: dict, result: Analysis) -> Analysis:
             where = f"{p_core.owner} 의 {p_core.group or '분해'}" if p_core.kind != "variable" \
                 else f"변수 {p_core.owner}"
             why = "적격인 변이에 나타나지 않는다" if in_any else "제약 때문에 어떤 변이에도 나타나지 않는다"
+            if pushed:
+                why = "다른 구성원의 분해에 우선순위로 밀려 적격인 변이에 나타나지 않는다"
             diags.append(Diagnostic("warning", "DEAD", f"{where} 에서 선택지 {option} 은 {why}",
                                     element or doc_id, m.address(element or doc_id), path, scope="family",
                                     data={"owner": p_core.owner, "kind": p_core.kind, "group": p_core.group,

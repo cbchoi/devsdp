@@ -8,8 +8,13 @@
 - pruning_patterns(doc): 접힌 형태의 가지치기 SES를 정의별 높이 2 패턴의
   모음으로 바꾼다. 각 패턴은 그 정의의 모든 출현에 적용된다.
 
-기본값(default)과 우선순위(priority)는 변이 공간을 바꾸지 않는 선호이므로
-여기서는 다루지 않는다.
+기본값(default)은 변이 공간을 바꾸지 않는 선호이므로 여기서는 다루지 않는다.
+
+우선순위(priority)는 분해 사이의 다툼을 가른다 (docs/ses-platform/18_classic_parity.md). 수가 클수록 앞선다.
+- 한 엔티티에 적힌 분해들의 규칙이 함께 참이면 우선순위가 가장 높은 것이 적용된다.
+- 엔티티와 고른 대안이 각자 분해를 가지면 병합체 안에서 형제가 된다. 우선순위가 가장 높은 것이
+  그 구성요소의 분해가 되고, 밀린 구성원은 "분해 없음"(skeleton.NO_ASPECT)을 고른다.
+우선순위가 같거나 없어서 가를 수 없으면 종전과 같다. 규칙은 모순이 되고 병합은 부적격이 된다.
 
 식 (docs/ses-platform/18_classic_parity.md)
 - 규칙과 제약의 원자는 변수에 대한 조건이다. 변수의 범위가 유한하므로 원자가 참이 되는 변수 값의
@@ -35,7 +40,7 @@ from .ext_text import Text
 from .extension import Layered
 from .loader import selected_target
 from .profile import Domain, Item, Profile
-from .skeleton import component_of, is_component, live_formula, members, owner
+from .skeleton import NO_ASPECT, component_of, components, is_component, live_formula, members, owner
 
 _OPS = {"eq": operator.eq, "ne": operator.ne, "lt": operator.lt, "le": operator.le,
         "gt": operator.gt, "ge": operator.ge, "in": lambda v, c: v in c}
@@ -183,7 +188,7 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
     templates: dict = {}
     layouts: dict = {}
     items: dict = {}
-    aspect_rules: list = []                          # (엔티티 노드, aspect 노드, 규칙). 나무가 다 만들어진 뒤에 번역한다
+    decomps: dict = {}                               # 엔티티 노드에서 그 분해들로: [이름, aspect 노드들, 규칙, 우선순위]
 
     def value(name: str, v) -> tuple:
         return root + (var_node(name), str(v))
@@ -261,9 +266,10 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
             layouts[a_path] = (tuple(p.part_name for p in a.parts), seps.get(a.name, ""))
             if a.couplings:
                 coup[a_path] = _plain(a.couplings)
-            if a.rule is not None:
-                aspect_rules.append((path, a_path, a.rule))
+            decomps.setdefault(path, []).append((a.name, (a_path,), a.rule, a.priority))
         for ma in e.multi_aspects.values():
+            decomps.setdefault(path, []).append(
+                (ma.name, tuple(path + (f"{ma.name}[{n}]",) for n in _card_set(doc, ma)), ma.rule, ma.priority))
             for n in _card_set(doc, ma):
                 a_path = path + (f"{ma.name}[{n}]",)
                 kinds[a_path] = ASP
@@ -283,13 +289,63 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
         kinds[s] = SPEC
         for v in _domain(doc, name):
             kinds[s + (str(v),)] = ENT
-    tree = Tree(kinds, labels)
     gone = frozenset(void)
-    # 분해의 규칙은 살아 있는 구성요소에서만 적용된다. 없음이 된 구성요소나 그 아래의 것은 만들어지지 않으므로
-    # 거기서 두 규칙이 함께 참이 되어도 변이를 지우지 않는다. 고전 절차도 그런 곳의 규칙은 평가하지 않는다
-    for y, a_path, rule in aspect_rules:
-        alive = live_formula(tree, gone, component_of(tree, y))
-        clauses.append(f_imp(f_and(sel(y), alive, tr(rule)), sel(a_path)))
+
+    def above(p, q) -> bool:
+        """우선순위 p가 q보다 앞서는가. 없는 것은 가장 뒤이고, 없는 것끼리는 가르지 못한다."""
+        return p is not None and (q is None or p > q)
+
+    def together(y: tuple, z: tuple) -> bool:
+        """한 병합체의 두 구성원이 함께 선택될 수 있는가. 같은 specialization의 서로 다른 대안 아래이면 아니다."""
+        i = 0
+        while i < min(len(y), len(z)) and y[i] == z[i]:
+            i += 1
+        return i == len(y) or i == len(z) or y[i] != z[i]
+
+    # 병합체 안에서 다른 구성원의 분해에 밀릴 수 있는 구성원에게 "분해 없음"을 준다
+    plain = Tree(kinds, labels)
+    rivals: dict = {}                                # 구성원에서, 함께 선택될 수 있고 분해를 가진 다른 구성원들로
+    for e in components(plain):
+        owners = [y for y in members(plain, e) if y in decomps]
+        for y in owners:
+            rivals[y] = [z for z in owners if z != y and together(y, z)]
+            if any(above(pb, pa) for z in rivals[y] for *_, pb in decomps[z] for *_, pa in decomps[y]):
+                kinds[y + (NO_ASPECT,)] = ASP
+    tree = Tree(kinds, labels)
+
+    def one_of(nodes):
+        return sel(nodes[0]) if len(nodes) == 1 else f_or(*(sel(n) for n in nodes))
+
+    # 분해의 규칙과 우선순위는 살아 있는 구성요소에서만 적용된다. 없음이 된 구성요소나 그 아래의 것은 만들어지지
+    # 않으므로 거기서 두 규칙이 함께 참이 되어도 변이를 지우지 않는다. 고전 절차도 그런 곳은 평가하지 않는다
+    for y, mine in decomps.items():
+        alive = f_and(sel(y), live_formula(tree, gone, component_of(tree, y)))
+        out = y + (NO_ASPECT,)
+        pushed = sel(out) if out in tree.nodes else None
+        ruled = [(d, tr(d[2])) for d in mine if d[2] is not None]
+
+        def beaten(d):
+            """같은 엔티티에서 우선순위가 더 높은 분해의 규칙이 참이다."""
+            return [f for other, f in ruled if other is not d and above(other[3], d[3])]
+
+        for d, holds_ in ruled:                      # 규칙이 참이면 그 분해를 고른다. 더 앞선 규칙이 참이면 물러선다
+            guard = [alive, holds_] + [f_not(f) for f in beaten(d)] + ([f_not(pushed)] if pushed is not None else [])
+            clauses.append(f_imp(f_and(*guard), one_of(d[1])))
+        for d in mine:                               # 다른 구성원의 더 앞선 분해와 함께 고를 수 없다
+            for z in rivals.get(y, ()):
+                for other in decomps[z]:
+                    if above(other[3], d[3]):
+                        clauses.append(f_imp(alive, f_not(f_and(one_of(d[1]), one_of(other[1])))))
+        if pushed is not None:                       # 밀려나려면, 고를 수 있었던 분해가 실제로 밀려야 한다
+            no_rule = f_not(f_or(*(f for _, f in ruled)))
+            reasons = []
+            for d in mine:
+                mine_ok = f_or(no_rule, *([f_and(next(f for o, f in ruled if o is d), *(f_not(f) for f in beaten(d)))]
+                                          if d[2] is not None else []))
+                winners = [one_of(other[1]) for z in rivals[y] for other in decomps[z] if above(other[3], d[3])]
+                if winners:
+                    reasons.append(f_and(mine_ok, f_or(*winners)))
+            clauses.append(f_imp(f_and(alive, pushed), f_or(*reasons)))
 
     def chosen(e: m.Selected):
         """selected: 가리키는 선택지 노드가 골라졌고, 그 선택 지점이 실제로 있는 구성요소의 것이다."""
@@ -298,7 +354,7 @@ def _unfold(doc: m.SesDocument, functions=None) -> dict:
             hosts = [(y, def_name) for y in occurrences(tree, def_name)]
         else:
             group, want = e.node, tuple(e.path)
-            hosts = [(y, tree.label(y)) for q in tree.nodes
+            hosts = [(y, tree.label(y)) for q in tree.kinds
                      if tree.kind(q) == ENT and is_component(tree, q) and component_path(tree, q) == want
                      for y in members(tree, q)]
         options, found = [], False

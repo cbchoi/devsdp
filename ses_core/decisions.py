@@ -30,7 +30,7 @@ from typing import Mapping, Optional
 
 from .algebra import (ASP, ENT, SPEC, SES, AlgebraError, Tree, determinate, interior,
                       occurrences, prune, reduce, restrict)
-from .skeleton import component_of, is_component, members
+from .skeleton import NO_ASPECT, component_of, is_component, members, real_aspects
 
 FALSE = ("or",)
 VAR_PREFIX = "$"
@@ -295,10 +295,14 @@ def excluded(T: Tree, c: Choice) -> set:
     else:
         want = set(c.aspect)
         for y in ys:
-            for a in T.aspects(y):
+            mine = T.aspects(y)
+            keeps = any(family(a[-1]) in want for a in mine)
+            for a in mine:
                 touched = True
                 if family(a[-1]) in want:
                     found.add(family(a[-1]))
+                elif a[-1] == NO_ASPECT and not keeps:
+                    pass                               # 이 구성원에는 남길 분해가 없다. 우선순위에 밀려날 수 있게 둔다
                 else:
                     out.add(a)
     if not touched:
@@ -409,7 +413,7 @@ def choice_table(S: SES, pruned: Optional[SES], domains: Optional[Mapping] = Non
     for q in T.kinds:                          # 문서에 적은 순서
         k = T.kind(q)
         if k == ENT:
-            for a in T.aspects(q):
+            for a in real_aspects(T, q):               # 밀려났다는 표시는 사람이 고르는 선택지가 아니다
                 fam, n = split_count(a[-1])
                 mark(groups, (T.label(q), "aspect", ""), fam, a)
                 if n is not None:

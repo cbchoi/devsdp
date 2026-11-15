@@ -20,7 +20,7 @@ from typing import Mapping, Optional
 from .algebra import (ASP, ENT, SPEC, SES, AlgebraError, Tree, f_and, f_imp, f_not, f_or,
                       holds, prune, sel, sem)
 from .extension import Extension, View
-from .skeleton import component_of, components, is_component, members, owner  # noqa: F401
+from .skeleton import NO_ASPECT, component_of, components, is_component, members, owner, real_aspects  # noqa: F401
 
 IN, OUT = "in", "out"
 SELF = None          # 결합 끝점의 "자기 자신" (결합 모델의 외부 포트)
@@ -104,7 +104,7 @@ def violations(T: Tree, ann: Ann, V: frozenset, no_self_loop: bool = False) -> l
                       for p, ds in decls.items()}
             conflicts = [p for p, ds in decls.items()
                          if len({(d.type, d.direction) for d in ds}) > 1]
-            asps = [a for y in ms for a in T.aspects(y) if a in V]
+            asps = [a for y in ms for a in real_aspects(T, y) if a in V]
             cache[e] = (merged, conflicts, asps, any(y in ann.void for y in ms))
         return cache[e]
 
@@ -171,7 +171,7 @@ def realize(T: Tree, ann: Ann, V: frozenset) -> dict:
     def visit(e):
         node = {"children": [], "eic": [], "eoc": [], "ic": []}
         model[e] = node
-        for a in [a for y in cl(e) for a in T.aspects(y) if a in V]:
+        for a in [a for y in cl(e) for a in real_aspects(T, y) if a in V]:
             parts = {q[-1]: q for q in T.children(a)}
             dead = {n for n, q in parts.items() if void(q)}
             node["children"] += [n for n in parts if n not in dead]
@@ -222,13 +222,13 @@ def psi(T: Tree, ann: Ann, no_self_loop: bool = False):
                     d2 = ann.ports.get(y2, {}).get(p)
                     if d2 is not None and (d.type, d.direction) != (d2.type, d2.direction):
                         clauses.append(f_imp(le, f_not(f_and(sel(y), sel(y2)))))
-        asps = [(y, a) for y in ms for a in T.aspects(y)]
+        asps = [(y, a) for y in ms for a in real_aspects(T, y)]
         for i, (y, a) in enumerate(asps):                # C0: 분해는 하나까지
             for y2, a2 in asps[i + 1:]:
                 if y != y2:
                     clauses.append(f_imp(le, f_not(f_and(sel(a), sel(a2)))))
 
-    for a in sorted(n for n in T.nodes if T.kind(n) == ASP):
+    for a in sorted(n for n in T.nodes if T.kind(n) == ASP and n[-1] != NO_ASPECT):
         e = owner(T, a)
         guard = f_and(live(e), sel(a))
         parts = {q[-1]: q for q in T.children(a)}
@@ -332,7 +332,7 @@ def discipline_violations(T: Tree, ann: Ann, no_self_loop: bool = False) -> list
         if len([y for y in M[e] if T.aspects(y)]) > 1:
             out.append(("D0", e, "병합체 안의 둘 이상의 노드가 분해를 가진다"))
 
-    for a in sorted(n for n in T.nodes if T.kind(n) == ASP):
+    for a in sorted(n for n in T.nodes if T.kind(n) == ASP and n[-1] != NO_ASPECT):
         e = owner(T, a)
         parts = {q[-1]: q for q in T.children(a)}
         chain, z = [], a[:-1]

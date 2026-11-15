@@ -2,8 +2,9 @@
 
 1. 선택에 대한 제약 (selected). "A를 고르면 B는 안 된다", "전부 없음은 금지".
 2. 이름으로 등록한 함수 (call). 규칙과 제약에서 변수의 값을 함수로 판정한다.
+3. 우선순위 (priority). 겹친 규칙을 가르고, 대안을 합쳐서 형제가 된 분해 가운데 하나를 고른다.
 
-두 가지 모두 세 길로 확인한다. 손으로 만든 예, 문헌의 서술을 따라 적은 고전 절차(classic.py)와의
+세 길로 확인한다. 손으로 만든 예, 문헌의 서술을 따라 적은 고전 절차(classic.py)와의
 무작위 대조, 그리고 식으로 번역하지 않고 변이에서 직접 평가한 값과의 대조다.
 """
 
@@ -24,12 +25,14 @@ from test_executor import labelled  # noqa: E402
 from ses_core import LoadError, classic, load_ses_dict  # noqa: E402
 from ses_core import edit as E  # noqa: E402
 from ses_core import unfold as U  # noqa: E402
-from ses_core.algebra import ASP, AlgebraError, count_variants, holds, sem  # noqa: E402
+from ses_core import coupling as CP  # noqa: E402
+from ses_core.algebra import ASP, AlgebraError, count_variants, holds, is_pes, sem  # noqa: E402
 from ses_core.coupling import Coupling  # noqa: E402
-from ses_core.decisions import component_path, family, split_count  # noqa: E402
+from ses_core.decisions import (Choice, DecisionSet, apply, choice_table, component_path, family,  # noqa: E402
+                                split_count, witness)
 from ses_core.diagnose import analyze  # noqa: E402
 from ses_core.extension import Layered, interpret, violations  # noqa: E402
-from ses_core.skeleton import members, skeleton  # noqa: E402
+from ses_core.skeleton import NO_ASPECT, core_psi, core_violations, members, skeleton  # noqa: E402
 from ses_core.unfold import unfold, unfold_annotated  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform")
@@ -276,6 +279,207 @@ def test_new_expression_forms_are_in_the_schema():
 
 
 # ---------------------------------------------------------------------------
+# 3. 우선순위
+# ---------------------------------------------------------------------------
+
+def figure12(a_dec, e_dec) -> dict:
+    """Deatcu et al. (2019)의 그림 12. a는 aDEC로 b와 c를 가지고, 대안 e는 eDEC로 f와 g를 가진다."""
+    def aspect(parts, priority):
+        return dict({"parts": parts}, **({} if priority is None else {"priority": priority}))
+    return {"ses": "1.0", "name": "a",
+            "entities": {
+                "a": {"root": True, "aspects": {"aDEC": aspect(["b", "c"], a_dec)},
+                      "specializations": {"aSPEC": {"alternatives": ["d", "e"]}}},
+                "d": {"extends": "a"},
+                "e": {"extends": "a", "aspects": {"eDEC": aspect(["f", "g"], e_dec)}},
+                "b": {}, "c": {}, "f": {}, "g": {}}}
+
+
+def shapes(d: dict, functions=None) -> set:
+    """고전 절차가 낸 구조들을 (합쳐진 정의들, 부분들의 이름)으로."""
+    return {(tuple(n["labels"]), tuple(sorted(n["children"]))) for _, n in classic.enumerate_classic(load_ses_dict(d), functions)}
+
+
+def realized(d: dict, functions=None) -> set:
+    """대수의 길이 낸 구조들을 같은 꼴로. 핵 적격인 변이만."""
+    S, ann = unfold_annotated(load_ses_dict(d), functions)
+    out = set()
+    for V in sem(S):
+        if not core_violations(S.tree, ann.void, V):
+            sk = skeleton(S.tree, ann.void, V)
+            out.add((tuple(sorted(sk.labels)), tuple(sorted(sk.parts))))
+    return out
+
+
+def test_merged_decompositions_are_decided_by_priority():
+    """문헌의 패턴 12. 대안을 고르면 대안의 분해와 바탕의 분해가 형제가 된다. 우선순위가 높은 쪽이 남는다."""
+    d_kept = (("a", "d"), ("b", "c"))
+    higher_child = figure12(1, 2)
+    assert shapes(higher_child) == realized(higher_child) == {d_kept, (("a", "e"), ("f", "g"))}
+    higher_base = figure12(2, 1)
+    assert shapes(higher_base) == realized(higher_base) == {d_kept, (("a", "e"), ("b", "c"))}
+    assert shapes(figure12(None, 1)) == realized(figure12(None, 1)) == {d_kept, (("a", "e"), ("f", "g"))}    # 없는 것은 가장 뒤다
+    for tie in (figure12(None, None), figure12(1, 1)):       # 가를 수 없으면 종전대로 합칠 수 없다
+        assert shapes(tie) == realized(tie) == {d_kept}
+        S, ann = unfold_annotated(load_ses_dict(tie))
+        assert len(sem(S)) == 2 and NO_ASPECT not in {n[-1] for n in S.tree.nodes}
+        assert sorted(len(core_violations(S.tree, ann.void, V)) for V in sem(S)) == [0, 1]
+    # 밀린 쪽은 "분해 없음"을 고른다. 그 아래의 선택을 따로 세지 않으므로 변이는 구조마다 하나다
+    S, ann = unfold_annotated(load_ses_dict(higher_child))
+    assert len(sem(S)) == 2 and all(not core_violations(S.tree, ann.void, V) for V in sem(S))
+    e_variant = next(V for V in sem(S) if ("a", "aSPEC", "e") in V)
+    assert ("a", NO_ASPECT) in e_variant and ("a", "aDEC") not in e_variant and ("a", "aSPEC", "e", "eDEC") in e_variant
+    assert ("a", "aSPEC", "e", NO_ASPECT) not in S.tree.nodes            # 밀릴 일이 없는 구성원에는 만들지 않는다
+
+
+OVERLAP = {"ses": "1.0", "name": "R",
+           "variables": {"v": {"type": "enum", "values": ["a", "b", "c"]}},
+           "entities": {
+               "R": {"root": True, "aspects": {
+                   "d1": {"parts": ["A"], "rule": {"var": "v", "eq": "a"}},
+                   "d2": {"parts": ["B"], "rule": {"var": "v", "in": ["a", "b"]}}}},
+               "A": {}, "B": {}}}
+
+
+def with_priorities(d: dict, **priorities) -> dict:
+    d = json.loads(json.dumps(d))
+    for name, p in priorities.items():
+        for body in d["entities"].values():
+            for kind in ("aspects", "multi_aspects"):
+                if name in (body.get(kind) or {}):
+                    body[kind][name]["priority"] = p
+    return d
+
+
+def by_variable(d: dict, functions=None) -> dict:
+    """변수 v의 값에서 뿌리가 가질 수 있는 분해들로 (대수 쪽)."""
+    S, ann = unfold_annotated(load_ses_dict(d), functions)
+    out: dict = {}
+    for V in sem(S):
+        v = next(x[2] for x in V if len(x) == 3 and x[1] == "$v")
+        out.setdefault(v, set()).add(family(skeleton(S.tree, ann.void, V).aspect[-1]))
+    return out
+
+
+def test_overlapping_rules_are_decided_by_priority():
+    """한 엔티티의 두 분해 규칙이 함께 참이면 우선순위가 높은 것이 적용된다 (09 문서의 결함 1.2)."""
+    assert by_variable(OVERLAP) == {"b": {"d2"}, "c": {"d1", "d2"}}             # v가 a이면 두 규칙이 다투어 변이가 없다
+    assert n_variants(OVERLAP) == (3, 3)
+    first = with_priorities(OVERLAP, d1=2, d2=1)
+    assert by_variable(first) == {"a": {"d1"}, "b": {"d2"}, "c": {"d1", "d2"}} and n_variants(first) == (4, 4)
+    second = with_priorities(OVERLAP, d1=1, d2=2)
+    assert by_variable(second) == {"a": {"d2"}, "b": {"d2"}, "c": {"d1", "d2"}} and n_variants(second) == (4, 4)
+    assert by_variable(with_priorities(OVERLAP, d1=1)) == by_variable(first)    # 없는 것은 가장 뒤다
+    for tie in (with_priorities(OVERLAP, d1=3, d2=3), with_priorities(OVERLAP, d2=None)):
+        assert by_variable(tie) == by_variable(OVERLAP) and n_variants(tie) == (3, 3)
+
+
+POOLS = {"ses": "1.0", "name": "R",
+         "variables": {"v": {"type": "int", "range": [1, 3]}},
+         "entities": {
+             "R": {"root": True, "aspects": {"one": {"parts": ["W"]}},
+                   "multi_aspects": {"few": {"part": "W", "cardinality": {"min": 1, "max": 2}, "rule": {"var": "v", "eq": 1}},
+                                     "many": {"part": "W", "cardinality": 3, "rule": {"var": "v", "le": 2}}}},
+             "W": {}}}
+
+
+def test_rules_of_multi_aspects_are_applied():
+    """문헌의 패턴 6과 7. multi-aspect 형제도 규칙으로 고른다. 고치기 전에는 multi-aspect의 규칙을 읽지 않았다."""
+    assert by_variable(POOLS) == {"2": {"many"}, "3": {"one", "few", "many"}}
+    assert n_variants(POOLS) == (1 + 4, 5)                    # v가 1이면 두 규칙이 다툰다
+    assert by_variable(with_priorities(POOLS, few=5)) == {"1": {"few"}, "2": {"many"}, "3": {"one", "few", "many"}}
+    assert n_variants(with_priorities(POOLS, few=5)) == (2 + 1 + 4, 7)
+    assert by_variable(with_priorities(POOLS, many=5))["1"] == {"many"}
+
+
+def chain(*priorities) -> dict:
+    """바탕 X와, 대안 Y와, 대안의 대안 Z가 각자 분해를 가진다. 인자는 세 분해의 우선순위다."""
+    px, py, pz = priorities
+
+    def aspect(part, p):
+        return dict({"parts": [part]}, **({} if p is None else {"priority": p}))
+    return {"ses": "1.0", "name": "X",
+            "entities": {
+                "X": {"root": True, "aspects": {"ax": aspect("P", px)}, "specializations": {"s": {"alternatives": ["Y", "Y0"]}}},
+                "Y0": {"extends": "X"},
+                "Y": {"extends": "X", "aspects": {"ay": aspect("Q", py)}, "specializations": {"t": {"alternatives": ["Z", "Z0"]}}},
+                "Z0": {"extends": "Y"},
+                "Z": {"extends": "Y", "aspects": {"az": aspect("R", pz)}},
+                "P": {}, "Q": {}, "R": {}}}
+
+
+def test_three_members_with_decompositions():
+    def got(d):
+        both_ways = shapes(d)
+        assert both_ways == realized(d)
+        return {labels[-1]: parts for labels, parts in both_ways}          # 가장 깊이 고른 대안에서 부분으로
+
+    assert got(chain(1, 2, 3)) == {"Y0": ("P",), "Z0": ("Q",), "Z": ("R",)}
+    assert got(chain(3, 2, 1)) == {"Y0": ("P",), "Z0": ("P",), "Z": ("P",)}
+    assert got(chain(1, 3, 2)) == {"Y0": ("P",), "Z0": ("Q",), "Z": ("Q",)}
+    assert got(chain(2, 2, 3)) == {"Y0": ("P",), "Z": ("R",)}              # X와 Y는 가를 수 없지만 Z가 둘 다 누른다
+    assert got(chain(3, 3, 1)) == {"Y0": ("P",)}                           # 가장 높은 둘이 같으면 합칠 수 없다
+    assert got(chain(None, None, None)) == {"Y0": ("P",)}
+
+
+FREE = {"ses": "1.0", "name": "X",
+        "entities": {
+            "X": {"root": True, "aspects": {"hi": {"parts": ["P"], "priority": 5}, "lo": {"parts": ["Q"], "priority": 1}},
+                  "specializations": {"s": {"alternatives": ["Y", "Y0"]}}},
+            "Y0": {"extends": "X"},
+            "Y": {"extends": "X", "aspects": {"mid": {"parts": ["R"], "priority": 3}}},
+            "P": {}, "Q": {}, "R": {}}}
+
+
+def test_a_member_is_pushed_out_only_by_what_it_could_have_chosen():
+    """바탕이 높은 분해와 낮은 분해를 가지고 대안이 그 사이의 분해를 가진다.
+
+    바탕이 높은 것을 고르면 바탕이 이기고, 낮은 것을 고르면 대안이 이긴다. 규칙이 높은 것을 강제하면
+    바탕은 밀려날 수 없다.
+    """
+    assert shapes(FREE) == realized(FREE) == {(("X", "Y0"), ("P",)), (("X", "Y0"), ("Q",)), (("X", "Y"), ("P",)), (("X", "Y"), ("R",))}
+    forced = json.loads(json.dumps(FREE))
+    forced["variables"] = {"v": {"type": "int", "range": [1, 2]}}
+    forced["entities"]["X"]["aspects"]["hi"]["rule"] = {"var": "v", "eq": 1}
+    got = {}
+    for sigma, n in classic.enumerate_classic(load_ses_dict(forced)):
+        got.setdefault(sigma["v"], set()).add((n["labels"][-1], tuple(n["children"])))
+    assert got == {1: {("Y0", ("P",)), ("Y", ("P",))},                     # 규칙이 hi를 강제한다. 대안의 mid는 밀린다
+                   2: {("Y0", ("P",)), ("Y0", ("Q",)), ("Y", ("P",)), ("Y", ("R",))}}
+    S, ann = unfold_annotated(load_ses_dict(forced))
+    assert len(sem(S)) == 6 and all(not core_violations(S.tree, ann.void, V) for V in sem(S))
+
+
+def test_decisions_and_diagnostics_know_the_pushed_out_marker():
+    """밀려났다는 표시는 사람이 고르는 선택지가 아니다. 결정은 구성요소의 분해를 고르고, 표시는 따라 정해진다."""
+    S, ann = unfold_annotated(load_ses_dict(FREE))
+    assert {n for n in S.tree.nodes if n[-1] == NO_ASPECT} == {("X", NO_ASPECT), ("X", "s", "Y", NO_ASPECT)}
+    table = choice_table(S, S)
+    assert all(NO_ASPECT not in dict(p.options) for p in table)
+    assert [(p.owner, p.kind, [o for o, _ in p.options]) for p in table] == [("X", "aspect", ["hi", "lo"]), ("X", "alternative", ["Y", "Y0"])]
+    # 구성요소 경로로 분해를 고르면 그 분해를 가진 구성원이 이기고 나머지는 밀린다
+    mid = apply(S, DecisionSet(choose=(Choice(path=("X",), aspect=("mid",)),)))
+    assert is_pes(mid) and ("X", NO_ASPECT) in mid.tree.nodes and ("X", "s", "Y", "mid") in mid.tree.nodes
+    hi = apply(S, DecisionSet(choose=(Choice(path=("X",), aspect=("hi",)),)))
+    assert len(sem(hi)) == 2 and all(("X", "hi") in V for V in sem(hi))
+    assert apply(S, DecisionSet(choose=(Choice(path=("X",), aspect=("hi", "mid")),))) is not None
+    # 변이마다 그것을 정확히 재현하는 결정 집합이 있다
+    for V in sem(S):
+        w = witness(S.tree, V)
+        R = apply(S, w)
+        assert R is not None and sem(R) == [V], w.to_dict()
+    # 늘 밀리는 분해는 죽은 선택지로 진단된다
+    never = with_priorities(FREE, lo=1, hi=2, mid=9)
+    never["entities"].pop("Y0")
+    never["entities"]["X"]["specializations"]["s"]["alternatives"] = ["Y", "Y1"]
+    never["entities"]["Y1"] = {"extends": "X", "aspects": {"other": {"parts": ["R"], "priority": 8}}}
+    a = analyze(E.from_dict(never))
+    dead = sorted(d.data["option"] for d in a.diagnostics if d.code == "DEAD")
+    assert dead == ["hi", "lo"] and not [d for d in a.diagnostics if d.severity == "error"]
+    assert all(NO_ASPECT not in d.message for d in a.diagnostics)
+
+
+# ---------------------------------------------------------------------------
 # 없음이 된 구성요소의 규칙 (무작위 대조가 찾아낸 결함의 회귀 시험)
 # ---------------------------------------------------------------------------
 
@@ -435,6 +639,81 @@ def test_classic_procedure_agrees_on_selection_constraints_and_functions(seed):
     STATS["docs_empty"] += not procedural
 
 
+def prioritized(seed: int) -> tuple:
+    """무작위 문서에 우선순위를 더한다. 대안에 분해를 더 주어 병합으로 형제가 되는 분해가 자주 생기게 하고,
+    aspect와 multi-aspect에 규칙을 준다. (문서, 적재한 문서, 함수들)"""
+    rng = random.Random(seed)
+    while True:
+        d = _system_attempt(rng)
+        functions: dict = {}
+        ents = d["entities"]
+        order = [n for n in ents if "extends" not in ents[n]]
+        for name, body in list(ents.items()):
+            base = name.split("_")[0]
+            later = order[order.index(base) + 1:] if base in order else []
+            if "extends" in body and body.get("stereotype") != "void" and later and rng.random() < 0.5:
+                if rng.random() < 0.7:                       # 대안이 자기 분해를 가진다
+                    part = rng.choice(later)
+                    body.setdefault("aspects", {})[f"p{len(body.get('aspects') or {})}"] = {
+                        "parts": [part], "couplings": [{"from": "i", "to": f"{part}.i"}, {"from": f"{part}.o", "to": "o"}]}
+                else:
+                    body.setdefault("multi_aspects", {})["q0"] = {"part": rng.choice(later), "cardinality": rng.choice([1, 2])}
+        for body in ents.values():
+            fams = list((body.get("aspects") or {}).values()) + list((body.get("multi_aspects") or {}).values())
+            for a in fams:
+                if rng.random() < 0.7:
+                    a["priority"] = rng.randint(1, 3)
+                if len(fams) > 1 and d.get("variables") and rng.random() < 0.5:
+                    a["rule"] = rand_condition(rng, d, functions, False, 1)
+        constraints = []
+        for i in range(rng.choice([0, 0, 1, 2])):
+            c = {"name": f"c{i}"}
+            for key in rng.choice([("require",), ("forbid",), ("when", "require"), ("when", "forbid")]):
+                c[key] = rand_condition(rng, d, functions, True)
+            constraints.append(c)
+        if constraints:
+            d["constraints"] = constraints
+        try:
+            doc = load_ses_dict(d)
+            n = count_variants(unfold(doc, functions).tree)
+        except (LoadError, AlgebraError):
+            continue
+        if 2 <= n <= 300:
+            return d, doc, functions
+
+
+@pytest.mark.parametrize("seed", range(300))
+def test_classic_procedure_agrees_on_priorities(seed):
+    """우선순위와 규칙을 가진 무작위 문서에서, 고전 절차와 대수의 길이 같은 모델들을 낸다.
+
+    특성식도 함께 본다. 밀려났다는 표시가 든 나무에서도, 정의를 그대로 평가한 적격성과 특성식의 값이 같다.
+    """
+    d, doc, functions = prioritized(seed)
+    algebraic, procedural, skipped = both(doc, functions)
+    assert algebraic == procedural
+    S, ann = unfold_annotated(doc, functions)
+    T = S.tree
+    marked = {n for n in T.nodes if n[-1] == NO_ASPECT}
+    psi, kpsi = CP.psi(T, ann), core_psi(T, ann.void)
+    variants = sem(S)
+    for V in variants:
+        assert (not CP.violations(T, ann, V)) == holds(psi, V)
+        assert (not core_violations(T, ann.void, V)) == holds(kpsi, V)
+        STATS["prio_pushed_variants"] += bool(marked & V)
+        STATS["prio_unmergeable"] += any(code == "K1" for code, _, _ in core_violations(T, ann.void, V))
+    for V in variants[:6]:                                   # 변이를 정확히 재현하는 결정 집합이 있다
+        R = apply(S, witness(T, V))
+        assert R is not None and sem(R) == [V]
+    plain = json.loads(json.dumps(d))
+    for body in plain["entities"].values():
+        for a in list((body.get("aspects") or {}).values()) + list((body.get("multi_aspects") or {}).values()):
+            a.pop("priority", None)
+    STATS["prio_models"] += len(procedural)
+    STATS["prio_docs_marked"] += bool(marked)
+    STATS["prio_docs_changed"] += both(load_ses_dict(plain), functions)[1] != procedural
+    STATS["prio_variants"] += len(variants)
+
+
 def made_choices(T, void, V) -> set:
     """변이에서 실제로 한 선택들을 식을 거치지 않고 읽는다.
 
@@ -490,7 +769,7 @@ def with_paths(rng: random.Random, d: dict, doc, functions) -> dict:
     """제약 가운데 일부를 구성요소 경로로 한 곳만 가리키는 것으로 바꾼다."""
     T = unfold(load_ses_dict(dict(d, constraints=[])), functions).tree
     spots = []
-    for q in T.nodes:
+    for q in T.kinds:                                  # 문서에 적힌 순서. 집합의 순서는 실행마다 다르다
         if T.kind(q) == ASP:
             continue
         for s in T.specs(q) if T.kinds[q] == "ent" else ():
@@ -545,3 +824,5 @@ def test_parity_samples_are_not_vacuous():
     assert STATS["models"] >= 1500 and STATS["cut_by_constraints"] >= 1500 and STATS["docs_cut"] >= 100, STATS
     assert STATS["docs_with_functions"] >= 100 and STATS["docs_empty"] <= 150, STATS
     assert STATS["direct_variants"] >= 2000 and STATS["direct_rejected"] >= 500 and STATS["direct_docs_mixed"] >= 60, STATS
+    assert STATS["prio_models"] >= 1500 and STATS["prio_docs_marked"] >= 60 and STATS["prio_docs_changed"] >= 60, STATS
+    assert STATS["prio_pushed_variants"] >= 300 and STATS["prio_unmergeable"] >= 100, STATS

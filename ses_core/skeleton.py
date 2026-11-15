@@ -30,6 +30,12 @@ def component_of(T: Tree, y: tuple) -> tuple:
 
 
 VARIABLE_PREFIX = "$"       # 변수는 뿌리의 specialization으로 부호화된다 (unfold.var_node)
+NO_ASPECT = "~"             # 우선순위에 밀린 구성원이 고르는 "분해 없음". 펼침이 만든다 (18 문서)
+
+
+def real_aspects(T: Tree, y: tuple) -> tuple:
+    """엔티티 노드 y에 적힌 분해. 밀려났다는 표시("분해 없음")는 분해가 아니다."""
+    return tuple(a for a in T.aspects(y) if a[-1] != NO_ASPECT)
 
 
 def members(T: Tree, e: tuple) -> list:
@@ -92,7 +98,7 @@ def skeleton(T: Tree, void: frozenset, V: frozenset) -> Optional[Comp]:
         ms = cluster(e)
         if any(y in void for y in ms):
             return None
-        asps = tuple(a for y in ms for a in T.aspects(y) if a in V)
+        asps = tuple(a for y in ms for a in real_aspects(T, y) if a in V)
         parts, absent = {}, []
         for a in asps:
             for q in T.children(a):
@@ -141,7 +147,7 @@ def core_psi(T: Tree, void: frozenset):
     """핵 적격성의 특성식."""
     clauses = [f_not(void_formula(T, void, T.root))]
     for e in components(T):
-        asps = [(y, a) for y in members(T, e) for a in T.aspects(y)]
+        asps = [(y, a) for y in members(T, e) for a in real_aspects(T, y)]
         le = None
         for i, (y, a) in enumerate(asps):
             for y2, a2 in asps[i + 1:]:
