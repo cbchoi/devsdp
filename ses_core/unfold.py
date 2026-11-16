@@ -10,7 +10,8 @@
 
 기본값(default)은 변이 공간을 바꾸지 않는 선호이므로 여기서는 다루지 않는다.
 
-우선순위(priority)는 분해 사이의 다툼을 가른다 (docs/ses-platform/18_classic_parity.md). 수가 클수록 앞선다.
+우선순위(priority)는 분해 사이의 다툼을 가른다 (docs/ses-platform/18_classic_parity.md). 수가 작을수록 앞선다.
+정준 문서의 스키마와 04 문서가 처음부터 정해 둔 약속이다.
 - 한 엔티티에 적힌 분해들의 규칙이 함께 참이면 우선순위가 가장 높은 것이 적용된다.
 - 엔티티와 고른 대안이 각자 분해를 가지면 병합체 안에서 형제가 된다. 우선순위가 가장 높은 것이
   그 구성요소의 분해가 되고, 밀린 구성원은 "분해 없음"(skeleton.NO_ASPECT)을 고른다.
@@ -204,8 +205,8 @@ def _instantiate_pattern(ma: m.MultiAspect, names: list) -> tuple:
 
 
 def above(p, q) -> bool:
-    """우선순위 p가 q보다 앞서는가. 없는 것은 가장 뒤이고, 없는 것끼리는 가르지 못한다."""
-    return p is not None and (q is None or p > q)
+    """우선순위 p가 q보다 앞서는가. 수가 작을수록 앞선다. 없는 것은 가장 뒤이고, 없는 것끼리는 가르지 못한다."""
+    return p is not None and (q is None or p < q)
 
 
 class Unfolding:
@@ -413,11 +414,15 @@ class Unfolding:
         kinds, labels, decomps, gone = self.kinds, self.labels, self.decomps, self.gone
 
         def together(y: tuple, z: tuple) -> bool:
-            """한 병합체의 두 구성원이 함께 선택될 수 있는가. 같은 specialization의 서로 다른 대안 아래이면 아니다."""
+            """한 병합체의 두 구성원이 함께 선택될 수 있는가. 같은 specialization의 서로 다른 대안 아래이면 아니다.
+
+            두 경로가 갈라지는 자리의 부모가 specialization 이면 서로 다른 대안이고, 엔티티이면 서로 다른
+            specialization 이다. 한쪽이 다른 쪽의 조상이면 함께 골라진다.
+            """
             i = 0
             while i < min(len(y), len(z)) and y[i] == z[i]:
                 i += 1
-            return i == len(y) or i == len(z) or y[i] != z[i]
+            return i == len(y) or i == len(z) or kinds[y[:i]] != SPEC
 
         plain = Tree(kinds, labels)
         rivals: dict = {}                            # 구성원에서, 함께 선택될 수 있고 분해를 가진 다른 구성원들로

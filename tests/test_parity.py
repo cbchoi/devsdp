@@ -127,6 +127,20 @@ def test_a_choice_under_a_removed_component_does_not_count():
     assert n_variants(inner) == (4, 4)                        # 상자가 있는 넷만 남는다
 
 
+def test_a_count_of_a_removed_component_does_not_count():
+    """개수를 고른 것도 살아 있는 구성요소의 것만 센다. 구성요소가 빠지면 그 multi-aspect 는 만들어지지 않는다."""
+    d = {"ses": "1.0", "name": "R",
+         "entities": {"R": {"root": True, "aspects": {"d": {"parts": ["X"]}}},
+                      "X": {"specializations": {"has": {"alternatives": ["WithX", "NoX"]}},
+                            "multi_aspects": {"m": {"part": "Y", "cardinality": {"min": 1, "max": 2}}}},
+                      "WithX": {"extends": "X"}, "NoX": {"extends": "X", "stereotype": "void"}, "Y": {}}}
+    assert n_variants(d) == (4, 3)                            # 대수는 빠진 X 아래의 개수도 센다
+    two = constrained(d, {"forbid": {"selected": "X/m=2"}})
+    assert n_variants(two) == (3, 2)                          # 빠진 X 의 개수 둘은 걸리지 않는다
+    must = constrained(d, {"require": {"selected": "X/m=2"}})
+    assert n_variants(must) == (1, 1)                         # X 가 있고 복제본이 둘인 것 하나
+
+
 POOL = {"ses": "1.0", "name": "R",
         "entities": {
             "R": {"root": True, "aspects": {"plain": {"parts": ["W"]}},
@@ -314,11 +328,14 @@ def realized(d: dict, functions=None) -> set:
 def test_merged_decompositions_are_decided_by_priority():
     """문헌의 패턴 12. 대안을 고르면 대안의 분해와 바탕의 분해가 형제가 된다. 우선순위가 높은 쪽이 남는다."""
     d_kept = (("a", "d"), ("b", "c"))
-    higher_child = figure12(1, 2)
+    higher_child = figure12(2, 1)                             # 작은 수가 앞선다
     assert shapes(higher_child) == realized(higher_child) == {d_kept, (("a", "e"), ("f", "g"))}
-    higher_base = figure12(2, 1)
+    higher_base = figure12(1, 2)
     assert shapes(higher_base) == realized(higher_base) == {d_kept, (("a", "e"), ("b", "c"))}
     assert shapes(figure12(None, 1)) == realized(figure12(None, 1)) == {d_kept, (("a", "e"), ("f", "g"))}    # 없는 것은 가장 뒤다
+    assert shapes(figure12(None, 100)) == realized(figure12(None, 100)) == {d_kept, (("a", "e"), ("f", "g"))}  # 어떤 수든 없는 것을 누른다
+    assert shapes(figure12(0, None)) == realized(figure12(0, None)) == {d_kept, (("a", "e"), ("b", "c"))}      # 0도 수다
+    assert shapes(figure12(-1, 0)) == realized(figure12(-1, 0)) == {d_kept, (("a", "e"), ("b", "c"))}
     for tie in (figure12(None, None), figure12(1, 1)):       # 가를 수 없으면 종전대로 합칠 수 없다
         assert shapes(tie) == realized(tie) == {d_kept}
         S, ann = unfold_annotated(load_ses_dict(tie))
@@ -365,9 +382,9 @@ def test_overlapping_rules_are_decided_by_priority():
     """한 엔티티의 두 분해 규칙이 함께 참이면 우선순위가 높은 것이 적용된다 (09 문서의 결함 1.2)."""
     assert by_variable(OVERLAP) == {"b": {"d2"}, "c": {"d1", "d2"}}             # v가 a이면 두 규칙이 다투어 변이가 없다
     assert n_variants(OVERLAP) == (3, 3)
-    first = with_priorities(OVERLAP, d1=2, d2=1)
+    first = with_priorities(OVERLAP, d1=1, d2=2)
     assert by_variable(first) == {"a": {"d1"}, "b": {"d2"}, "c": {"d1", "d2"}} and n_variants(first) == (4, 4)
-    second = with_priorities(OVERLAP, d1=1, d2=2)
+    second = with_priorities(OVERLAP, d1=2, d2=1)
     assert by_variable(second) == {"a": {"d2"}, "b": {"d2"}, "c": {"d1", "d2"}} and n_variants(second) == (4, 4)
     assert by_variable(with_priorities(OVERLAP, d1=1)) == by_variable(first)    # 없는 것은 가장 뒤다
     for tie in (with_priorities(OVERLAP, d1=3, d2=3), with_priorities(OVERLAP, d2=None)):
@@ -414,21 +431,48 @@ def test_three_members_with_decompositions():
         assert both_ways == realized(d)
         return {labels[-1]: parts for labels, parts in both_ways}          # 가장 깊이 고른 대안에서 부분으로
 
-    assert got(chain(1, 2, 3)) == {"Y0": ("P",), "Z0": ("Q",), "Z": ("R",)}
-    assert got(chain(3, 2, 1)) == {"Y0": ("P",), "Z0": ("P",), "Z": ("P",)}
-    assert got(chain(1, 3, 2)) == {"Y0": ("P",), "Z0": ("Q",), "Z": ("Q",)}
-    assert got(chain(2, 2, 3)) == {"Y0": ("P",), "Z": ("R",)}              # X와 Y는 가를 수 없지만 Z가 둘 다 누른다
-    assert got(chain(3, 3, 1)) == {"Y0": ("P",)}                           # 가장 높은 둘이 같으면 합칠 수 없다
+    assert got(chain(3, 2, 1)) == {"Y0": ("P",), "Z0": ("Q",), "Z": ("R",)}
+    assert got(chain(1, 2, 3)) == {"Y0": ("P",), "Z0": ("P",), "Z": ("P",)}
+    assert got(chain(3, 1, 2)) == {"Y0": ("P",), "Z0": ("Q",), "Z": ("Q",)}
+    assert got(chain(2, 2, 1)) == {"Y0": ("P",), "Z": ("R",)}              # X와 Y는 가를 수 없지만 Z가 둘 다 누른다
+    assert got(chain(1, 1, 3)) == {"Y0": ("P",)}                           # 가장 앞선 둘이 같으면 합칠 수 없다
     assert got(chain(None, None, None)) == {"Y0": ("P",)}
 
 
 FREE = {"ses": "1.0", "name": "X",
         "entities": {
-            "X": {"root": True, "aspects": {"hi": {"parts": ["P"], "priority": 5}, "lo": {"parts": ["Q"], "priority": 1}},
+            "X": {"root": True, "aspects": {"hi": {"parts": ["P"], "priority": 1}, "lo": {"parts": ["Q"], "priority": 5}},
                   "specializations": {"s": {"alternatives": ["Y", "Y0"]}}},
             "Y0": {"extends": "X"},
             "Y": {"extends": "X", "aspects": {"mid": {"parts": ["R"], "priority": 3}}},
             "P": {}, "Q": {}, "R": {}}}
+
+
+def test_alternatives_of_one_specialization_do_not_compete():
+    """한 specialization 의 두 대안은 함께 골라지지 않는다. 둘 다 분해를 가지고 우선순위가 달라도 다툼이 아니다.
+    밀려났다는 표시를 만들지 않고, 변이는 대안마다 그 대안의 분해다."""
+    d = {"ses": "1.0", "name": "X",
+         "entities": {"X": {"root": True, "specializations": {"s": {"alternatives": ["A", "B"]}}},
+                      "A": {"extends": "X", "aspects": {"da": {"parts": ["P"], "priority": 1}}},
+                      "B": {"extends": "X", "aspects": {"db": {"parts": ["Q"], "priority": 2}}},
+                      "P": {}, "Q": {}}}
+    S, ann = unfold_annotated(load_ses_dict(d))
+    assert not [n for n in S.tree.nodes if n[-1] == NO_ASPECT]
+    assert shapes(d) == realized(d) == {(("A", "X"), ("P",)), (("B", "X"), ("Q",))}
+
+
+def test_alternatives_of_two_specializations_compete():
+    """한 엔티티의 서로 다른 specialization 에서 고른 두 대안은 함께 골라진다. 둘 다 분해를 가지면 다툰다."""
+    d = {"ses": "1.0", "name": "X",
+         "entities": {"X": {"root": True, "specializations": {"s": {"alternatives": ["A", "A0"]},
+                                                              "t": {"alternatives": ["C", "C0"]}}},
+                      "A": {"extends": "X", "aspects": {"da": {"parts": ["P"], "priority": 1}}},
+                      "C": {"extends": "X", "aspects": {"dc": {"parts": ["Q"], "priority": 2}}},
+                      "A0": {"extends": "X"}, "C0": {"extends": "X"}, "P": {}, "Q": {}}}
+    expected = {(("A", "C", "X"), ("P",)), (("A", "C0", "X"), ("P",)), (("A0", "C", "X"), ("Q",)), (("A0", "C0", "X"), ())}
+    assert shapes(d) == realized(d) == expected
+    S, ann = unfold_annotated(load_ses_dict(d))
+    assert [n for n in S.tree.nodes if n[-1] == NO_ASPECT] == [("X", "t", "C", NO_ASPECT)]
 
 
 def test_a_member_is_pushed_out_only_by_what_it_could_have_chosen():
@@ -469,10 +513,10 @@ def test_decisions_and_diagnostics_know_the_pushed_out_marker():
         R = apply(S, w)
         assert R is not None and sem(R) == [V], w.to_dict()
     # 늘 밀리는 분해는 죽은 선택지로 진단된다
-    never = with_priorities(FREE, lo=1, hi=2, mid=9)
+    never = with_priorities(FREE, lo=9, hi=8, mid=1)
     never["entities"].pop("Y0")
     never["entities"]["X"]["specializations"]["s"]["alternatives"] = ["Y", "Y1"]
-    never["entities"]["Y1"] = {"extends": "X", "aspects": {"other": {"parts": ["R"], "priority": 8}}}
+    never["entities"]["Y1"] = {"extends": "X", "aspects": {"other": {"parts": ["R"], "priority": 2}}}
     a = analyze(E.from_dict(never))
     dead = sorted(d.data["option"] for d in a.diagnostics if d.code == "DEAD")
     assert dead == ["hi", "lo"] and not [d for d in a.diagnostics if d.severity == "error"]

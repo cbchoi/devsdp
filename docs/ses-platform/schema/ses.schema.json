@@ -362,7 +362,7 @@
         },
         "priority": {
           "type": "integer",
-          "description": "형제 aspect 간 자동 선택 우선순위. 작을수록 우선."
+          "description": "우선순위. 작을수록 우선. 없으면 가장 뒤. 병합으로 형제가 된 분해와, 함께 참인 분해의 규칙을 가른다(18_classic_parity.md 3절)."
         },
         "rule": {
           "$ref": "#/$defs/expression",
@@ -479,7 +479,8 @@
           }
         },
         "priority": {
-          "type": "integer"
+          "type": "integer",
+          "description": "우선순위. aspect의 priority와 같다. 작을수록 우선."
         },
         "rule": {
           "$ref": "#/$defs/expression"

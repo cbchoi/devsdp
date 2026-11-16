@@ -63,8 +63,8 @@ def _eval(e: Optional[m.Expr], sigma: dict, functions=None, picks=None, doc=None
 
 
 def _above(p, q) -> bool:
-    """우선순위 p가 q보다 앞서는가. 수가 클수록 앞선다. 없는 것은 가장 뒤이고, 없는 것끼리는 가르지 못한다."""
-    return p is not None and (q is None or p > q)
+    """우선순위 p가 q보다 앞서는가. 수가 작을수록 앞선다. 없는 것은 가장 뒤이고, 없는 것끼리는 가르지 못한다."""
+    return p is not None and (q is None or p < q)
 
 
 def _mentions_selected(e) -> bool:

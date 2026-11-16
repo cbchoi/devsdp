@@ -356,6 +356,22 @@ def test_decisions_under_a_removed_component_differ_from_the_family():
             Choice(at="Opt", specialization="opt", alternative=("WithOpt",)), stray)))
 
 
+def test_an_unmergeable_component_is_named():
+    """분해를 가진 정의가 둘 합쳐졌는데 우선순위로 가를 수 없으면, 결정이 모자란 것이 아니라 합칠 수 없는 것이다."""
+    d = {"ses": "1.0", "name": "a",
+         "entities": {"a": {"root": True, "aspects": {"aDEC": {"parts": ["b"]}},
+                            "specializations": {"aSPEC": {"alternatives": ["d", "e"]}}},
+                      "d": {"extends": "a"}, "e": {"extends": "a", "aspects": {"eDEC": {"parts": ["f"]}}},
+                      "b": {}, "f": {}}}
+    doc = load_ses_dict(d)
+    pick = DecisionSet(choose=(Choice(at="a", specialization="aSPEC", alternative=("e",)),))
+    with pytest.raises(Contradiction, match="a: 분해를 하나로 정할 수 없다. 분해를 가진 정의 \\['a', 'e'\\]"):
+        direct.build(doc, pick)
+    d["entities"]["e"]["aspects"]["eDEC"]["priority"] = 1                       # 우선순위를 주면 합쳐진다
+    b = direct.build(load_ses_dict(d), pick)
+    assert skeleton(b.layered.ses.tree, b.layered.void, b.variant).parts.keys() == {"f"}
+
+
 def test_an_unbounded_cardinality_is_built_once_the_count_is_decided():
     """개수에 상한이 없는 multi-aspect 는 족으로 펼칠 수 없다. 개수가 정해지면 직접 만들 수 있다."""
     d = {"ses": "1.0", "name": "Farm",
