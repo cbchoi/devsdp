@@ -1,0 +1,17 @@
+# 피드백 제어 사례에 DEVS 실행기를 붙인다. 모델베이스는 저장소 루트의 examples/feedback_control_mb.py다.
+# 문헌의 mb 속성(MB/Constant, MB/Feedback, MB/PID, MB/TransferFunction, MB/Add)에 해당한다.
+binding: "1.0"
+executor: devs
+target: ctrlSys
+time_unit: 0.125        # 이산화 간격. 모든 블록이 이 간격으로 한 걸음씩 간다
+
+map:
+  sourceSys: {module: Constant}
+  sourceDist: {module: Step}
+  feedbackSys: {module: Feedback}
+  ctrlPIDSys: {module: PID}
+  procUnitSys: {module: TransferFunction}
+  tfDist: {module: TransferFunction}
+  tfFeedforward: {module: TransferFunction}
+  addDist: {module: Add}
+  addFeedforward: {module: Add}

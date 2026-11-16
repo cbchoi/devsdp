@@ -1,0 +1,11 @@
+# 센서 네트워크 사례에 DEVS 실행기를 붙인다. 모델베이스는 저장소 루트의 examples/wsn_mb.py다.
+binding: "1.0"
+executor: devs
+target: EF_WSN
+time_unit: 1.0
+
+map:
+  BS: {module: Bs}
+  SENSOR: {module: Sensor}
+  GENR: {module: Genr}
+  TRANSD: {module: Transd}

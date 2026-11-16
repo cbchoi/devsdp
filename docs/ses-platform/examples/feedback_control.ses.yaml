@@ -1,0 +1,179 @@
+# 문헌 사례의 재현: 피드포워드 제어를 켜고 끌 수 있는 피드백 제어 시스템 (18_classic_parity.md 6절)
+# 구조와 이름은 Folkerts et al. (2019)의 그림 3과 그림 4를 따른다. PT1 공정을 PID 제어기로 제어하고,
+# 외란은 PT1을 거쳐 공정의 출력에 더해진다. 피드포워드 제어기는 외란 신호에서 계산한 값을 조작량에서 뺀다.
+# 구조 변이는 둘(피드포워드가 있고 없고)이다. PID 제어기의 k 와 Ti 는 이 문서에서는 기본값이고, 실험 제어가
+# 결정 집합의 속성 재정의(set)로 바꿔 본다. 문헌도 "k 와 Ti 는 기본값이며 연구 대상이라 덮어쓴다"고 적는다.
+# 실험 제어는 저장소 루트의 examples/feedback_control_experiment.py 다.
+#
+# 문헌과 다른 점
+# - 문헌은 분해 하나(simModel-ctrlSysDEC)에 결합을 SES 함수로 준다. 변수 feedforward 의 값에 따라
+#   결합 목록이 달라진다. 이 플랫폼에는 변수에 따라 달라지는 결합이 없다. 그래서 분해를 둘로 나누고
+#   분해의 규칙으로 고른다. 두 변이에 공통인 결합을 두 번 적어야 했다.
+# - 문헌의 뿌리 exp 아래에는 simMethod(대상 시뮬레이터)와 expMethod(살필 매개변수의 범위)가 있다.
+#   여기서는 구조가 아닌 것을 구조에 넣지 않는다. 시뮬레이터는 바인딩이, 매개변수의 범위는 실험 제어가 맡는다.
+# - 문헌의 전달함수는 계수를 목록으로 받는다(b={1}, a={20,1}). 여기서는 속성이 스칼라라서 1차 전달함수
+#   (b1 s + b0)/(a1 s + a0)의 계수 넷을 따로 적는다.
+# - 문헌의 기본 모델은 OpenModelica 의 연속 시간 모델이다. 여기의 모델베이스(examples/feedback_control_mb.py)는
+#   그것을 고정 간격으로 이산화한 것이다.
+
+ses: "1.0"
+name: ctrlSys
+description: PT1 공정의 피드백 제어. 피드포워드 제어는 선택 사항이다
+
+variables:
+  feedforward:
+    type: int
+    range: [0, 1]
+    doc: 피드포워드 제어를 넣는가. 문헌의 의미 조건 feedforward in [0, 1] 과 같다
+
+port_types:
+  Signal: {fields: {value: float}}
+
+entities:
+
+  ctrlSys:
+    root: true
+    aspects:
+      plainDEC:
+        parts: [feedforwardCtrl, sourceSys, feedbackSys, ctrlPIDSys, procUnitSys, sourceDist, tfDist, addDist]
+        couplings:
+          - {from: sourceSys.y, to: feedbackSys.u1}
+          - {from: feedbackSys.y, to: ctrlPIDSys.u}
+          - {from: ctrlPIDSys.y, to: procUnitSys.u}
+          - {from: procUnitSys.y, to: addDist.u1}
+          - {from: sourceDist.y, to: tfDist.u}
+          - {from: tfDist.y, to: addDist.u2}
+          - {from: addDist.y, to: feedbackSys.u2}
+        rule: {var: feedforward, eq: 0}
+        doc: 피드포워드가 없을 때의 결합. 제어기의 출력이 공정으로 바로 간다
+      feedforwardDEC:
+        parts: [feedforwardCtrl, sourceSys, feedbackSys, ctrlPIDSys, procUnitSys, sourceDist, tfDist, addDist]
+        couplings:
+          - {from: sourceSys.y, to: feedbackSys.u1}
+          - {from: feedbackSys.y, to: ctrlPIDSys.u}
+          - {from: ctrlPIDSys.y, to: feedforwardCtrl.u}
+          - {from: sourceDist.y, to: feedforwardCtrl.d}
+          - {from: feedforwardCtrl.y, to: procUnitSys.u}
+          - {from: procUnitSys.y, to: addDist.u1}
+          - {from: sourceDist.y, to: tfDist.u}
+          - {from: tfDist.y, to: addDist.u2}
+          - {from: addDist.y, to: feedbackSys.u2}
+        rule: {var: feedforward, eq: 1}
+        doc: 피드포워드가 있을 때의 결합. 제어기의 출력이 피드포워드 제어를 거쳐 공정으로 간다
+
+  feedforwardCtrl:
+    ports:
+      u: {type: Signal, direction: in}
+      d: {type: Signal, direction: in}
+      y: {type: Signal, direction: out}
+    specializations:
+      feedforwardCtrlSPEC:
+        alternatives: [NONE, fc]
+        select:
+          when: {var: feedforward, eq: 0}
+          then: NONE
+          else: fc
+
+  NONE:
+    extends: feedforwardCtrl
+    stereotype: void
+
+  fc:
+    extends: feedforwardCtrl
+    aspects:
+      fcDEC:
+        parts: [addFeedforward, tfFeedforward]
+        couplings:
+          - {from: u, to: addFeedforward.u1}
+          - {from: d, to: tfFeedforward.u}
+          - {from: tfFeedforward.y, to: addFeedforward.u2}
+          - {from: addFeedforward.y, to: y}
+
+  addFeedforward:
+    ports:
+      u1: {type: Signal, direction: in, required: true}
+      u2: {type: Signal, direction: in, required: true}
+      y: {type: Signal, direction: out}
+    attributes:
+      k2: {type: float, default: -1.0}
+    stereotype: atomic
+    doc: 조작량에서 피드포워드 제어기의 출력을 뺀다
+
+  tfFeedforward:
+    ports:
+      u: {type: Signal, direction: in, required: true}
+      y: {type: Signal, direction: out}
+    attributes:
+      b1: {type: float, default: 20.0}
+      b0: {type: float, default: 1.0}
+      a1: {type: float, default: 10.0}
+      a0: {type: float, default: 1.0}
+    stereotype: atomic
+    doc: 피드포워드 제어기 G_St(s) = G_Sz(s) / G_Su(s) = (20 s + 1) / (10 s + 1)
+
+  sourceSys:
+    ports:
+      y: {type: Signal, direction: out}
+    attributes:
+      k: {type: float, default: 0.0}
+    stereotype: atomic
+    doc: 목표값
+
+  feedbackSys:
+    ports:
+      u1: {type: Signal, direction: in, required: true}
+      u2: {type: Signal, direction: in, required: true}
+      y: {type: Signal, direction: out}
+    stereotype: atomic
+    doc: 목표값에서 제어량을 뺀다
+
+  ctrlPIDSys:
+    ports:
+      u: {type: Signal, direction: in, required: true}
+      y: {type: Signal, direction: out}
+    attributes:
+      k: {type: float, default: 1.0}
+      Ti: {type: float, default: 1.0}
+      Td: {type: float, default: 0.0}
+    stereotype: atomic
+
+  procUnitSys:
+    ports:
+      u: {type: Signal, direction: in, required: true}
+      y: {type: Signal, direction: out}
+    attributes:
+      b1: {type: float, default: 0.0}
+      b0: {type: float, default: 1.0}
+      a1: {type: float, default: 20.0}
+      a0: {type: float, default: 1.0}
+    stereotype: atomic
+    doc: 공정 G_Su(s) = 1 / (20 s + 1)
+
+  sourceDist:
+    ports:
+      y: {type: Signal, direction: out}
+    attributes:
+      height: {type: float, default: 1.0}
+      start: {type: float, default: 0.5, unit: s}
+    stereotype: atomic
+    doc: 계단 모양의 외란
+
+  tfDist:
+    ports:
+      u: {type: Signal, direction: in, required: true}
+      y: {type: Signal, direction: out}
+    attributes:
+      b1: {type: float, default: 0.0}
+      b0: {type: float, default: 1.0}
+      a1: {type: float, default: 10.0}
+      a0: {type: float, default: 1.0}
+    stereotype: atomic
+    doc: 외란이 공정의 출력에 미치는 길 G_Sz(s) = 1 / (10 s + 1)
+
+  addDist:
+    ports:
+      u1: {type: Signal, direction: in, required: true}
+      u2: {type: Signal, direction: in, required: true}
+      y: {type: Signal, direction: out}
+    stereotype: atomic
+    doc: 공정의 출력에 외란을 더한다. 출력이 제어량이다

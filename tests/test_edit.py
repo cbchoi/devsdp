@@ -28,6 +28,16 @@ ROOT = os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform")
 DOCS = sorted(glob.glob(os.path.join(ROOT, "examples", "*.ses.yaml"))
               + glob.glob(os.path.join(ROOT, "domains", "*.ses.yaml")))
 PROCESSING = os.path.join(ROOT, "examples", "processing_system.ses.yaml")
+
+
+def _calls(path) -> bool:
+    with open(path, encoding="utf-8") as f:
+        return "call:" in f.read()
+
+
+# 등록한 함수를 부르지 않는 문서. 함수를 모르는 범용 분석(펼치기)을 하는 시험은 이것들만 쓴다.
+# 함수를 부르는 문서(센서 네트워크 사례)의 같은 성질은 tests/test_cases.py 가 함수와 함께 확인한다
+PLAIN = [p for p in DOCS if not _calls(p)]
 CURRICULUM = os.path.join(ROOT, "domains", "curriculum_intro_programming.ses.yaml")
 NAMED = ("entity", "variable", "aspect", "multi_aspect", "specialization")
 
@@ -56,7 +66,7 @@ def ident(path) -> str:
 
 
 def test_there_are_documents_to_test():
-    assert len(DOCS) == 6
+    assert len(DOCS) == 8 and len(PLAIN) == 7
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +550,7 @@ def analysis(d):
     return len(sem(L.ses)), len(bad), sorted(counts.items())
 
 
-@pytest.mark.parametrize("path", DOCS, ids=ident)
+@pytest.mark.parametrize("path", PLAIN, ids=ident)
 def test_renaming_everything_preserves_the_analysis(path):
     d = raw(path)
     expected = analysis(d)
@@ -843,7 +853,7 @@ def _walk_outline(m, T, node):
     return entity, tuple(trail)
 
 
-@pytest.mark.parametrize("path", DOCS, ids=ident)
+@pytest.mark.parametrize("path", PLAIN, ids=ident)
 def test_outline_reaches_every_node_of_the_unfolded_tree(path):
     d = raw(path)
     m = E.from_dict(d)

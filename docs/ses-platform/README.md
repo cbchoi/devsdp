@@ -21,7 +21,7 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | 15_pyevsim_executor.md | pyevsim 실행기: 계약과 쓰는 법, pyevsim 1.1.7에서 확인한 엔진의 성질, 공통 모델 기반을 올리는 어댑터와 그 정확성, 참조 시뮬레이터와의 사건 기록 대조, 한계와 결정이 필요한 것 |
 | 16_cevsim_executor.md | cevsim 실행기: 계약과 쓰는 법, cevsim의 main(45e7fa9)에서 확인한 엔진의 성질과 앞선 커밋(a9886a6)과의 차이, C++ 엔진과 Python 사이의 다리, 공통 모델 기반을 올리는 방법, 참조 시뮬레이터와의 사건 기록 대조, 한계와 결정이 필요한 것 |
 | 17_time_unit.md | 시간 단위: 바인딩에 적는 시간 단위와 눈금으로 세는 시각의 계약, 눈금을 엔진의 시각에 맞추는 방법, 시간 값의 정적 검사(B5), 세 실행기의 기록 대조, 한계와 결정이 필요한 것 |
-| 18_classic_parity.md | 전통적인 SES와의 간격 메우기: 선택에 대한 제약(selected), 이름으로 등록한 함수(call), 우선순위, 사례마다 다른 매개변수(속성의 식, 복제본마다의 값, 결정 집합의 속성 재정의), 작업 중에 찾은 결함(없음이 된 구성요소의 분해 규칙), 검증 상태 |
+| 18_classic_parity.md | 전통적인 SES와의 간격 메우기: 선택에 대한 제약(selected), 이름으로 등록한 함수(call), 우선순위, 사례마다 다른 매개변수(속성의 식, 복제본마다의 값, 결정 집합의 속성 재정의), 규모(결정이 끝난 변이를 직접 만드는 길), 도구와 사례(패키지, 명령줄 도구 ses, 문헌 사례 둘의 재현), 작업 중에 찾은 결함과 고치지 않은 차이, 검증 상태 |
 | patches/cevsim_a9886a6_schedule_and_messages.patch | cevsim a9886a6의 두 결함(일정 목록과 메시지 묶음에서 열쇠로 지우기)을 고치는 제안. 그 커밋의 사본에서 확인했다. cevsim의 main(45e7fa9)은 같은 문제를 다른 방법으로 고쳤으므로 main에는 맞지 않는다. 기록으로 둔다 |
 | patches/cevsim_45e7fa9_gxx_linux_issue.md | cevsim에 알릴 글(영어). cevsim의 main(45e7fa9)의 자체 시험이 g++ 13.3과 리눅스에서 컴파일되지 않거나 실패하는 곳, 원인 셋, 사본에서 확인한 고치는 길 셋, long double의 폭에 따라 결과가 달라지는 예. cevsim 저장소에는 올리지 않았다 |
 | patches/cevsim_45e7fa9_gxx_linux_tests.patch | 위의 글에 딸린 수정 제안. 시험 코드만 고친다(파일 7개, 17줄). 45e7fa9의 사본에서 등록된 시험 24개가 모두 통과하는 것을 확인했다 |
@@ -42,11 +42,21 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | examples/processing_system.binding.devs.yaml | 처리 시스템에 DEVS 실행기를 붙이는 바인딩. 모델베이스는 저장소 루트의 examples/processing_mb.py |
 | examples/sensor_node.ses.yaml | 센서 노드 예시 SES. 실행기 둘을 붙인다 |
 | examples/sensor_node.binding.devs.yaml, sensor_node.binding.hw.yaml, sensor_node.hwlib.yaml | 센서 노드의 DEVS 바인딩, 하드웨어 바인딩, 하드웨어 모듈 라이브러리 |
+| examples/wsn.ses.yaml, wsn.binding.devs.yaml, wsn.decisions.yaml | 문헌 사례: 큰 무선 센서 네트워크(Nam, Kim (2021)). 결정 파일은 센서 1,000개를 정한다. 모델베이스는 저장소 루트의 examples/wsn_mb.py |
+| examples/feedback_control.ses.yaml, feedback_control.binding.devs.yaml | 문헌 사례: 피드포워드를 켜고 끄는 피드백 제어(Folkerts et al. (2019)). 모델베이스와 실험 제어는 저장소 루트의 examples/feedback_control_mb.py, feedback_control_experiment.py |
 
 예시 SES는 스키마로 검증했다. 검증 방법:
 
 ```bash
 python -c "import json, yaml, jsonschema; s=json.load(open('docs/ses-platform/schema/ses.schema.json')); d=yaml.safe_load(open('docs/ses-platform/examples/processing_system.ses.yaml')); jsonschema.Draft202012Validator(s).validate(d); print('valid')"
+```
+
+명령줄 도구 ses 로 문서를 검사하고, 변이를 고르고, 만들고, 돌릴 수 있다(18 문서의 6절).
+
+```bash
+pip install .
+ses check docs/ses-platform/examples/processing_system.ses.yaml
+ses run docs/ses-platform/examples/processing_system.ses.yaml --decisions docs/ses-platform/examples/processing_system.decisions.tuned.yaml --binding docs/ses-platform/examples/processing_system.binding.devs.yaml --library examples.processing_mb:LIBRARY --until 20
 ```
 
 읽는 순서는 01, 02, 03, 04이다. 03의 6절이 구조 표현의, 04가 자료구조의 핵심이다. 편집기를 만들 때는 13을 먼저 읽는다. 13은 04의 자료구조 가운데 편집에 쓰는 부분을 다시 정한 것이다. 실행기(시뮬레이터, 하드웨어)를 붙일 때는 14를 읽는다. 14는 04의 경계 계층과 바인딩 계층을 다시 정하고 정리로 뒷받침한 것이다. pyevsim으로 실행할 때는 15를, cevsim으로 실행할 때는 16을 읽는다. 모델의 시간을 어떻게 적고 실행기들이 어떻게 세는지는 17을 읽는다.

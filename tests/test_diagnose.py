@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from docgen import rand_document  # noqa: E402
-from test_edit import CURRICULUM, DOCS, PROCESSING, damage, ident, rand_command, raw  # noqa: E402
+from test_edit import CURRICULUM, DOCS, PLAIN, PROCESSING, damage, ident, rand_command, raw  # noqa: E402
 
 from ses_core import load_ses_dict  # noqa: E402
 from ses_core import edit as E  # noqa: E402
@@ -586,7 +586,7 @@ def test_analysis_never_raises_during_editing(seed):
     assert a.diagnostics == analyze(open_doc(path)[0], profile, max_variants=400).diagnostics
 
 
-@pytest.mark.parametrize("seed", range(120))
+@pytest.mark.parametrize("seed", range(20 * len(DOCS)))          # 문서마다 편집 세션 20개
 def test_no_diagnostics_means_the_strict_tools_accept(seed):
     """문서 범위의 진단이 하나도 없으면 정준 문서로 쓸 수 있고, 적재기와 스키마가 받아들인다."""
     jsonschema = pytest.importorskip("jsonschema")
@@ -717,8 +717,8 @@ def test_shared_definitions_do_not_blow_up_the_hierarchy_check():
 
 @pytest.mark.parametrize("seed", range(150))
 def test_unfolded_size_is_counted_without_unfolding(seed):
-    if seed < len(DOCS):
-        d = raw(DOCS[seed])
+    if seed < len(PLAIN):
+        d = raw(PLAIN[seed])
     else:
         d = rand_document(random.Random(seed))
     L = unfold_layered(load_ses_dict(d), profile_of(d))

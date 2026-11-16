@@ -1,0 +1,116 @@
+# 문헌 사례의 재현: 큰 무선 센서 네트워크 (18_classic_parity.md 6절)
+# 구조는 Nam, Kim (2021)의 WSN-SES/MB를 따른다. EF-WSN이 WSN과 실험 프레임(EF)으로, WSN이 기지국(BS)과
+# 센서들(SENSORS)로 나뉘고, SENSORS가 multi-aspect로 SENSOR를 복제한다. EF는 사건 생성기(GENR)와
+# 변환기(TRANSD)로 나뉜다. 원자 모델은 넷이고 센서의 수는 50에서 1,000이다.
+#
+# 문헌과 다른 점
+# - 문헌은 사건을 어느 센서에 보낼지를 시뮬레이터 커널 안의 모델이 정한다. 여기서는 결합 틀로 적는다.
+#   사건은 모든 센서에 가고, 센서가 자기 위치와 감지 거리로 받을지를 정한다.
+# - 센서의 위치는 복제본의 번호에서 정한다(속성의 식). 문헌에는 위치를 정하는 방법이 SES 밖에 있다.
+# - 원자 모델의 행위(examples/wsn_mb.py)는 문헌의 상태도를 옮긴 것이 아니라 같은 역할을 하는 작은 모델이다.
+
+ses: "1.0"
+name: EF_WSN
+description: 기지국 하나와 센서 여럿으로 된 센서장, 그리고 사건을 만들고 결과를 세는 실험 프레임
+
+variables:
+  sensors:
+    type: int
+    range: [1, 1000]
+    default: 50
+    doc: 센서의 수
+  field:
+    type: enum
+    values: [100, 500, 1000]
+    default: 1000
+    doc: 센서장의 한 변의 길이
+  sensing:
+    type: enum
+    values: [20, 40, 80]
+    default: 40
+    doc: 센서가 사건을 감지하는 거리
+
+port_types:
+  Event: {fields: {id: int, x: int, y: int}}
+  Packet: {fields: {event: int, sensor: int}}
+  Report: {fields: {event: int, sensor: int}}
+
+entities:
+
+  EF_WSN:
+    root: true
+    aspects:
+      efwsnDec:
+        parts: [WSN, EF]
+        couplings:
+          - {from: EF.event, to: WSN.event}
+          - {from: WSN.report, to: EF.report}
+
+  WSN:
+    ports:
+      event: {type: Event, direction: in, required: true}
+      report: {type: Report, direction: out, required: true}
+    aspects:
+      wsnDec:
+        parts: [BS, SENSORS]
+        couplings:
+          - {from: event, to: SENSORS.event}
+          - {from: SENSORS.packet, to: BS.packet}
+          - {from: BS.report, to: report}
+
+  BS:
+    ports:
+      packet: {type: Packet, direction: in, required: true}
+      report: {type: Report, direction: out}
+    stereotype: atomic
+
+  SENSORS:
+    ports:
+      event: {type: Event, direction: in, required: true}
+      packet: {type: Packet, direction: out, required: true}
+    multi_aspects:
+      sensorsMAsp:
+        part: SENSOR
+        cardinality: {var: sensors}
+        naming: "sensor_{i}"
+        couplings:
+          pattern: fan_out_fan_in
+          fan_out: [{from: event, to: "{part}.event"}]
+          fan_in: [{from: "{part}.packet", to: packet}]
+
+  SENSOR:
+    ports:
+      event: {type: Event, direction: in, required: true}
+      packet: {type: Packet, direction: out}
+    attributes:
+      id: {type: int, expr: {replica: index}}
+      x: {type: int, expr: {call: grid_x, args: [{replica: index}, {replica: count}, {var: field}]}}
+      y: {type: int, expr: {call: grid_y, args: [{replica: index}, {replica: count}, {var: field}]}}
+      reach: {type: int, expr: {var: sensing}}
+    stereotype: atomic
+
+  EF:
+    ports:
+      event: {type: Event, direction: out, required: true}
+      report: {type: Report, direction: in, required: true}
+    aspects:
+      efDec:
+        parts: [GENR, TRANSD]
+        couplings:
+          - {from: GENR.event, to: event}
+          - {from: report, to: TRANSD.report}
+
+  GENR:
+    ports:
+      event: {type: Event, direction: out}
+    attributes:
+      field: {type: int, expr: {var: field}}
+      period: {type: float, default: 2.0, unit: s}
+      events: {type: int, default: 50}
+      seed: {type: int, default: 7}
+    stereotype: atomic
+
+  TRANSD:
+    ports:
+      report: {type: Report, direction: in, required: true}
+    stereotype: atomic

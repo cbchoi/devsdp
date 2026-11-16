@@ -1,0 +1,13 @@
+# 센서 1,000개짜리 센서장 하나를 정한다. 문헌의 실험에서 가장 큰 크기다.
+# 이 크기는 족 전체를 펼쳐서는 만들 수 없다. 직접 만드는 길(ses_core/direct.py)로 만든다.
+decisions: "1.0"
+name: field_1000
+target: EF_WSN
+
+variables:
+  sensors: 1000
+  field: 1000
+  sensing: 40
+
+set:
+  - {at: GENR, attribute: events, value: 40}
