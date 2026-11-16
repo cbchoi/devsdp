@@ -17,6 +17,14 @@
   그 구성요소의 분해가 되고, 밀린 구성원은 "분해 없음"(skeleton.NO_ASPECT)을 고른다.
 우선순위가 같거나 없어서 가를 수 없으면 종전과 같다. 규칙은 모순이 되고 병합은 부적격이 된다.
 
+빠진 구성요소 (docs/ses-platform/18_classic_parity.md 5.3절)
+- 선택 대수는 골라진 엔티티마다 분해를 하나 고르게 한다. 그대로 두면 없음 대안을 골라 빠진 구성요소도
+  분해와 그 아래를 골라야 하고, 그 아래의 선택이 변이를 부풀리며, 거기에 걸린 결정과 규칙이 어긋나면
+  족이 빈다. 문헌의 절차는 빠진 구성요소의 아래를 평가하지 않는다.
+- 그래서 빠질 수 있는 구성요소의 구성원 가운데 분해를 가진 것에 "빠짐"(skeleton.GONE)을 준다. 구성요소가
+  빠지면 그것을 고르고, 빠지지 않았으면 고를 수 없다. 빠진 구성요소의 병합체 안의 대안 선택은 그대로 남는다.
+  그 선택으로 구성요소가 빠지기 때문이다.
+
 식 (docs/ses-platform/18_classic_parity.md)
 - 규칙과 제약의 원자는 변수에 대한 조건이다. 변수의 범위가 유한하므로 원자가 참이 되는 변수 값의
   조합을 모두 적어 명제식으로 바꾼다. 변수와 상수의 비교, 변수끼리의 비교, 이름으로 등록한 함수의
@@ -46,8 +54,8 @@ from .ext_text import Text
 from .extension import Layered
 from .loader import fits, selected_target
 from .profile import Domain, Item, Profile
-from .skeleton import (NO_ASPECT, component_of, component_path, components, is_component, live_formula,
-                       members, owner)
+from .skeleton import (GONE, NO_ASPECT, component_of, component_path, components, is_component, live_formula,
+                       members, owner, void_formula)
 
 _OPS = {"eq": operator.eq, "ne": operator.ne, "lt": operator.lt, "le": operator.le,
         "gt": operator.gt, "ge": operator.ge, "in": lambda v, c: v in c}
@@ -410,7 +418,8 @@ class Unfolding:
     # 분해의 규칙과 우선순위 ---------------------------------------------
 
     def rules(self) -> None:
-        """분해의 규칙과 우선순위를 제약식으로 옮기고 나무를 만든다. 밀릴 수 있는 구성원에게 "분해 없음"을 준다."""
+        """분해의 규칙과 우선순위를 제약식으로 옮기고 나무를 만든다. 밀릴 수 있는 구성원에게 "분해 없음"을,
+        빠질 수 있는 구성요소의 구성원에게 "빠짐"을 준다."""
         kinds, labels, decomps, gone = self.kinds, self.labels, self.decomps, self.gone
 
         def together(y: tuple, z: tuple) -> bool:
@@ -426,13 +435,26 @@ class Unfolding:
 
         plain = Tree(kinds, labels)
         rivals: dict = {}                            # 구성원에서, 함께 선택될 수 있고 분해를 가진 다른 구성원들로
+        removable: dict = {}                         # 빠질 수 있는 구성요소의, 분해를 가진 구성원에서 그 구성요소로
         for e in components(plain):
-            owners = [y for y in members(plain, e) if y in decomps]
+            ms = members(plain, e)
+            owners = [y for y in ms if y in decomps]
+            voids = [z for z in ms if z in gone]
             for y in owners:
                 rivals[y] = [z for z in owners if z != y and together(y, z)]
                 if any(above(pb, pa) for z in rivals[y] for *_, pb in decomps[z] for *_, pa in decomps[y]):
                     kinds[y + (NO_ASPECT,)] = ASP
+                if any(together(y, z) for z in voids):
+                    kinds[y + (GONE,)] = ASP
+                    removable[y] = e
         tree = self.tree = Tree(kinds, labels)
+
+        # 빠진 구성요소의 구성원은 분해 대신 "빠짐"을 고른다. 그래서 그 아래는 아무것도 골라지지 않는다.
+        # "빠짐"은 빠졌을 때만 고를 수 있다
+        for y, e in removable.items():
+            removed, marker = void_formula(tree, gone, e), sel(y + (GONE,))
+            self.clauses.append(f_imp(f_and(sel(y), removed), marker))
+            self.clauses.append(f_imp(marker, removed))
 
         def one_of(nodes):
             return sel(nodes[0]) if len(nodes) == 1 else f_or(*(sel(n) for n in nodes))
@@ -637,6 +659,8 @@ def pruning_patterns(doc: m.SesDocument) -> list:
         for ma in e.multi_aspects.values():
             for n in _card_set(doc, ma):
                 kinds[(name, f"{ma.name}[{n}]")] = ASP
+        if e.aspects or e.multi_aspects:
+            kinds[(name, GONE)] = ASP                # 분해를 남기는 패턴도 빠짐은 남긴다. 사람이 고르는 것이 아니다
         if len(kinds) > 1:
             out.append(SES(Tree(kinds)))
     return out

@@ -27,13 +27,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import model as m
-from .algebra import SPEC, AlgebraError, Tree, holds
+from .algebra import ASP, SPEC, AlgebraError, Tree, holds
 from .classic import _allowed, counts_of, decompositions
-from .decisions import DecisionSet, override_problems, with_overrides
+from .decisions import DecisionSet, override_problems, owners, with_overrides
 from .extension import Layered
 from .loader import fits
 from .profile import Profile
-from .skeleton import NO_ASPECT
+from .skeleton import GONE, NO_ASPECT, skeleton
 from .unfold import Unfolding, _domain, extensions_of, layered, reachable
 
 
@@ -199,7 +199,10 @@ def build(doc: m.SesDocument, ds: Optional[DecisionSet] = None, profile: Profile
     def component(def_name: str, path: tuple, cp: tuple, replicas: tuple) -> None:
         members = cluster(def_name, path, cp, replicas)
         if any(e.stereotype == m.Stereotype.VOID for e, _ in members):
-            return                                               # 빠지는 구성요소. 그 아래는 만들지 않는다
+            for e, y in members:                                 # 빠지는 구성요소. 분해 대신 "빠짐"을 고르고 그 아래는 없다
+                if e.aspects or e.multi_aspects:
+                    u.kinds[y + (GONE,)] = ASP
+            return
         owners = [(e, y) for e, y in members if e.aspects or e.multi_aspects]
         if not owners:
             return
@@ -242,6 +245,9 @@ def build(doc: m.SesDocument, ds: Optional[DecisionSet] = None, profile: Profile
             raise Undecided(cp, "count", names[0], [n for _, _, n in options])
         e, a, n = options[0]
         y = node[e.name]
+        for z, yz in owners:                                     # 밀린 구성원은 "분해 없음"을 고른다
+            if z is not e:
+                u.kinds[yz + (NO_ASPECT,)] = ASP
         if isinstance(a, m.Aspect):
             a_path = u.aspect(e, a, y)
             for part in a.parts:
@@ -269,6 +275,19 @@ def build(doc: m.SesDocument, ds: Optional[DecisionSet] = None, profile: Profile
             if "타입" in why:
                 raise AlgebraError(f"{'/'.join('/'.join(x) if isinstance(x, tuple) else str(x) for x in key)}: {why}")
             missing.append(key)
+        # 빠진 구성요소를 가리킨 재정의도 쓰이지 않은 것이다. 그 구성요소의 노드는 나무에 있지만 만들어지지 않는다
+        live: set = set()
+        stack = [skeleton(u.tree, L.void, V)]
+        while stack:
+            comp = stack.pop()
+            if comp is not None:
+                live.update(comp.members)
+                stack += list(comp.parts.values())
+        declared = next((x.decls for x in L.extensions if x.name == "attr"), {})
+        for o in ds.set:
+            if o.key not in missing and not any(y in live and o.attribute in (declared.get(y) or {})
+                                                for y in owners(u.tree, o)):
+                missing.append(o.key)
         L = with_overrides(L, ds, skip_invalid=True)
-    unused = tuple(c.key for c in ds.choose if c.key not in used) + tuple(missing)
+    unused = tuple(c.key for c in ds.choose if c.key not in used) + tuple(o.key for o in ds.set if o.key in missing)
     return Built(L, V, sigma, tuple(used), unused)

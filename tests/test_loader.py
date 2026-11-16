@@ -95,3 +95,66 @@ def test_two_roots_rejected(raw):
     bad["entities"]["Collector"]["root"] = True
     with pytest.raises(LoadError, match="root"):
         load_ses_dict(bad)
+
+
+@pytest.mark.parametrize("card,var", [
+    ({"min": 1, "max": 0}, None), ({"min": -1, "max": 2}, None), (-2, None), ({"min": 1.5}, None),
+    ({"var": "v"}, {"type": "enum", "values": ["a", "b"]}), ({"var": "v"}, {"type": "int", "range": [-1, 2]}),
+    ({"var": "v"}, {"type": "bool"}),
+])
+def test_counts_must_be_non_negative_integers_and_ranges_not_empty(raw, card, var):
+    """개수는 0 이상의 정수다. 빈 범위(min 이 max 보다 큼)를 받으면 펼친 나무는 그 분해를 없는 것으로 보고 고전 절차는
+    구성요소를 만들지 못해 두 뜻이 갈렸다(18 문서 8절). 적재할 때 막는다."""
+    bad = copy.deepcopy(raw)
+    bad["entities"]["ServerPool"]["multi_aspects"]["serversMAsp"]["cardinality"] = card
+    if var is not None:
+        bad["variables"]["v"] = var
+    with pytest.raises(LoadError, match="개수"):
+        load_ses_dict(bad)
+
+
+def test_valid_counts_are_accepted(raw):
+    for card in (0, {"min": 0, "max": 0}, {"min": 2}, {"min": 1, "max": 3}):
+        d = copy.deepcopy(raw)
+        d["entities"]["ServerPool"]["multi_aspects"]["serversMAsp"]["cardinality"] = card
+        load_ses_dict(d)
+
+
+@pytest.mark.parametrize("name", ["~", "-"])
+def test_marker_names_are_reserved(raw, name):
+    """펼침은 밀려난 구성원과 빠진 구성요소에 표시 노드를 붙인다. 그 이름은 문서의 분해나 specialization 에 쓸 수 없다."""
+    bad = copy.deepcopy(raw)
+    bad["entities"]["Generator"]["aspects"] = {name: {"parts": ["Collector"]}}
+    del bad["entities"]["Generator"]["stereotype"]
+    with pytest.raises(LoadError, match="쓸 수 없다"):
+        load_ses_dict(bad)
+
+
+def test_a_definition_cannot_be_merged_twice_into_one_component():
+    """한 엔티티의 두 specialization 이 같은 정의에 닿으면 그 정의가 병합체에 두 번 든다. 대수는 그것을 분해 둘로
+    보아 합칠 수 없다고 하고 고전 절차는 하나로 보아 만든다(18 문서 7절). 적재할 때 막는다."""
+    def doc(entities):
+        return {"ses": "1.0", "name": "R", "entities": entities}
+
+    direct_twice = doc({"R": {"root": True, "specializations": {"s": {"alternatives": ["A"]}, "t": {"alternatives": ["A"]}}},
+                        "A": {"extends": "R", "aspects": {"aa": {"parts": ["P"]}}}, "P": {}})
+    with pytest.raises(LoadError, match=r"R: specialization s 와 t 가 같은 정의 \['A'\] 에 닿는다"):
+        load_ses_dict(direct_twice)
+    # 대안은 바탕을 extends 해야 하므로, 한 정의가 두 곳의 대안이 되려면 extends 의 사슬이 둘을 모두 지나야 한다
+    nested_twice = doc({"R": {"root": True, "specializations": {"s": {"alternatives": ["A", "B"]}, "t": {"alternatives": ["C"]}}},
+                        "A": {"extends": "R"}, "B": {"extends": "C", "specializations": {"u": {"alternatives": ["D"]}}},
+                        "C": {"extends": "R", "specializations": {"w": {"alternatives": ["D", "E"]}}},
+                        "D": {"extends": "B"}, "E": {"extends": "C"}})
+    with pytest.raises(LoadError, match=r"R: specialization s 와 t 가 같은 정의 \['D'\] 에 닿는다"):
+        load_ses_dict(nested_twice)
+    # 한 specialization 의 대안들이 같은 정의에 닿는 것은 괜찮다. 대안은 하나만 골라진다
+    same_spec = doc({"R": {"root": True, "specializations": {"s": {"alternatives": ["B", "C"]}}},
+                     "B": {"extends": "C", "specializations": {"u": {"alternatives": ["D"]}}},
+                     "C": {"extends": "R", "specializations": {"w": {"alternatives": ["D"]}}},
+                     "D": {"extends": "B"}})
+    load_ses_dict(same_spec)
+    # 서로 다른 구성요소가 같은 정의를 대안으로 쓰는 것도 괜찮다
+    two_parts = doc({"R": {"root": True, "aspects": {"d": {"parts": ["X", "Y"]}}},
+                     "X": {"extends": "Y", "specializations": {"s": {"alternatives": ["A"]}}},
+                     "Y": {"specializations": {"t": {"alternatives": ["A"]}}}, "A": {"extends": "X"}})
+    load_ses_dict(two_parts)

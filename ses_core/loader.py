@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from . import model as m
+from .skeleton import MARKERS
 
 
 class LoadError(ValueError):
@@ -300,6 +301,8 @@ def check_integrity(doc: m.SesDocument) -> None:
         names = ent.decomposition_names
         if len(names) != len(set(names)):
             errors.append(f"{name}: 형제 이름 충돌 {names}")
+        for reserved in sorted(MARKERS & set(names)):        # 펼침이 표시 노드의 이름으로 쓴다 (18 문서 3절, 5.3절)
+            errors.append(f"{name}: 이름 {reserved} 는 쓸 수 없다. 펼침이 표시로 쓰는 이름이다")
         # 포트 타입
         for p in ent.ports.values():
             if p.type not in doc.port_types:
@@ -329,8 +332,19 @@ def check_integrity(doc: m.SesDocument) -> None:
         # multi-aspect
         for ma in ent.multi_aspects.values():
             ref_ok(ma.part.def_name, f"{name}/{ma.name}.part")
-            if isinstance(ma.cardinality, m.VarCard) and ma.cardinality.var not in doc.variables:
-                errors.append(f"{name}/{ma.name}.cardinality: 정의되지 않은 변수 {ma.cardinality.var}")
+            card, where = ma.cardinality, f"{name}/{ma.name}.cardinality"
+            if isinstance(card, m.VarCard):
+                var = doc.variables.get(card.var)
+                if var is None:
+                    errors.append(f"{where}: 정의되지 않은 변수 {card.var}")
+                elif not _counts(var):
+                    errors.append(f"{where}: 개수 변수 {card.var} 의 값은 0 이상의 정수여야 한다")
+            elif isinstance(card, m.Fixed):
+                if not _count(card.n):
+                    errors.append(f"{where}: 개수는 0 이상의 정수여야 한다: {card.n!r}")
+            elif not _count(card.min) or (card.max is not None and (not _count(card.max) or card.max < card.min)):
+                errors.append(f"{where}: 개수의 범위는 0 이상의 정수이고 비어 있지 않아야 한다: "
+                              f"min {card.min!r}, max {card.max!r}")
             expr_vars(ma.rule, f"{name}/{ma.name}.rule")
             if ma.pattern is not None and ma.part.def_name in ents:
                 # 자리표시자 {part} 를 실제 부분 이름으로 치환한 뒤 결합을 검사한다
@@ -372,6 +386,35 @@ def check_integrity(doc: m.SesDocument) -> None:
                 if p.def_name in ents and ents[p.def_name].stereotype == m.Stereotype.VOID:
                     errors.append(f"{name}/{asp.name}: 없음 대안 {p.def_name} 은 부분이 될 수 없다")
 
+    # 한 구성요소에 같은 정의가 두 번 합쳐질 수 없다. 한 엔티티의 서로 다른 specialization 은 함께 골라지므로,
+    # 둘이 같은 정의에 닿으면 그 정의가 병합체에 두 번 든다. 대수는 그것을 분해 둘, 바인딩 둘로 보고
+    # 고전 절차는 하나로 본다 (18 문서 7절)
+    below: dict = {}
+
+    def merged_under(d: str, trail: tuple = ()) -> frozenset:
+        """정의 d 를 대안으로 고르면 함께 합쳐질 수 있는 정의들. d 자신을 포함한다."""
+        if d in below:
+            return below[d]
+        if d in trail or d not in ents:                       # 순환과 없는 정의는 다른 검사가 알린다
+            return frozenset({d})
+        out = {d}
+        for sp in ents[d].specializations.values():
+            for alt in sp.alternatives:
+                out |= merged_under(alt, trail + (d,))
+        below[d] = frozenset(out)
+        return below[d]
+
+    for name, ent in ents.items():
+        reach = {sp.name: frozenset().union(*(merged_under(alt, (name,)) for alt in sp.alternatives))
+                 for sp in ent.specializations.values()}
+        seen = sorted(reach)
+        for i, s in enumerate(seen):
+            for t in seen[i + 1:]:
+                twice = sorted(reach[s] & reach[t])
+                if twice:
+                    errors.append(f"{name}: specialization {s} 와 {t} 가 같은 정의 {twice} 에 닿는다. "
+                                  "한 구성요소에 같은 정의가 두 번 합쳐질 수 없다")
+
     for c in doc.constraints:
         for e in (c.when, c.require, c.forbid):
             expr_vars(e, f"constraint {c.name}", constraint=True)
@@ -384,6 +427,20 @@ def check_integrity(doc: m.SesDocument) -> None:
 
     if errors:
         raise LoadError("무결성 오류 " + str(len(errors)) + "건:\n  " + "\n  ".join(errors))
+
+
+def _count(n) -> bool:
+    """복제본의 수로 쓸 수 있는 값인가. 0 이상의 정수다. 참과 거짓은 아니다."""
+    return isinstance(n, int) and not isinstance(n, bool) and n >= 0
+
+
+def _counts(var: m.Variable) -> bool:
+    """개수로 쓰는 변수의 값이 모두 복제본의 수가 될 수 있는가."""
+    if isinstance(var.domain, m.EnumSet):
+        return all(_count(v) for v in var.domain.values)
+    if isinstance(var.domain, m.Range):
+        return var.type == m.ScalarType.INT and _count(var.domain.min)
+    return var.type == m.ScalarType.INT                  # 범위가 없으면 펼칠 때 유한 범위를 요구한다
 
 
 def selected_target(doc: m.SesDocument, e: m.Selected, def_name: str, group: str) -> tuple:

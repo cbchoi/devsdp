@@ -34,7 +34,7 @@ from typing import Any, Mapping, Optional
 
 from .algebra import (ENT, SPEC, SES, AlgebraError, Tree, determinate, interior,
                       occurrences, prune, reduce, restrict)
-from .skeleton import NO_ASPECT, component_path, is_component, members, real_aspects  # noqa: F401
+from .skeleton import GONE, NO_ASPECT, component_path, is_component, members, real_aspects  # noqa: F401
 
 FALSE = ("or",)
 VAR_PREFIX = "$"
@@ -351,7 +351,7 @@ def excluded(T: Tree, c: Choice) -> set:
     else:
         want = set(c.aspect)
         for y in ys:
-            mine = T.aspects(y)
+            mine = [a for a in T.aspects(y) if a[-1] != GONE]   # 빠졌다는 표시는 결정이 고르는 것이 아니다. 늘 남긴다
             keeps = any(family(a[-1]) in want for a in mine)
             for a in mine:
                 touched = True
@@ -608,6 +608,9 @@ def witness(T: Tree, V: frozenset, domains: Optional[Mapping] = None) -> Decisio
                 facts.append((q[:-1], dict(specialization=q[-1], alternative=(chosen,))))
         elif k == ENT:
             asps = T.aspects(q)
+            if not asps or next(a for a in asps if a in V)[-1] == GONE:
+                continue                               # 빠진 구성요소. 대안의 선택이 이미 정한다
+            asps = tuple(a for a in asps if a[-1] != GONE)
             if len(asps) < 2:
                 continue
             fam, n = split_count(next(a[-1] for a in asps if a in V))

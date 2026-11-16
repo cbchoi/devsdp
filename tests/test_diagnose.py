@@ -26,7 +26,7 @@ from ses_core.diagnose import (  # noqa: E402
 from ses_core.edit import MISSING, EditError, Editor, Insert, Ref, Set  # noqa: E402
 from ses_core.extension import violations  # noqa: E402
 from ses_core.profile import load_profile  # noqa: E402
-from ses_core.skeleton import skeleton  # noqa: E402
+from ses_core.skeleton import MARKERS, skeleton  # noqa: E402
 from ses_core.unfold import unfold_layered, variable_domains  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform")
@@ -715,6 +715,9 @@ def test_shared_definitions_do_not_blow_up_the_hierarchy_check():
     assert "L3/" in found[0].message and found[0].message.endswith("/L3")
 
 
+SIZE: collections.Counter = collections.Counter()
+
+
 @pytest.mark.parametrize("seed", range(150))
 def test_unfolded_size_is_counted_without_unfolding(seed):
     if seed < len(PLAIN):
@@ -722,7 +725,15 @@ def test_unfolded_size_is_counted_without_unfolding(seed):
     else:
         d = rand_document(random.Random(seed))
     L = unfold_layered(load_ses_dict(d), profile_of(d))
-    assert unfolded_size(E.from_dict(d)) == len(L.ses.tree.nodes)
+    markers = [n for n in L.ses.tree.nodes if n[-1] in MARKERS]          # 어림은 펼침이 붙인 표시를 세지 않는다
+    assert unfolded_size(E.from_dict(d)) == len(L.ses.tree.nodes) - len(markers)
+    SIZE["docs_with_markers"] += bool(markers)
+
+
+def test_size_sample_is_not_vacuous():
+    if not SIZE:
+        pytest.skip("앞의 시험과 함께 실행할 때만 센다")
+    assert SIZE["docs_with_markers"] >= 10, SIZE
 
 
 def test_very_deep_document_gets_a_diagnostic_not_a_crash():

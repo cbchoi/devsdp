@@ -23,7 +23,7 @@ from .decisions import (ChoicePoint, DecisionSet, _variable_choice, choice_table
 from .edit import IDENTIFIER, EditError, Model, Ref, TYPES, to_dict
 from .extension import Layered, violations
 from .profile import _TYPES, Profile
-from .skeleton import members
+from .skeleton import NO_ASPECT, members
 
 _STEREOTYPES = ("atomic", "coupled", "abstract", "frame", "void")
 _SCOPE = ("aspects", "multi_aspects", "specializations")
@@ -450,8 +450,9 @@ def unfolded_size(m: Model, cap: int = 10 ** 12) -> int:
     알아야 편집기가 멈추지 않는다. 막는 오류가 없는 문서에서만 뜻이 있다. cap을 넘으면
     cap을 돌려준다.
 
-    우선순위로 밀릴 수 있는 구성원에게 펼침이 붙이는 "분해 없음" 노드(구성원마다 많아야 하나)는
-    세지 않는다. 그런 문서에서는 실제 노드 수보다 그만큼 작다. 한도를 가늠하는 데만 쓴다.
+    펼침이 붙이는 표시 노드는 세지 않는다. 우선순위로 밀릴 수 있는 구성원의 "분해 없음"과 빠질 수 있는
+    구성요소의 구성원의 "빠짐"이다(분해를 가진 구성원마다 많아야 둘). 그런 문서에서는 실제 노드 수보다
+    그만큼 작다. 한도를 가늠하는 데만 쓴다.
     """
     doc = m.get(m.root)
     domains: dict = {}
@@ -714,7 +715,9 @@ def _family(m: Model, L: Layered, domains: dict, result: Analysis) -> Analysis:
         if not p_core.active:
             # 이 지점 자체가 적격 변이에 없다. 위쪽 선택지가 보고된다. 다만 엔티티는 나타나는데 그 분해가 하나도
             # 나타나지 않는다면, 다른 구성원의 분해에 우선순위로 늘 밀리는 것이다 (18 문서)
-            pushed = p_core.kind == "aspect" and any(T.kind(q) == ENT and T.label(q) == p_core.owner for q in present)
+            # 늘 빠지는 구성요소의 분해도 나타나지 않는다. 그 원인은 위쪽의 대안 선택이므로 거기서 알린다
+            pushed = p_core.kind == "aspect" and any(
+                T.kind(q) == ENT and T.label(q) == p_core.owner and q + (NO_ASPECT,) in present for q in present)
             if not pushed:
                 continue
         for (option, in_any), (_, in_good) in zip(p_all.options, p_core.options):

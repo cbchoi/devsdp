@@ -20,7 +20,7 @@ from typing import Mapping, Optional
 from .algebra import (ASP, ENT, SPEC, SES, AlgebraError, Tree, f_and, f_imp, f_not, f_or,
                       holds, prune, sel, sem)
 from .extension import Extension, View
-from .skeleton import NO_ASPECT, component_of, components, is_component, members, owner, real_aspects  # noqa: F401
+from .skeleton import MARKERS, NO_ASPECT, component_of, components, is_component, members, owner, real_aspects  # noqa: F401
 
 IN, OUT = "in", "out"
 SELF = None          # 결합 끝점의 "자기 자신" (결합 모델의 외부 포트)
@@ -228,7 +228,9 @@ def psi(T: Tree, ann: Ann, no_self_loop: bool = False):
                 if y != y2:
                     clauses.append(f_imp(le, f_not(f_and(sel(a), sel(a2)))))
 
-    for a in sorted(n for n in T.nodes if T.kind(n) == ASP and n[-1] != NO_ASPECT):
+    # 표시 노드는 분해가 아니다. 빠짐은 건너뛰지 않아도 식이 같다(빠짐이 골라지면 구성요소가 살아 있지 않다).
+    # 밀림은 건너뛰어야 한다. 밀린 구성원의 구성요소는 살아 있다
+    for a in sorted(n for n in T.nodes if T.kind(n) == ASP and n[-1] not in MARKERS):
         e = owner(T, a)
         guard = f_and(live(e), sel(a))
         parts = {q[-1]: q for q in T.children(a)}
@@ -332,7 +334,7 @@ def discipline_violations(T: Tree, ann: Ann, no_self_loop: bool = False) -> list
         if len([y for y in M[e] if T.aspects(y)]) > 1:
             out.append(("D0", e, "병합체 안의 둘 이상의 노드가 분해를 가진다"))
 
-    for a in sorted(n for n in T.nodes if T.kind(n) == ASP and n[-1] != NO_ASPECT):
+    for a in sorted(n for n in T.nodes if T.kind(n) == ASP and n[-1] not in MARKERS):
         e = owner(T, a)
         parts = {q[-1]: q for q in T.children(a)}
         chain, z = [], a[:-1]

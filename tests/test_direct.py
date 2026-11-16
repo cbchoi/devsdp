@@ -1,10 +1,12 @@
 """결정이 끝난 변이 하나를 위에서 아래로 만드는 길 (docs/ses-platform/18_classic_parity.md 5절).
 
 족 전체를 펼치는 길(unfold, 결정 집합의 적용, 변이 열거)과 같은 결과를 내는지를 본다.
-- 만들어지면: 쓰인 결정만 적용한 족에서, 합칠 수 있는 변이는 모두 그것과 같은 뼈대, 위반 목록, 해석,
-  계획을 가진다. 합칠 수 없는 변이(분해가 둘 이상 선택된 것, K1)는 직접 만드는 길이 내놓지 않는다.
+- 만들어지면: 결정 집합을 적용한 족에서 합칠 수 있는 변이는 정확히 하나이고, 직접 만든 변이와 노드까지 같다.
+  뼈대, 위반 목록, 해석, 계획도 같다. 합칠 수 없는 변이(분해가 둘 이상 선택된 것, K1)는 직접 만드는 길이
+  내놓지 않는다.
 - 만들 수 없다고 하면: 족 전체를 펼친 길에도 합칠 수 있는 변이가 없다.
 - 결정이 모자라다고 하면: 아무것도 주장하지 않는다.
+빠진 구성요소의 아래에 걸린 결정은 두 길 모두 쓰지 않는다(18 문서 5.3절).
 그리고 족 전체를 펼칠 수 없는 크기에서 실제로 만들어지는지를 본다.
 """
 
@@ -28,11 +30,11 @@ from ses_core import direct, load_ses, load_ses_dict  # noqa: E402
 from ses_core import executor as X  # noqa: E402
 from ses_core.algebra import AlgebraError, occurrences, sem  # noqa: E402
 from ses_core.decisions import (Choice, DecisionSet, Override, apply, choice_table, component_path,  # noqa: E402
-                                load_decisions, patterns, with_overrides, witness)
+                                decide, load_decisions, patterns, with_overrides, witness)
 from ses_core.direct import Contradiction, Undecided  # noqa: E402
 from ses_core.executor import Binding  # noqa: E402
 from ses_core.extension import Layered, interpret, violations  # noqa: E402
-from ses_core.skeleton import assignment, core_violations, skeleton  # noqa: E402
+from ses_core.skeleton import GONE, NO_ASPECT, assignment, core_violations, skeleton  # noqa: E402
 from ses_core.unfold import unfold_layered, variable_domains  # noqa: E402
 
 EXAMPLES = os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform", "examples")
@@ -72,12 +74,6 @@ def document(kind: str, seed: int) -> tuple:
 KINDS = ("plain", "rules", "priorities", "values")
 
 
-def restricted(ds: DecisionSet, used: tuple) -> DecisionSet:
-    """쓰인 결정만 남긴 결정 집합. 변수 값은 모두 남는다."""
-    keep = set(used)
-    return DecisionSet(variables=ds.variables, choose=tuple(c for c in ds.choose if c.key in keep))
-
-
 # ---------------------------------------------------------------------------
 # 1. 변이를 정확히 재현하는 결정 집합에서: 직접 만든 것이 그 변이와 같다
 # ---------------------------------------------------------------------------
@@ -99,15 +95,14 @@ def test_a_variant_named_by_its_witness_is_built_directly(kind, seed):
             STATS["witness_unmergeable"] += 1
             continue
         b = direct.build(doc, ds, functions=functions)
+        assert b.variant == V                                    # 족의 변이와 노드까지 같다. 빠짐과 밀림의 표시도 같다
         assert facts(b.layered, b.variant) == facts(L, V)
         assert sem(b.layered.ses) == [b.variant]                 # 만든 것은 변이가 하나뿐인 SES다
-        assert b.variant <= V                                    # 만든 노드는 모두 그 변이가 고른 노드다
+        assert b.unused == ()                                    # 증거는 빠진 곳을 가리키지 않는다
         STATS["witness_built"] += 1
-        STATS["witness_smaller"] += len(b.variant) < len(V)      # 없음이 된 구성요소의 아래와 밀려났다는 표시는 만들지 않는다
-        STATS["witness_unused"] += bool(b.unused)
-        R = apply(L.ses, restricted(ds, b.used))                 # 쓰인 결정만으로도 뼈대가 하나로 정해진다
-        assert classes(L, sem(R)) == {repr(facts(L, V))}
-        STATS["witness_class"] += len(sem(R))
+        STATS["witness_with_gone"] += any(n[-1] == GONE for n in V)
+        STATS["witness_with_pushed"] += any(n[-1] == NO_ASPECT for n in V)
+        assert sem(apply(L.ses, ds)) == [V]
 
 
 @pytest.mark.parametrize("seed", range(150))
@@ -180,13 +175,12 @@ def test_direct_build_agrees_with_the_family_under_random_decisions(kind, seed):
             STATS["random_contradiction"] += 1
             STATS["random_contradiction_empty"] += R is None
             continue
-        R = apply(L.ses, restricted(ds, b.used))
+        R = apply(L.ses, ds)                                     # 결정 집합 전체. 쓰이지 않은 결정도 족을 비우지 않는다
         assert R is not None
-        assert classes(L, sem(R)) == {repr(facts(b.layered, b.variant))}
+        assert [W for W in sem(R) if mergeable(L, W)] == [b.variant]
         STATS["random_built"] += 1
-        whole = apply(L.ses, ds)
-        STATS["random_family_empty"] += whole is None             # 쓰이지 않은 결정이 없음이 된 곳에서 규칙과 어긋난 경우
         STATS["random_unused"] += bool(b.unused)
+        STATS["random_with_gone"] += any(n[-1] == GONE for n in b.variant)
 
 
 # ---------------------------------------------------------------------------
@@ -329,9 +323,11 @@ def test_decisions_that_do_not_fit_the_document_are_refused_like_in_the_family()
             with_overrides(L, base.override(o))
 
 
-def test_decisions_under_a_removed_component_differ_from_the_family():
-    """알려진 차이. 없음이 된 구성요소 아래에서 결정이 규칙과 어긋나면, 족 전체를 펼친 길은 남는 변이가
-    없다고 하고 직접 만드는 길은 만든다. 대수는 빠진 구성요소의 아래에서도 선택을 요구하기 때문이다."""
+def test_decisions_under_a_removed_component_are_not_used_by_either_path():
+    """없음이 된 구성요소 아래에서 결정이 규칙과 어긋나도 두 길 모두 그 결정을 쓰지 않는다.
+
+    고치기 전에는 족 전체를 펼친 길이 남는 변이가 없다고 했다. 대수가 빠진 구성요소의 아래에서도 선택을
+    요구했기 때문이다(18 문서 5.3절)."""
     d = {"ses": "1.0", "name": "R", "variables": {"v": {"type": "int", "range": [1, 2]}},
          "entities": {
              "R": {"root": True, "aspects": {"d": {"parts": ["Opt"]}}},
@@ -346,14 +342,54 @@ def test_decisions_under_a_removed_component_differ_from_the_family():
     none = Choice(at="Opt", specialization="opt", alternative=("NoOpt",))
     stray = Choice(at="Leaf", specialization="k", alternative=("B",))             # v = 1 에서 규칙은 A 를 고른다
     ds = DecisionSet(variables={"v": (1,)}, choose=(none, stray))
-    assert apply(L.ses, ds) is None
     b = direct.build(doc, ds)
     assert skeleton(b.layered.ses.tree, b.layered.void, b.variant).absent == ("Opt",) and b.unused == (stray.key,)
-    R = apply(L.ses, restricted(ds, b.used))                                      # 쓰인 결정만 적용하면 같아진다
-    assert classes(L, sem(R)) == {repr(facts(b.layered, b.variant))}
-    with pytest.raises(Contradiction):                                            # 살아 있는 곳에서는 두 길이 같다
-        direct.build(doc, DecisionSet(variables={"v": (1,)}, choose=(
-            Choice(at="Opt", specialization="opt", alternative=("WithOpt",)), stray)))
+    assert sem(apply(L.ses, ds)) == [b.variant]
+    assert ("R", "d", "Opt", GONE) in b.variant and not [n for n in b.variant if "inner" in n]
+    live = DecisionSet(variables={"v": (1,)}, choose=(Choice(at="Opt", specialization="opt", alternative=("WithOpt",)),
+                                                      stray))
+    with pytest.raises(Contradiction):                                            # 살아 있는 곳에서는 두 길 모두 어긋남이다
+        direct.build(doc, live)
+    assert apply(L.ses, live) is None
+    # 개수 변수와 결정이 빠진 곳에서 어긋나는 경우, 같은 곳에 결정 둘이 어긋나는 경우도 같다
+    pool = {"ses": "1.0", "name": "R", "variables": {"n": {"type": "int", "range": [1, 3]}},
+            "entities": {"R": {"root": True, "aspects": {"d": {"parts": ["X"]}}},
+                         "X": {"specializations": {"has": {"alternatives": ["NoX", "WithX"]}},
+                               "multi_aspects": {"m": {"part": "Y", "cardinality": {"var": "n"}}}},
+                         "NoX": {"extends": "X", "stereotype": "void"}, "WithX": {"extends": "X"},
+                         "Y": {"specializations": {"k": {"alternatives": ["A", "B"]}}},
+                         "A": {"extends": "Y"}, "B": {"extends": "Y"}}}
+    doc = load_ses_dict(pool)
+    L = unfold_layered(doc)
+    gone = Choice(at="X", specialization="has", alternative=("NoX",))
+    for odd in (DecisionSet(variables={"n": (3,)}, choose=(gone, Choice(at="X", multi_aspect="m", count=(2,)))),
+                DecisionSet(variables={"n": (1,)}, choose=(gone, Choice(at="Y", specialization="k", alternative=("A",)),
+                                                           Choice(path=("R", "X", "Y_0"), specialization="k",
+                                                                  alternative=("B",))))):
+        b = direct.build(doc, odd)
+        assert sem(apply(L.ses, odd)) == [b.variant] and len(b.unused) == len(odd.choose) - 1
+
+
+def test_overrides_at_a_removed_component_are_reported_unused():
+    """빠진 구성요소를 가리킨 속성 재정의는 쓰이지 않는다. 경로로 가리켜도, 그 구성요소에만 있는 정의로 가리켜도 그렇다.
+    족을 비우지도 않는다."""
+    d = {"ses": "1.0", "name": "R",
+         "entities": {"R": {"root": True, "aspects": {"d": {"parts": ["Opt", "Keep"]}}},
+                      "Opt": {"attributes": {"w": {"type": "int", "default": 1}},
+                              "specializations": {"opt": {"alternatives": ["NoOpt", "WithOpt"]}}},
+                      "NoOpt": {"extends": "Opt", "stereotype": "void"}, "WithOpt": {"extends": "Opt"},
+                      "Keep": {"attributes": {"w": {"type": "int", "default": 1}}}}}
+    doc = load_ses_dict(d)
+    by_path, by_def, kept = Override("w", 5, path=("R", "Opt")), Override("w", 6, at="Opt"), Override("w", 7, at="Keep")
+    gone = DecisionSet(choose=(Choice(at="Opt", specialization="opt", alternative=("NoOpt",)),), set=(by_path, by_def, kept))
+    b = direct.build(doc, gone)
+    assert b.unused == (by_path.key, by_def.key)
+    assert interpret(b.layered, b.variant)["attr"]["children"] == {"Keep": {"def": "Keep", "params": {"w": 7}, "children": {}}}
+    L = decide(unfold_layered(doc), gone)
+    assert sem(L.ses) == [b.variant] and interpret(L, b.variant) == interpret(b.layered, b.variant)
+    here = DecisionSet(choose=(Choice(at="Opt", specialization="opt", alternative=("WithOpt",)),), set=(by_path, by_def, kept))
+    b = direct.build(doc, here)
+    assert b.unused == () and interpret(b.layered, b.variant)["attr"]["children"]["Opt"]["params"] == {"w": 5}
 
 
 def test_an_unmergeable_component_is_named():
@@ -483,7 +519,8 @@ def test_direct_samples_are_not_vacuous():
     if STATS["witness_built"] + STATS["witness_unmergeable"] < 1000 or STATS["plans"] < 300:
         pytest.skip("앞의 시험과 함께 실행할 때만 센다")
     assert STATS["witness_built"] >= 800 and STATS["witness_unmergeable"] >= 100, STATS
-    assert STATS["witness_smaller"] >= 50 and STATS["witness_unused"] >= 20, STATS
+    assert STATS["witness_with_gone"] >= 25 and STATS["witness_with_pushed"] >= 30, STATS
+    assert STATS["random_with_gone"] >= 15, STATS
     assert STATS["plans_executable"] >= 100, STATS
     assert STATS["random_built"] >= 500 and STATS["random_contradiction"] >= 500, STATS
     assert STATS["random_undecided"] >= 500 and STATS["random_unused"] >= 100, STATS

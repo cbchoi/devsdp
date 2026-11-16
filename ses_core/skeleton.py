@@ -30,12 +30,14 @@ def component_of(T: Tree, y: tuple) -> tuple:
 
 
 VARIABLE_PREFIX = "$"       # 변수는 뿌리의 specialization으로 부호화된다 (unfold.var_node)
-NO_ASPECT = "~"             # 우선순위에 밀린 구성원이 고르는 "분해 없음". 펼침이 만든다 (18 문서)
+NO_ASPECT = "~"             # 우선순위에 밀린 구성원이 고르는 "분해 없음". 펼침이 만든다 (18 문서 3절)
+GONE = "-"                  # 구성요소가 없음 대안을 골라 빠졌을 때 구성원이 고르는 "분해 없음". 펼침이 만든다 (5.3절)
+MARKERS = frozenset({NO_ASPECT, GONE})   # 펼침이 만드는 표시. 분해도 아니고 사람이 고르는 선택지도 아니다
 
 
 def real_aspects(T: Tree, y: tuple) -> tuple:
-    """엔티티 노드 y에 적힌 분해. 밀려났다는 표시("분해 없음")는 분해가 아니다."""
-    return tuple(a for a in T.aspects(y) if a[-1] != NO_ASPECT)
+    """엔티티 노드 y에 적힌 분해. 펼침이 만든 표시("분해 없음")는 분해가 아니다."""
+    return tuple(a for a in T.aspects(y) if a[-1] not in MARKERS)
 
 
 def members(T: Tree, e: tuple) -> list:

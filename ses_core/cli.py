@@ -184,6 +184,8 @@ def cmd_build(args, out) -> int:
     doc, built = _build(args, out)
     L = built.layered
     sk = skeleton(L.ses.tree, L.void, built.variant)
+    if sk is None:
+        raise Stop(FAILED, "뿌리가 없음 대안을 골랐다. 만들 구조가 없다 (K0)")
     counts = {"components": 0}
 
     def show(c, depth: int) -> None:

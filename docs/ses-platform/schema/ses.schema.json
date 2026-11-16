@@ -410,10 +410,13 @@
               "additionalProperties": false,
               "properties": {
                 "min": {
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0
                 },
                 "max": {
-                  "type": "integer"
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "min 이상이어야 한다. 스키마로는 적지 못하므로 적재기가 검사한다."
                 }
               }
             }

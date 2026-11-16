@@ -18,14 +18,15 @@ from test_algebra import rand_formula, rand_tree  # noqa: E402
 
 from ses_core import load_ses, load_ses_dict  # noqa: E402
 from ses_core import edit as E  # noqa: E402
-from ses_core.algebra import ASP, ENT, SPEC, SES, AlgebraError, Tree, is_pes, prune, reduce, sem, variants  # noqa: E402
+from ses_core.algebra import (ASP, ENT, SPEC, SES, AlgebraError, Tree, f_and, f_imp, holds, is_pes, prune,  # noqa: E402
+                               reduce, sel, sem, variants)
 from ses_core.decisions import (  # noqa: E402
     Choice, ChoicePoint, DecisionSet, apply, choice_table, choices, component_path, excluded,
     family, load_decisions, patterns, problems, split_count, witness)
 from ses_core.extension import wf_core  # noqa: E402
 from ses_core.profile import load_profile  # noqa: E402
-from ses_core.skeleton import members  # noqa: E402
-from ses_core.unfold import pruning_patterns, unfold, unfold_layered, variable_domains  # noqa: E402
+from ses_core.skeleton import GONE, component_of, members, real_aspects, void_formula  # noqa: E402
+from ses_core.unfold import pruning_patterns, unfold, unfold_annotated, unfold_layered, variable_domains  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform")
 EXAMPLES = os.path.join(ROOT, "examples")
@@ -180,12 +181,12 @@ def selection_points(T):
             kids = [c[-1] for c in T.children(q)]
             if len(kids) > 1:
                 out.append((q[:-1], "specialization", q[-1], kids))
-        elif T.kind(q) == ENT:
-            fams = list(dict.fromkeys(family(a[-1]) for a in T.aspects(q)))
+        elif T.kind(q) == ENT:                      # 펼침이 만든 표시(빠짐, 밀림)는 선택지가 아니다
+            fams = list(dict.fromkeys(family(a[-1]) for a in real_aspects(T, q)))
             if len(fams) > 1:
                 out.append((q, "aspect", "", fams))
             for fam in fams:
-                counts = [split_count(a[-1])[1] for a in T.aspects(q) if family(a[-1]) == fam]
+                counts = [split_count(a[-1])[1] for a in real_aspects(T, q) if family(a[-1]) == fam]
                 if len(counts) > 1:
                     out.append((q, "multi_aspect", fam, counts))
     return out
@@ -284,7 +285,7 @@ def test_definition_level_decision_is_a_folded_pruning_ses(seed):
         for a in T.aspects(occurrence):
             fam, n = split_count(a[-1])
             keep = fam in c.aspect if c.aspect else (fam != c.multi_aspect or n in c.count)
-            if keep:
+            if keep or a[-1] == GONE:                       # 빠짐은 선택지가 아니다. 접힌 패턴도 남긴다(unfold.pruning_patterns)
                 kinds[(c.at, a[-1])] = ASP
     folded = SES(Tree(kinds))
     assert var_set(apply(S, DecisionSet(choose=(c,)))) == var_set(prune(S, folded))
@@ -309,21 +310,35 @@ def check_witness(S, V, domains=None):
     return w, R
 
 
+def marker_clauses(T, void):
+    """펼침이 빠짐 표시에 다는 식만 모은 것. 빠짐은 사람이 고르는 선택지가 아니라 이 식이 정한다."""
+    out = []
+    for q in T.kinds:
+        if T.kind(q) == ENT and q + (GONE,) in T.nodes:
+            removed = void_formula(T, void, component_of(T, q))
+            out += [f_imp(f_and(sel(q), removed), sel(q + (GONE,))), f_imp(sel(q + (GONE,)), removed)]
+    return f_and(*out)
+
+
 @pytest.mark.parametrize("seed", range(200))
 def test_witness_reproduces_exactly_its_variant(seed):
     rng = random.Random(seed)
     doc = load_ses_dict(rand_document(rng))
-    S = unfold(doc)
+    S, ann = unfold_annotated(doc)
     T = S.tree
     good = sem(S)
     for V in rng.sample(good, min(8, len(good))):
         w, R = check_witness(S, V, variable_domains(doc))
         assert R is not None and R.tree.nodes == V and is_pes(R)
-    bad = [V for V in variants(T) if V not in set(good)]    # 제약을 어기는 선택은 남지 않는다
+    # 제약을 어기는 선택은 남지 않는다. 그 선택도 증거가 정확히 재현한다. 다만 빠짐은 결정으로 적지 않고 식이 정하므로,
+    # 빠짐의 식은 지키는 선택만 견주고, 재현도 빠짐의 식만 둔 나무에서 본다
+    M = marker_clauses(T, ann.void)
+    bad = [V for V in variants(T) if V not in set(good) and holds(M, V)]
     for V in rng.sample(bad, min(3, len(bad))):
         w, R = check_witness(S, V)
         assert R is None
-        assert sem(apply(SES(T), w)) == [V]
+        assert sem(apply(SES(T, M), w)) == [V]
+        WITNESS["bad_with_markers"] += any(T.kind(q) == ENT and q + (GONE,) in T.nodes for q in V)
 
 
 @pytest.mark.parametrize("seed", range(100))

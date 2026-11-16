@@ -98,6 +98,17 @@ def test_build_names_what_is_missing_or_contradictory(tmp_path):
     assert ses("build", PROCESSING, "--decisions", broken)[0] == 1
 
 
+def test_build_reports_a_removed_root_instead_of_crashing(tmp_path):
+    """뿌리가 없음 대안을 고르면 만들 구조가 없다. 예외가 아니라 오류로 알린다."""
+    doc = tmp_path / "gone.ses.yaml"
+    doc.write_text('ses: "1.0"\nname: R\nentities:\n'
+                   '  R: {root: true, specializations: {s: {alternatives: [A, NoR]}}, aspects: {d: {parts: [P]}}}\n'
+                   '  A: {extends: R}\n  NoR: {extends: R, stereotype: void}\n  P: {}\n', encoding="utf-8")
+    ds = tmp_path / "gone.yaml"
+    ds.write_text('decisions: "1.0"\nchoose:\n  - {at: R, specialization: s, alternative: NoR}\n', encoding="utf-8")
+    assert ses("build", doc, "--decisions", ds) == (1, "뿌리가 없음 대안을 골랐다. 만들 구조가 없다 (K0)\n")
+
+
 def test_plan_matches_the_library_and_reports_violations(tmp_path):
     args = ("plan", path("wsn.ses.yaml"), "--decisions", path("wsn.decisions.yaml"),
             "--binding", path("wsn.binding.devs.yaml"), "--library", "examples.wsn_mb:LIBRARY", *WSN)

@@ -23,6 +23,7 @@ from docgen import _system_attempt  # noqa: E402
 from test_executor import labelled  # noqa: E402
 
 from ses_core import LoadError, classic, load_ses_dict  # noqa: E402
+from ses_core.direct import build as build_directly  # noqa: E402
 from ses_core import edit as E  # noqa: E402
 from ses_core import unfold as U  # noqa: E402
 from ses_core import coupling as CP  # noqa: E402
@@ -32,8 +33,9 @@ from ses_core.decisions import (Choice, DecisionSet, apply, choice_table, compon
                                 split_count, witness)
 from ses_core.diagnose import analyze  # noqa: E402
 from ses_core.extension import Layered, interpret, violations  # noqa: E402
-from ses_core.skeleton import NO_ASPECT, core_psi, core_violations, members, skeleton  # noqa: E402
-from ses_core.unfold import unfold, unfold_annotated  # noqa: E402
+from ses_core.skeleton import GONE, NO_ASPECT, core_psi, core_violations, members, real_aspects, skeleton  # noqa: E402
+from ses_core.algebra import prune  # noqa: E402
+from ses_core.unfold import pruning_patterns, unfold, unfold_annotated  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform")
 STATS: collections.Counter = collections.Counter()
@@ -110,18 +112,20 @@ NESTED = {"ses": "1.0", "name": "R",
 
 
 def test_a_choice_under_a_removed_component_does_not_count():
-    """빠진 구성요소 아래에서 한 선택은 세지 않는다. 그 구성요소는 만들어지지 않기 때문이다."""
+    """빠진 구성요소 아래에서는 아무것도 고르지 않는다. 그 구성요소는 만들어지지 않기 때문이다.
+
+    고치기 전에는 대수가 빠진 상자 안의 등의 색도 골라 변이가 8개였다(18 문서 5.3절).
+    """
     doc = load_ses_dict(NESTED)
-    assert len(sem(unfold(doc))) == 8 and len(classic.enumerate_classic(doc)) == 6    # 대수는 빠진 상자 안의 선택도 센다
+    assert len(sem(unfold(doc))) == len(classic.enumerate_classic(doc)) == 6
     no_red = constrained(NESTED, {"forbid": {"selected": "Lamp/colour=Red"}})
-    # 남는 구조: 상자가 있고 두 등이 모두 파랑(1), 상자가 없고 바깥 등이 파랑(1).
-    # 상자가 없을 때 그 안의 등이 빨강이라는 선택은 제약에 걸리지 않으므로 변이로는 둘이 남는다
-    assert n_variants(no_red) == (3, 2)
+    # 남는 구조: 상자가 있고 두 등이 모두 파랑(1), 상자가 없고 바깥 등이 파랑(1)
+    assert n_variants(no_red) == (2, 2)
     d = load_ses_dict(no_red)
     S = unfold(d)
-    gone = [V for V in sem(S) if ("R", "d", "Box", "has", "NoBox") in V]
-    assert len(gone) == 2 and all(("R", "d", "Lamp", "colour", "Blue") in V for V in gone)
-    assert {("R", "d", "Box", "in", "Lamp", "colour", c) in V for V in gone for c in ("Red",)} == {True, False}
+    (gone,) = [V for V in sem(S) if ("R", "d", "Box", "has", "NoBox") in V]
+    assert ("R", "d", "Lamp", "colour", "Blue") in gone and ("R", "d", "Box", GONE) in gone
+    assert not [n for n in gone if n[:4] == ("R", "d", "Box", "in")]       # 빠진 상자의 분해와 그 아래는 고르지 않는다
     # 분해를 고른 것도 살아 있는 구성요소의 것만 센다
     inner = constrained(NESTED, {"require": {"selected": "Box=in"}})
     assert n_variants(inner) == (4, 4)                        # 상자가 있는 넷만 남는다
@@ -134,9 +138,9 @@ def test_a_count_of_a_removed_component_does_not_count():
                       "X": {"specializations": {"has": {"alternatives": ["WithX", "NoX"]}},
                             "multi_aspects": {"m": {"part": "Y", "cardinality": {"min": 1, "max": 2}}}},
                       "WithX": {"extends": "X"}, "NoX": {"extends": "X", "stereotype": "void"}, "Y": {}}}
-    assert n_variants(d) == (4, 3)                            # 대수는 빠진 X 아래의 개수도 센다
+    assert n_variants(d) == (3, 3)                            # X 없음 하나, X 가 있고 복제본이 하나와 둘
     two = constrained(d, {"forbid": {"selected": "X/m=2"}})
-    assert n_variants(two) == (3, 2)                          # 빠진 X 의 개수 둘은 걸리지 않는다
+    assert n_variants(two) == (2, 2)                          # 빠진 X 는 개수를 고르지 않으므로 걸리지 않는다
     must = constrained(d, {"require": {"selected": "X/m=2"}})
     assert n_variants(must) == (1, 1)                         # X 가 있고 복제본이 둘인 것 하나
 
@@ -538,6 +542,74 @@ REMOVED = {"ses": "1.0", "name": "R",
                "P": {}, "Q": {}}}
 
 
+def test_the_removal_marker_goes_only_to_members_that_can_be_removed_with_it():
+    """빠짐 표시는 분해를 가진 구성원 가운데 없음 대안과 함께 골라질 수 있는 것에만 붙는다(18 문서 5.3절).
+
+    Big 은 NoX 와 같은 specialization 의 다른 대안이라 함께 골라지지 않는다. 바탕 X 와 다른 specialization 의
+    대안 Warm 은 함께 골라진다.
+    """
+    d = {"ses": "1.0", "name": "R",
+         "entities": {"R": {"root": True, "aspects": {"d": {"parts": ["X"]}}},
+                      "X": {"specializations": {"has": {"alternatives": ["NoX", "Big"]},
+                                                "tone": {"alternatives": ["Warm", "Cold"]}},
+                            "aspects": {"a": {"parts": ["P"], "priority": 3}}},
+                      "NoX": {"extends": "X", "stereotype": "void"},
+                      "Big": {"extends": "X", "aspects": {"big": {"parts": ["P"], "priority": 1}}},
+                      "Warm": {"extends": "X", "aspects": {"w": {"parts": ["Q"], "priority": 2}}},
+                      "Cold": {"extends": "X"}, "P": {}, "Q": {}}}
+    S, ann = unfold_annotated(load_ses_dict(d))
+    gone = sorted(n for n in S.tree.nodes if n[-1] == GONE)
+    assert gone == [("R", "d", "X", GONE), ("R", "d", "X", "tone", "Warm", GONE)]
+    assert shapes(d) == realized(d)
+    assert len(sem(S)) == len(classic.enumerate_classic(load_ses_dict(d))) == 4     # 빠진 X 둘(온기 둘), Big 둘
+    decompositions = [a for a in S.tree.kinds if S.tree.kind(a) == ASP and a[-1] not in (GONE, NO_ASPECT)
+                      and a[:3] == ("R", "d", "X")]
+    for V in sem(S):
+        removed = ("R", "d", "X", "has", "NoX") in V
+        assert (("R", "d", "X", GONE) in V) == removed
+        assert len([a for a in decompositions if a in V]) == (0 if removed else 1)   # 빠지면 분해가 없고, 있으면 하나다
+
+
+def test_a_decision_on_the_decomposition_of_a_removable_component_keeps_its_absence():
+    """분해에 대한 결정은 "구성요소가 있으면 이 분해"다. 빠진 변이를 지우지 않는다. 접힌 가지치기 SES도 같다."""
+    doc = load_ses_dict(NESTED)
+    S = unfold(doc)
+    keep_in = DecisionSet(choose=(Choice(at="Box", aspect=("in",)),))
+    assert len(sem(apply(S, keep_in))) == len(sem(S)) == 6
+    folded = {"ses": "1.0", "name": "R",
+              "entities": {"R": {"root": True}, "Box": {"aspects": {"in": {"parts": ["Lamp"]}}}, "Lamp": {}}}
+    assert len(sem(prune(S, *pruning_patterns(load_ses_dict(folded))))) == 6
+    gone = DecisionSet(choose=(Choice(at="Box", aspect=("in",)), Choice(at="Box", specialization="has", alternative=("NoBox",)),
+                               Choice(at="Lamp", specialization="colour", alternative=("Blue",))))
+    b = build_directly(doc, gone)
+    assert sem(apply(S, gone)) == [b.variant] and b.unused == (gone.choose[0].key,)
+
+
+def test_a_witness_does_not_write_what_the_marker_clauses_decide():
+    """변이를 재현하는 결정 집합은 빠짐을 적지 않고, 빠짐 말고는 분해가 하나뿐인 엔티티의 분해도 적지 않는다.
+    상자의 분해는 in 하나다. 증거는 고른 대안만 적는다."""
+    S = unfold(load_ses_dict(NESTED))
+    for V in sem(S):
+        w = witness(S.tree, V)
+        assert sem(apply(S, w)) == [V]
+        assert all(c.kind == "specialization" for c in w.choose), w.to_dict()
+
+
+def test_markers_are_not_options_in_the_table_or_the_diagnostics():
+    """빠짐과 밀림은 사람이 고르는 선택지가 아니다. 늘 빠지는 구성요소의 분해는 죽은 선택지로 알리지 않는다.
+    원인은 그 구성요소를 빠지게 한 대안 선택이고, 그것만 알린다."""
+    d = json.loads(json.dumps(NESTED))
+    d["entities"]["Box"]["aspects"]["out"] = {"parts": ["Lamp"]}                 # 상자의 분해가 둘이면 선택 지점이 된다
+    S = unfold(load_ses_dict(d))
+    table = choice_table(S, S)
+    assert ("Box", "aspect", "") in {(p.owner, p.kind, p.group) for p in table}
+    assert all(o not in (GONE, NO_ASPECT) for p in table for o, _ in p.options)
+    always_gone = constrained(d, {"require": {"selected": "Box/has=NoBox"}})
+    a = analyze(E.from_dict(always_gone))
+    dead = sorted((x.data["owner"], x.data["option"]) for x in a.diagnostics if x.code == "DEAD")
+    assert dead == [("Box", "Full")] and not a.errors
+
+
 def test_rules_of_a_removed_component_do_not_remove_variants():
     """분해의 규칙은 살아 있는 구성요소에서만 적용된다.
 
@@ -552,8 +624,8 @@ def test_rules_of_a_removed_component_do_not_remove_variants():
     for V in sem(S):
         v = next(int(x[2]) for x in V if len(x) == 3 and x[1] == "$v")
         alive[(v, skeleton(S.tree, ann.void, V).parts.keys() == {"X"})] += 1
-    # 대수는 빠진 X 안의 선택(a 또는 b)도 변이로 세므로 X 없음이 값마다 둘이다
-    assert alive == {(1, False): 2, (2, False): 2, (2, True): 1, (3, False): 2, (3, True): 2}
+    # 빠진 X 는 분해를 고르지 않으므로 X 없음이 값마다 하나다. 고치기 전에는 a 와 b 를 따로 세어 둘이었다
+    assert alive == {(1, False): 1, (2, False): 1, (2, True): 1, (3, False): 1, (3, True): 2}
     algebraic, procedural, skipped = both(doc, None)
     assert algebraic == procedural and len(procedural) == 6 and skipped == 0
 
@@ -820,7 +892,7 @@ def with_paths(rng: random.Random, d: dict, doc, functions) -> dict:
             if not (len(s) == 2 and s[-1].startswith("$")):
                 for x in T.children(s):
                     spots.append({"path": list(component_path(T, q)), "specialization": s[-1], "alternative": x[-1]})
-        for a in T.aspects(q) if T.kinds[q] == "ent" else ():
+        for a in real_aspects(T, q) if T.kinds[q] == "ent" else ():     # 펼침이 만든 표시는 문서의 분해가 아니다
             spots.append({"path": list(component_path(T, q)), "aspect": family(a[-1])})
     if not spots:
         return d
