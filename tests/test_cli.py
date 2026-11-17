@@ -46,7 +46,7 @@ def test_check_reports_the_family_and_the_limit():
     assert ses("check", PROCESSING) == (0, "변이 15개, 그 가운데 적격 15개\n")
     code, out = ses("check", path("wsn.ses.yaml"), *WSN)
     assert code == 0 and "info LIMIT" in out
-    assert "변이 9000개, 그 가운데 핵 적격 9000개 (열거하지 않고 정의 표 위에서 셌다" in out
+    assert "변이 9000개, 그 가운데 핵 적격 9000개 (열거하지 않고 정의 표 위에서 셌다. 확장은 결합의 국소 검사만 했다)" in out
 
 
 def test_check_fails_on_a_broken_document(tmp_path):

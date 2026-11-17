@@ -10,7 +10,8 @@
 FO, UN, SK, LO = "ses_core/folded.py", "ses_core/unfold.py", "ses_core/skeleton.py", "ses_core/loader.py"
 
 # 빠른 묶음: 의미의 핵을 직접 보는 시험. 여기서 살아남으면 전체를 돌린다
-FAST = ["tests/test_folded.py", "tests/test_loader.py", "tests/test_parity.py", "tests/test_diagnose.py"]
+FAST = ["tests/test_folded.py", "tests/test_loader.py", "tests/test_parity.py", "tests/test_local.py",
+        "tests/test_diagnose.py"]
 FULL = ["tests"]
 
 
@@ -60,14 +61,28 @@ MUTANTS = [
       "                body = self.ill((\"stuck\", d, tuple(sorted(owners)))) if ambiguous else {}",
       "                body = self.ill((\"stuck\", d, tuple(sorted(owners)))) if ambiguous and not dec else {}"),
     m("F12 따로 센 복제본을 거듭제곱에서 빼지 않음", FO,
-      "                            inner = p_mul(inner, p_pow(one, n - len(special), self.one))",
-      "                            inner = p_mul(inner, p_pow(one, n, self.one))"),
+      "                                inner = p_mul(inner, p_pow(rest, n - len(special), self.one))",
+      "                                inner = p_mul(inner, p_pow(rest, n, self.one))"),
+    m("F16 이어지는 개수의 거듭제곱을 이어 쓰지 않고 다시 곱함", FO,
+      "                            power, at = p_mul(power, p_pow(one, n - at, self.one)), n",
+      "                            power, at = p_mul(power, p_pow(one, n, self.one)), n"),
+    m("F17 병합체의 값을 자리와 무관하게 한 번만 구함", FO,
+      "        key = (\"cluster\", d, pos if pos in self.by_path else None)", "        key = (\"cluster\", d, None)"),
+    m("F18 닫힌 꼴: 두 주인이 같은 자리에 맞서는 경우를 보지 않음", FO,
+      "            if len(here) >= 2 or any(", "            if len(here) >= 3 or any("),
+    m("F19 닫힌 꼴: 한 주인의 규칙 둘이 다투는 경우를 보지 않음", FO,
+      "any(y in top and len(top[y]) >= 2 and top[y][0].priority == c for y in owners):", "False:"),
+    m("F20 닫힌 꼴: 더 앞선 분해를 낼 수밖에 없는 주인을 보지 않음", FO,
+      "            if not all(any(not above(w.priority, c) for w in allowed[z]) for z in owners):\n                continue",
+      "            if False:\n                continue"),
+    m("F21 닫힌 꼴: 규칙이 다투는 주인도 분해를 낼 수 있다고 봄", FO,
+      "alone = {y: (top[y] if len(top[y]) == 1 else []) if y in top else fams[y] for y in owners}",
+      "alone = {y: top[y] if y in top else fams[y] for y in owners}"),
     m("F13 경로 수준의 selected 를 모든 자리에서 본 것으로 셈", FO,
       "        for a in self.by_path.get(pos, ()):",
       "        for a in [x for xs in self.by_path.values() for x in xs]:"),
     m("F14 따로 세야 하는 자리도 정의마다 한 번만 셈", FO,
-      "        shared = pos not in self.focus               # 이 자리 아래를 따로 묻는 제약이 없으면 정의마다 한 번만 센다",
-      "        shared = True"),
+      "        key = (d, pos) if pos in self.focus else d", "        key = d"),
     m("F15 부적격 변이를 적격으로 셈", FO, "sum(n for seen, n, _ in terms if ILL not in seen)", "sum(n for seen, n, _ in terms)"),
     # 족 수준의 분석 ----------------------------------------------------------
     m("A1 부적격 변이에서 일어난 일을 적격 변이의 것으로 셈", FO,
@@ -88,6 +103,24 @@ MUTANTS = [
       "        if kind == \"variable\":"),
     m("D3 한도를 넘었을 때 분해를 정할 수 없는 곳을 알리지 않음", "ses_core/diagnose.py",
       "        add(\"error\", \"K1\", f\"{name} 의 병합체에서", "        (lambda *a: None)(\"error\", \"K1\", f\"{name} 의 병합체에서"),
+
+    # 결합의 족 수준 검사 (local.py) --------------------------------------------
+    m("C1 절단 값을 2 로 줄임", "ses_core/local.py", "CUT = 3 ", "CUT = 2 "),
+    m("C2 부분이 빠진 경우를 보지 않음", "ses_core/local.py",
+      "                ann = None if sem.removed(mu) else (interface(tuple(mu.names()))[0] or {})",
+      "                if sem.removed(mu):\n                    continue\n                ann = interface(tuple(mu.names()))[0] or {}"),
+    m("C3 부분의 정의로 내려가지 않음", "ses_core/local.py",
+      "                        stack += [child for _, child in parts]", "                        pass"),
+    m("C4 포트의 병합 충돌을 알리지 않음", "ses_core/local.py",
+      "                for msg in interface(names)[1]:", "                for msg in ():"),
+    m("C5 개수가 3 미만인 경우를 보지 않음", "ses_core/local.py",
+      "{n for n in counts if n < CUT} | ", "set() | "),
+    m("C6 같은 인터페이스를 한 번만 보는 대신 첫 병합체만 봄", "ses_core/local.py",
+      "                if key not in seen:\n                    seen.add(key)\n                    out.append((key, ann))",
+      "                if not out:\n                    out.append((key, ann))"),
+    m("D4 한도를 넘었을 때 결합의 위반을 알리지 않음", "ses_core/diagnose.py",
+      "        for f in findings:\n            element = by_name.get(f.definition) or doc_id",
+      "        for f in ():\n            element = by_name.get(f.definition) or doc_id"),
 
     # 정의 9. 표시 노드 ------------------------------------------------------
     m("U1 자기 규칙끼리 다투는 구성원에 분해 없음을 주지 않음", UN,
@@ -136,8 +169,24 @@ MUTANTS = [
       "            pass"),
 
     # 문서의 조건 -------------------------------------------------------------
-    m("L1 (W4) 이름의 글자를 보지 않음", LO, "            if x not in MARKERS and not _IDENTIFIER.match(str(x)):",
+    m("L1 (W4) 이름의 글자를 보지 않음", LO,
+      "            if not _IDENTIFIER.match(str(x)) and x not in MARKERS & set(names):     # 표시의 이름은 위에서 알렸다",
       "            if False:"),
+    m("L4 대안을 두 번 적은 문서를 받음", LO, "            if twice:                                         # 같은 대안을 두 번 적으면",
+      "            if False:                                         # 같은 대안을 두 번 적으면"),
+    m("L5 복제본의 이름의 틀을 보지 않음", LO, "            if sample is not None and (\"{i}\" not in ma.naming or sample[0] == sample[1]",
+      "            if False and (\"{i}\" not in ma.naming or sample[0] == sample[1]"),
+    m("L6 없음 대안을 multi-aspect 의 부분으로 받음", LO,
+      "            if ma.part.def_name in ents and ents[ma.part.def_name].stereotype == m.Stereotype.VOID:", "            if False:"),
+    m("L7 정수가 아닌 우선순위를 받음", LO,
+      "            if x.priority is not None and (not isinstance(x.priority, int) or isinstance(x.priority, bool)):",
+      "            if False:"),
+    m("L8 값이 없는 변수를 받음", LO, "        if (isinstance(var.domain, m.Range) and var.domain.min > var.domain.max) or \\",
+      "        if False and (isinstance(var.domain, m.Range) and var.domain.min > var.domain.max) or \\"),
+    m("V1 가리키는 곳이 없는 selected 를 받음 (경로)", FO, "                if not hosts:\n                    raise AlgebraError",
+      "                if False:\n                    raise AlgebraError"),
+    m("V2 닿지 않는 정의를 가리키는 selected 를 받음", FO, "                    if d not in reachable_defs:", "                    if False:"),
+    m("V3 평가가 닿지 않는 조건을 미리 보지 않음", FO, "        if rows <= MAX_ROWS:", "        if False:"),
     m("L2 (W4) 변수 이름의 글자를 보지 않음", LO, "        if not _IDENTIFIER.match(str(vname)):", "        if False:"),
     m("L3 (W5) 글자로 적으면 같은 값을 받음", LO,
       "            twice = sorted({w for w in written if written.count(w) > 1})\n            if twice:",

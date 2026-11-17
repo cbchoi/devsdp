@@ -666,7 +666,8 @@ def _core_family(m: Model, doc, functions, result: Analysis, max_assignments: in
     """변이를 열거할 수 없는 문서의 핵을 정의 표 위에서 분석한다 (folded.analyze, theory.md 4절).
 
     변이 수와 핵 적격인 변이 수를 세고, 뿌리가 빠지는 변이(K0)와 분해를 정할 수 없는 병합체(K1)와 죽은 선택지를
-    알린다. 확장의 검사는 하지 않는다. 그래서 여기서 말하는 적격은 핵 적격이다.
+    알린다. 여기서 말하는 적격은 핵 적격이다. 확장 가운데서는 결합의 국소 검사(M, C1에서 C4)만 한다.
+    끝에서 끝까지의 구동(C5), 실행기, 속성, 문서 조립, 프로파일의 검사는 변이를 열거해야 하므로 하지 않는다.
     """
     from . import folded
 
@@ -711,6 +712,22 @@ def _core_family(m: Model, doc, functions, result: Analysis, max_assignments: in
     if fam.wellformed == 0:
         add("error", "NOWF", f"변이 {fam.variants}개 가운데 핵 적격인 것이 없다")
         return result
+    # 결합의 국소 검사(포트의 병합 충돌 M, C1에서 C4)도 정의 표 위에서 한다 (local.py). 구성요소 하나와 그 부분들의
+    # 인터페이스만 보는 검사라서, 정의마다 가능한 조합을 모두 보면 모든 변이를 본 것과 같다
+    from . import local, unfold
+    if "devs" in unfold.extensions_of(doc):
+        try:
+            findings, possible = local.check(doc, functions)
+        except Exception as e:                          # 분석이 편집기를 멈추게 하지 않는다
+            findings, possible = [], False
+            add("error", "ANALYZE", f"결합을 분석하다가 실패했다: {type(e).__name__}: {e}")
+        for f in findings:
+            element = by_name.get(f.definition) or doc_id
+            note = " (선택 제약이 이 조합을 막을 수 있다)" if possible else ""
+            diags.append(Diagnostic("error", f.code, f.message + note, element, m.address(element), scope="family",
+                                    layer="devs",
+                                    data={"assignment": dict(f.assignment), "members": list(f.members),
+                                          "decomposition": f.decomposition, "count": f.count, "possible": possible}))
     # 죽은 선택지. 열거하는 분석(_family)과 같은 규칙이다. 선택지가 둘 이상인 선택 지점만 보고, 그 지점이 핵 적격인
     # 변이에 나타나지 않으면 위쪽의 선택지가 알려지므로 되풀이하지 않는다. 다만 그 정의가 살아 있는 병합체에 있는데
     # 분해가 한 번도 골라지지 않으면 다른 구성원의 분해에 늘 밀리는 것이므로 알린다

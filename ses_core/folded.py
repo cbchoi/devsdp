@@ -341,6 +341,31 @@ class Semantics:
         """Dec: 그 병합체의 분해가 될 수 있는 (구성원, 분해)들."""
         return self.outcomes(owners, sigma)[0]
 
+    def outcomes_closed(self, owners: list, sigma: dict) -> tuple:
+        """(Dec, Amb) 를 정리 2의 닫힌 꼴로 구한다. 요구의 조합을 늘어놓지 않으므로 주인의 수에 다항 시간이다.
+
+        outcomes 와 같은 값을 낸다. outcomes 는 정의 3을 그대로 옮긴 것이고 이것은 계산에 쓰는 것이다.
+        """
+        fams = {y: decompositions(self.doc.entities[y]) for y in owners}
+        top: dict = {}                               # 참인 규칙이 있는 주인에서, 그 규칙들의 분해 가운데 밀리지 않은 것들로
+        for y in owners:
+            forced = [x for x in fams[y] if x.rule is not None and value(x.rule, sigma, self.functions)]
+            if forced:
+                top[y] = [x for x in forced if not any(above(w.priority, x.priority) for w in forced)]
+        allowed = {y: top.get(y, fams[y]) for y in owners}                               # A_y
+        alone = {y: (top[y] if len(top[y]) == 1 else []) if y in top else fams[y] for y in owners}   # R_y
+        dec = [(y, x) for y in owners for x in alone[y]
+               if all(any(above(x.priority, w.priority) for w in allowed[z]) for z in owners if z != y)]
+        ambiguous = False
+        for c in {x.priority for y in owners for x in allowed[y]}:                        # 자리마다 (정리 2의 (c))
+            if not all(any(not above(w.priority, c) for w in allowed[z]) for z in owners):
+                continue                             # 어떤 주인은 c 보다 앞선 분해를 낼 수밖에 없다
+            here = [y for y in owners if any(w.priority == c for w in allowed[y])]
+            if len(here) >= 2 or any(y in top and len(top[y]) >= 2 and top[y][0].priority == c for y in owners):
+                ambiguous = True
+                break
+        return dec, ambiguous
+
     def ties(self, owners: list, sigma: dict) -> list:
         """결과가 없는 요구의 조합 하나에서 맞서는 것들: (구성원, 분해)들. 그런 조합이 없으면 빈 목록."""
         for combo in product(*(self.demands(y, sigma) for y in owners)):
@@ -596,6 +621,10 @@ class Evaluator:
             else:
                 self.by_path.setdefault(tuple(a.path), set()).add(a)
         self.focus = {q[:i] for q in self.by_path for i in range(1, len(q) + 1)}   # 따로 계산해야 하는 자리들
+        self.below: dict = {}                     # 따로 계산해야 하는 자리에서, 그 바로 아래의 그런 자리의 이름들로
+        for q in self.focus:
+            if len(q) > 1:
+                self.below.setdefault(q[:-1], set()).add(q[-1])
 
     # 한 선택이 보게 하는 것 ------------------------------------------------
 
@@ -616,14 +645,21 @@ class Evaluator:
 
     # 병합체: (빠졌는가, 분해를 가진 구성원들)에서 값으로 --------------------------
 
-    def cluster(self, d: str, pos: tuple, sigma: dict) -> dict:
+    def cluster(self, d: str, pos: tuple, sigma: dict, memo: dict) -> dict:
+        # 대안의 선택이 보게 하는 것은 그 자리를 가리키는 selected 가 있을 때만 자리에 달려 있다
+        key = ("cluster", d, pos if pos in self.by_path else None)
+        if key not in memo:
+            memo[key] = self._cluster(d, pos, sigma, memo)
+        return memo[key]
+
+    def _cluster(self, d: str, pos: tuple, sigma: dict, memo: dict) -> dict:
         ent = self.doc.entities[d]
         sig = (ent.stereotype == m.Stereotype.VOID, frozenset([d]) if decompositions(ent) else frozenset())
         acc = {sig: self.one}
         for sp in ent.specializations.values():
             options: dict = {}
             for alt in self.sem.alternatives(sp, sigma):
-                for s, p in self.cluster(alt, pos, sigma).items():
+                for s, p in self.cluster(alt, pos, sigma, memo).items():
                     q = self.mark(p, pos, "spec", d, sp.name, alt)
                     options[s] = p_add(options[s], q) if s in options else q
             nxt: dict = {}
@@ -638,17 +674,27 @@ class Evaluator:
     # 구성요소 ----------------------------------------------------------------
 
     def comp(self, d: str, pos: tuple, sigma: dict, memo: dict) -> dict:
-        shared = pos not in self.focus               # 이 자리 아래를 따로 묻는 제약이 없으면 정의마다 한 번만 센다
-        if shared and d in memo:
-            return memo[d]
+        # 이 자리 아래를 따로 묻는 제약이 없으면 정의마다 한 번만 센다. 있으면 자리마다 한 번 센다
+        key = (d, pos) if pos in self.focus else d
+        if key not in memo:
+            memo[key] = self._comp(d, pos, sigma, memo)
+        return memo[key]
+
+    def decided(self, owners: frozenset, sigma: dict, memo: dict) -> tuple:
+        key = ("dec", owners)
+        if key not in memo:
+            memo[key] = self.sem.outcomes_closed(sorted(owners), sigma)
+        return memo[key]
+
+    def _comp(self, d: str, pos: tuple, sigma: dict, memo: dict) -> dict:
         total: dict = {}
-        for (gone, owners), p in self.cluster(d, pos, sigma).items():
+        for (gone, owners), p in self.cluster(d, pos, sigma, memo).items():
             if gone:
                 body = self.ill(ROOT_GONE) if len(pos) == 1 else self.one     # 뿌리가 빠지면 부적격이다
             elif not owners:
                 body = self.one
             else:
-                dec, ambiguous = self.sem.outcomes(sorted(owners), sigma)
+                dec, ambiguous = self.decided(owners, sigma, memo)
                 body = self.ill(("stuck", d, tuple(sorted(owners)))) if ambiguous else {}   # 분해를 정할 수 없는 조합이 있다
                 for y, x in dec:
                     pushed = [("pushed", z) for z in owners if z != y] if self.live else ()   # 분해를 내지 않은 주인들
@@ -658,22 +704,29 @@ class Evaluator:
                             inner = p_mul(inner, self.comp(part.def_name, pos + (part.part_name,), sigma, memo))
                         body = p_add(body, p_seen(self.mark(inner, pos, "aspect", y, "", x.name), (), pushed))
                         continue
-                    for n in self.sem.counts(x, sigma):
-                        names = [replica_name(x, i, n) for i in range(n)]
-                        special = [nm for nm in names if pos + (nm,) in self.focus]
-                        inner = self.one
-                        for nm in special:
-                            inner = p_mul(inner, self.comp(x.part.def_name, pos + (nm,), sigma, memo))
-                        if len(special) < n:                           # 나머지 복제본은 서로 같다
-                            plain = next(nm for nm in names if pos + (nm,) not in self.focus)
-                            one = self.comp(x.part.def_name, pos + (plain,), sigma, memo)
-                            inner = p_mul(inner, p_pow(one, n - len(special), self.one))
+                    # 복제본들은 서로 같다. 따로 세야 하는 자리의 복제본만 하나씩 세고 나머지는 거듭제곱한다.
+                    # 그런 자리가 없으면 복제본의 이름을 만들지도 않는다. 개수가 이어지면 앞의 거듭제곱을 이어 쓴다
+                    watched = self.below.get(pos, ())
+                    one = self.comp(x.part.def_name, pos + ("",), sigma, memo) if not watched else None
+                    power, at = self.one, 0
+                    for n in sorted(self.sem.counts(x, sigma)):
+                        if watched:
+                            names = [replica_name(x, i, n) for i in range(n)]
+                            special = [nm for nm in names if nm in watched]
+                            inner = self.one
+                            for nm in special:
+                                inner = p_mul(inner, self.comp(x.part.def_name, pos + (nm,), sigma, memo))
+                            if len(special) < n:
+                                plain = next(nm for nm in names if nm not in watched)
+                                rest = self.comp(x.part.def_name, pos + (plain,), sigma, memo)
+                                inner = p_mul(inner, p_pow(rest, n - len(special), self.one))
+                        else:
+                            power, at = p_mul(power, p_pow(one, n - at, self.one)), n
+                            inner = power
                         inner = self.mark(inner, pos, "count", y, x.name, n)
                         body = p_add(body, p_seen(self.mark(inner, pos, "aspect", y, "", x.name), (), pushed))
             q = p_mul(p, body)
             total = p_add(total, q) if total else q
-        if shared:
-            memo[d] = total
         return total
 
     # 뿌리 --------------------------------------------------------------------

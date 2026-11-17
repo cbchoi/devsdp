@@ -63,10 +63,16 @@ def test_variants_are_the_variants_of_the_unfolded_tree(seed):
     STATS["ill"] += sum(not ok for _, ok in mine)
     STATS["docs_with_ill"] += any(not ok for _, ok in mine)
     STATS["docs_empty"] += not mine
-    STATS["docs_with_hidden_ties"] += any(
-        amb and dec for sigma in s.assignments() for name in doc.entities
-        for mu in s.members(name, sigma) if not s.removed(mu) and s.owners(mu)
-        for dec, amb in [s.outcomes(s.owners(mu), sigma)])
+    hidden = False
+    for sigma in s.assignments():                            # 정리 2: 닫힌 꼴이 정의 3을 그대로 계산한 것과 같다
+        for name in doc.entities:
+            for mu in s.members(name, sigma):
+                if not s.removed(mu) and s.owners(mu):
+                    dec, amb = s.outcomes(s.owners(mu), sigma)
+                    assert s.outcomes_closed(s.owners(mu), sigma) == (dec, amb)
+                    hidden = hidden or (amb and bool(dec))
+                    STATS["clusters"] += 1
+    STATS["docs_with_hidden_ties"] += hidden
 
 
 @pytest.mark.parametrize("seed", range(600))
@@ -310,6 +316,63 @@ def test_counting_does_not_depend_on_the_number_of_variants():
     assert F.count(load_ses_dict(pool(30, 2, depth=2)))[0] == sum(inner ** n for n in range(1, 31))
 
 
+def test_the_calculation_does_not_enumerate_clusters_demands_paths_or_replicas():
+    """정리 4. 독립된 검토가 짚은 네 모양이다. 고치기 전에는 크기가 하나 늘 때마다 시간이 두 배가 되었다."""
+    import time
+
+    def timed(d: dict, limit: float = 5.0) -> tuple:
+        doc = load_ses_dict(d)
+        started = time.time()
+        out = F.count(doc)
+        assert time.time() - started < limit
+        return out
+
+    # 1. 대안이 마름모로 겹치는 병합체. 병합체 선택이 2의 k 제곱 개다
+    k = 40
+    ents = {"R": {"root": True, "specializations": {"s": {"alternatives": ["A1", "B1"]}}}}
+    below = "R"
+    for i in range(1, k + 1):
+        ents[f"A{i}"], ents[f"B{i}"] = {"extends": below}, {"extends": f"A{i}"}
+        if i < k:
+            for name in (f"A{i}", f"B{i}"):
+                ents[name]["specializations"] = {"t": {"alternatives": [f"A{i + 1}", f"B{i + 1}"]}}
+        below = f"B{i}"
+    assert timed({"ses": "1.0", "name": "R", "entities": ents}) == (2 ** k, 2 ** k)
+
+    # 2. 주인이 k 명이고 저마다 분해가 둘인 병합체. 요구의 조합이 2의 k 제곱 가지다
+    k = 30
+    ents = {"L": {}}
+    for i in range(k):
+        name = "R" if i == 0 else f"A{i}"
+        ents[name] = {"aspects": {f"hi{i}": {"parts": ["L"], "priority": 2 * i}, f"lo{i}": {"parts": ["L"], "priority": 2 * i + 1}}}
+        if i == 0:
+            ents[name]["root"] = True
+        else:
+            ents[name]["extends"] = "R" if i == 1 else f"A{i - 1}"
+        if i < k - 1:
+            ents[name]["specializations"] = {"s": {"alternatives": [f"A{i + 1}"]}}
+    # 뿌리가 hi0 을 내면 hi0 이, lo0 을 내면 lo0 이 가장 앞선다. 다른 주인의 분해는 모두 그 뒤다
+    assert timed({"ses": "1.0", "name": "R", "entities": ents}) == (2, 2)
+
+    # 3. 깊이 D 의 사슬. 층마다 분해가 둘이고 맨 아래를 경로로 가리키는 제약이 하나 있다
+    depth = 40
+    ents = {f"E{depth}": {"specializations": {"k": {"alternatives": ["K0", "K1"]}}},
+            "K0": {"extends": f"E{depth}"}, "K1": {"extends": f"E{depth}"}}
+    for i in range(depth):
+        ents[f"E{i}"] = {"aspects": {"a": {"parts": [{"def": f"E{i + 1}", "alias": "p"}]},
+                                     "b": {"parts": [{"def": f"E{i + 1}", "alias": "p"}]}}}
+    ents["E0"]["root"] = True
+    d = {"ses": "1.0", "name": "E0", "entities": ents,
+         "constraints": [{"name": "c", "require": {"selected": {"path": ["E0"] + ["p"] * depth, "specialization": "k",
+                                                               "alternative": "K0"}}}]}
+    assert timed(d) == (2 ** depth, 2 ** depth)
+
+    # 4. 복제본 백만 개, 그리고 개수가 1에서 4,000까지인 범위
+    assert timed(pool(1, 1) | {"entities": dict(pool(1, 1)["entities"], R={"root": True, "multi_aspects": {
+        "m": {"part": "Leaf", "cardinality": 10 ** 6}}})}) == (1, 1)
+    assert timed(pool(4000, 1)) == (4000, 4000)
+
+
 def test_a_constraint_on_one_replica_is_counted_at_that_replica_only():
     """경로로 가리킨 제약은 그 자리의 복제본만 따로 세고, 나머지 복제본은 한 번 센 값을 거듭제곱한다."""
     d = pool(40, 3)
@@ -325,5 +388,5 @@ def test_folded_samples_are_not_vacuous():
         pytest.skip("앞의 시험과 함께 실행할 때만 센다")
     assert STATS["variants"] >= 3000 and STATS["ill"] >= 150 and STATS["docs_with_ill"] >= 60, STATS
     assert STATS["counted"] >= 3000 and STATS["docs_with_selected"] >= 200 and STATS["docs_with_paths"] >= 60, STATS
-    assert STATS["models"] >= 1500 and STATS["docs_with_hidden_ties"] >= 5, STATS
+    assert STATS["models"] >= 1500 and STATS["docs_with_hidden_ties"] >= 5 and STATS["clusters"] >= 2000, STATS
     assert STATS["docs_with_dead"] >= 100 and STATS["dead_but_in_some_variant"] >= 30 and STATS["stuck_places"] >= 60, STATS
