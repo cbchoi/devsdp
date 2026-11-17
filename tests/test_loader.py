@@ -158,3 +158,35 @@ def test_a_definition_cannot_be_merged_twice_into_one_component():
                      "X": {"extends": "Y", "specializations": {"s": {"alternatives": ["A"]}}},
                      "Y": {"specializations": {"t": {"alternatives": ["A"]}}}, "A": {"extends": "X"}})
     load_ses_dict(two_parts)
+
+
+@pytest.mark.parametrize("bad", ["$s", "m[2]", "a/b", "1st", "has space", ""])
+def test_names_are_identifiers(bad):
+    """이름은 글자, 숫자, 밑줄이다. 펼친 나무가 변수($), 개수([n]), 주소(/)에 쓰는 글자가 이름에 들면
+    정의 표 위의 뜻과 펼친 나무가 어긋난다 (theory.md 의 W4). 스키마의 identifier 와 같은 규칙이다."""
+    def doc(entities, variables=None):
+        d = {"ses": "1.0", "name": "R", "entities": entities}
+        return dict(d, variables=variables) if variables else d
+
+    cases = [doc({"R": {"root": True, "specializations": {bad: {"alternatives": ["A"]}}}, "A": {"extends": "R"}}),
+             doc({"R": {"root": True, "aspects": {bad: {"parts": ["A"]}}}, "A": {}}),
+             doc({"R": {"root": True, "multi_aspects": {bad: {"part": "A", "cardinality": 2}}}, "A": {}}),
+             doc({"R": {"root": True, "aspects": {"d": {"parts": [{"def": "A", "alias": bad}]}}}, "A": {}}),
+             doc({"R": {"root": True, "aspects": {"d": {"parts": [bad]}}}, bad: {}}),
+             doc({"R": {"root": True}}, {bad: {"type": "int", "range": [1, 2]}})]
+    for d in cases:
+        with pytest.raises(LoadError, match="쓸 수 없다"):
+            load_ses_dict(d)
+    load_ses_dict(doc({"R": {"root": True, "aspects": {"분해_1": {"parts": [{"def": "A", "alias": "첫째"}]}}}, "A": {}}))
+
+
+def test_values_of_a_variable_are_written_differently():
+    """변수의 값은 글자로 적어 구별한다. 1 과 "1" 처럼 적으면 같은 두 값은 펼친 나무에서 한 노드가 된다 (theory.md 의 W5)."""
+    def doc(values):
+        return {"ses": "1.0", "name": "R", "variables": {"v": {"type": "enum", "values": values}},
+                "entities": {"R": {"root": True}}}
+
+    for values in ([1, "1"], ["a", "a"], [True, "True"]):
+        with pytest.raises(LoadError, match="글자로 적으면 같다"):
+            load_ses_dict(doc(values))
+    load_ses_dict(doc([1, 2, "a"]))

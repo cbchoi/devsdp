@@ -7,10 +7,14 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from . import model as m
 from .skeleton import MARKERS
+
+
+_IDENTIFIER = re.compile(r"[A-Za-z_가-힣][A-Za-z0-9_가-힣]*\Z")       # 스키마의 identifier
 
 
 class LoadError(ValueError):
@@ -303,6 +307,13 @@ def check_integrity(doc: m.SesDocument) -> None:
             errors.append(f"{name}: 형제 이름 충돌 {names}")
         for reserved in sorted(MARKERS & set(names)):        # 펼침이 표시 노드의 이름으로 쓴다 (18 문서 3절, 5.3절)
             errors.append(f"{name}: 이름 {reserved} 는 쓸 수 없다. 펼침이 표시로 쓰는 이름이다")
+        # 이름은 스키마의 identifier 다. 펼친 나무는 이름을 노드의 경로에 그대로 쓰고 변수($), 개수([n]),
+        # 주소(/)에 다른 글자를 쓴다. 이름이 그 글자를 가지면 정의 표 위의 뜻과 펼친 나무가 어긋난다 (theory.md 의 W4)
+        aliases = [p.alias for a in ent.aspects.values() for p in a.parts if p.alias is not None] + \
+                  [ma.part.alias for ma in ent.multi_aspects.values() if ma.part.alias is not None]
+        for x in dict.fromkeys([name] + list(names) + aliases):
+            if x not in MARKERS and not _IDENTIFIER.match(str(x)):
+                errors.append(f"{name}: 이름 {x!r} 는 쓸 수 없다. 글자, 숫자, 밑줄로 쓰고 숫자로 시작하지 않는다")
         # 포트 타입
         for p in ent.ports.values():
             if p.type not in doc.port_types:
@@ -418,6 +429,15 @@ def check_integrity(doc: m.SesDocument) -> None:
     for c in doc.constraints:
         for e in (c.when, c.require, c.forbid):
             expr_vars(e, f"constraint {c.name}", constraint=True)
+
+    for vname, var in doc.variables.items():
+        if not _IDENTIFIER.match(str(vname)):
+            errors.append(f"variables.{vname}: 이름 {vname!r} 는 쓸 수 없다. 글자, 숫자, 밑줄로 쓰고 숫자로 시작하지 않는다")
+        if isinstance(var.domain, m.EnumSet):                 # 값은 글자로 적어 구별한다 (theory.md 의 W5)
+            written = [str(v) for v in var.domain.values]
+            twice = sorted({w for w in written if written.count(w) > 1})
+            if twice:
+                errors.append(f"variables.{vname}: 값 {twice} 가 글자로 적으면 같다. 값은 서로 달라야 한다")
 
     # strict hierarchy: 펼친 경로에서 같은 정의 반복 금지
     try:
