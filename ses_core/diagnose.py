@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from .algebra import ENT, SES, AlgebraError, count_variants, reduce, restrict, sem
 from .decisions import (ChoicePoint, DecisionSet, _variable_choice, choice_table, excluded, family,
@@ -57,6 +57,7 @@ class Analysis:
     layered: Optional[Layered] = None   # 분석 모델. 선택 지점 표와 가지치기에 다시 쓴다
     domains: dict = field(default_factory=dict)
     table: list = field(default_factory=list)       # 적격 핵을 기준으로 한 선택 지점 표
+    core: Optional[Any] = None          # 한도를 넘어 열거하지 못했을 때, 정의 표 위에서 구한 핵의 분석 (folded.Family)
 
     @property
     def errors(self) -> list:
@@ -599,7 +600,9 @@ def analyze(m: Model, profile: Optional[Profile] = None, max_variants: int = 500
     """문서 범위와 족 범위의 진단을 모두 낸다. 어떤 상태의 문서에도 예외 없이 답한다.
 
     max_nodes는 펼친 나무의 노드 수 한도, max_variants는 구조상 변이 수의 한도다.
-    어느 쪽이든 넘으면 변이 분석을 하지 않고 LIMIT로 알린다.
+    어느 쪽이든 넘으면 변이를 열거하지 않고 LIMIT로 알린다. 그때에도 핵의 분석은 정의 표 위에서 한다
+    (theory.md 4절). 변이 수, 핵 적격인 변이 수, 분해를 정할 수 없는 곳, 죽은 선택지를 result.core 에 담고
+    진단으로 알린다. 결합과 속성 같은 확장의 검사는 변이를 열거해야 하므로 그때는 하지 않는다.
     attach는 분석 모델에 확장을 더 얹는 함수다. 실행기를 붙이면(executor.attach) 그 실행기로
     만들 수 없는 변이가 다른 위반과 같은 방식으로 진단된다.
     functions는 식의 call 이 부르는 함수들이다. 등록되지 않은 함수를 부르면 ANALYZE로 알린다.
@@ -622,8 +625,6 @@ def analyze(m: Model, profile: Optional[Profile] = None, max_variants: int = 500
         nodes = unfolded_size(m, max_nodes + 1)
     except RecursionError:
         nodes = max_nodes + 1
-    if nodes > max_nodes:
-        return stop("info", "LIMIT", f"펼친 나무의 노드가 한도 {max_nodes}개를 넘어 변이 분석을 하지 않았다")
     try:
         d = to_dict(m)
         doc = loader.load_ses_dict(d)
@@ -638,6 +639,9 @@ def analyze(m: Model, profile: Optional[Profile] = None, max_variants: int = 500
         return result
     except Exception as e:                              # 모양이 스키마와 다른 문서. 적재기는 엄격하다
         return stop("error", "LOAD", f"문서를 분석 모델로 옮길 수 없다: {type(e).__name__}: {e}")
+    if nodes > max_nodes:
+        stop("info", "LIMIT", f"펼친 나무의 노드가 한도 {max_nodes}개를 넘어 변이를 열거하지 않았다")
+        return _core_family(m, doc, functions, result)
     try:
         L = unfold.unfold_layered(doc, profile, functions)
         if attach is not None:
@@ -650,11 +654,94 @@ def analyze(m: Model, profile: Optional[Profile] = None, max_variants: int = 500
         return stop("error", "ANALYZE", f"변이 공간을 만들다가 실패했다: {type(e).__name__}: {e}")
     result.layered, result.domains = L, domains
     if total > max_variants:
-        return stop("info", "LIMIT", f"구조상 변이가 {total}개로 한도 {max_variants}개를 넘어 열거하지 않았다")
+        stop("info", "LIMIT", f"구조상 변이가 {total}개로 한도 {max_variants}개를 넘어 열거하지 않았다")
+        return _core_family(m, doc, functions, result)
     try:
         return _family(m, L, domains, result)
     except Exception as e:
         return stop("error", "ANALYZE", f"변이를 분석하다가 실패했다: {type(e).__name__}: {e}")
+
+
+def _core_family(m: Model, doc, functions, result: Analysis, max_assignments: int = 200000) -> Analysis:
+    """변이를 열거할 수 없는 문서의 핵을 정의 표 위에서 분석한다 (folded.analyze, theory.md 4절).
+
+    변이 수와 핵 적격인 변이 수를 세고, 뿌리가 빠지는 변이(K0)와 분해를 정할 수 없는 병합체(K1)와 죽은 선택지를
+    알린다. 확장의 검사는 하지 않는다. 그래서 여기서 말하는 적격은 핵 적격이다.
+    """
+    from . import folded
+
+    diags = result.diagnostics
+    doc_id = m.root
+    by_name = {e.props.get("name"): e.id for e in reversed(m.of_type("entity"))}
+
+    def add(severity, code, message, owner=None, data=None) -> None:
+        element = by_name.get(owner) or doc_id
+        diags.append(Diagnostic(severity, code, message, element, m.address(element), scope="family", layer="core",
+                                data=data))
+
+    try:
+        combos = 1
+        for name in doc.variables:
+            combos *= len(folded.domain(doc, name))
+        if combos > max_assignments:
+            add("info", "LIMIT", f"변수 값의 조합이 {combos}가지로 한도 {max_assignments}가지를 넘어 핵의 분석도 하지 않았다")
+            return result
+        fam = folded.analyze(doc, functions)
+    except AlgebraError as e:
+        add("error", "ANALYZE", f"변이 공간을 분석할 수 없다: {e}")
+        return result
+    except Exception as e:                              # 분석이 편집기를 멈추게 하지 않는다
+        add("error", "ANALYZE", f"변이 공간을 분석하다가 실패했다: {type(e).__name__}: {e}")
+        return result
+    result.core = fam
+    if fam.variants == 0:
+        add("error", "EMPTY", "제약을 만족하는 변이가 없다")
+        return result
+    sem_ = folded.Semantics(doc, functions)
+    for event, sigma in fam.examples.items():
+        if event == folded.ROOT_GONE:
+            add("error", "K0", f"뿌리가 없음 대안을 고르는 변이가 있다. 변수 값의 예: {sigma}", doc.root.name,
+                {"assignment": sigma})
+            continue
+        _, name, owners = event
+        ties = [f"{y} 의 {x.name}(우선순위 {'없음' if x.priority is None else x.priority})"
+                for y, x in sem_.ties(list(owners), sigma)]
+        add("error", "K1", f"{name} 의 병합체에서 분해를 하나로 정할 수 없다. 맞서는 분해: {', '.join(ties)}. "
+            f"변수 값의 예: {sigma}", name, {"definition": name, "owners": list(owners), "assignment": sigma})
+    if fam.wellformed == 0:
+        add("error", "NOWF", f"변이 {fam.variants}개 가운데 핵 적격인 것이 없다")
+        return result
+    # 죽은 선택지. 열거하는 분석(_family)과 같은 규칙이다. 선택지가 둘 이상인 선택 지점만 보고, 그 지점이 핵 적격인
+    # 변이에 나타나지 않으면 위쪽의 선택지가 알려지므로 되풀이하지 않는다. 다만 그 정의가 살아 있는 병합체에 있는데
+    # 분해가 한 번도 골라지지 않으면 다른 구성원의 분해에 늘 밀리는 것이므로 알린다
+    for kind, owner, group, options in folded.points(doc):
+        if len(options) < 2:
+            continue
+        if kind == "variable":
+            some, good = fam.values[owner]
+            alive = [(v, v in some, v in good) for v in options]
+        else:
+            alive = [(o, (kind, owner, group, o) in fam.live, (kind, owner, group, o) in fam.live_wf) for o in options]
+        pushed = False
+        if not any(in_good for _, _, in_good in alive):
+            pushed = kind == "aspect" and ("pushed", owner) in fam.live_wf
+            if not pushed:
+                continue
+        for option, in_some, in_good in alive:
+            if in_good:
+                continue
+            where = f"변수 {owner}" if kind == "variable" else f"{owner} 의 {group or '분해'}"
+            why = "핵 적격인 변이에 나타나지 않는다" if in_some else "제약 때문에 어떤 변이에도 나타나지 않는다"
+            if pushed:
+                why = "다른 구성원의 분해에 우선순위로 밀려 핵 적격인 변이에 나타나지 않는다"
+            named = "alternative" if kind == "spec" else kind
+            element, path = _option_element(m, ChoicePoint(owner, named, group, ()), option)
+            element = element or doc_id
+            diags.append(Diagnostic("warning", "DEAD", f"{where} 에서 선택지 {option} 은 {why}", element, m.address(element),
+                                    path, scope="family", layer="core",
+                                    data={"owner": owner, "kind": named, "group": group, "option": option,
+                                          "in_some_variant": in_some}))
+    return result
 
 
 def _family(m: Model, L: Layered, domains: dict, result: Analysis) -> Analysis:

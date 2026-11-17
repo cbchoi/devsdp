@@ -118,7 +118,10 @@ def cmd_check(args, out) -> int:
     a = analyze(m, profile, max_variants=args.max_variants, functions=_resolve(args.functions, "--functions"))
     for d in a.diagnostics:
         print(f"{d.severity} {d.code} {d.address or '-'}: {d.message}", file=out)
-    if a.variants is None:
+    if a.variants is None and a.core is not None:
+        print(f"변이 {a.core.variants}개, 그 가운데 핵 적격 {a.core.wellformed}개 "
+              "(열거하지 않고 정의 표 위에서 셌다. 결합과 속성 같은 확장의 검사는 하지 않았다)", file=out)
+    elif a.variants is None:
         print("변이 분석을 하지 않았다", file=out)
     else:
         print(f"변이 {a.variants}개, 그 가운데 적격 {a.wellformed}개", file=out)

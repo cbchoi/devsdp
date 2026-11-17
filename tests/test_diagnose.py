@@ -507,11 +507,87 @@ def test_family_sample_is_not_vacuous():
     assert FAMILY["cause_shorter_than_witness"] >= 40 and FAMILY["cause_explains_all"] >= 30, FAMILY
 
 
+@pytest.mark.parametrize("seed", range(200))
+def test_core_analysis_beyond_the_limit_agrees_with_enumeration(seed):
+    """한도를 넘으면 변이를 열거하지 않고 정의 표 위에서 핵을 분석한다 (theory.md 4절). 같은 문서를 한도 안에서
+    열거해 분석한 것과 견준다. 변이 수, 적격 변이 수, 핵의 위반이 생기는 요소, 죽은 선택지가 같다.
+
+    표본의 문서에는 포트와 속성이 없어 확장의 위반이 없다. 그래서 적격이 곧 핵 적격이다."""
+    d = rand_document(random.Random(seed))
+    m = E.from_dict(d)
+    full, core = analyze(m), analyze(m, max_variants=0)
+    assert core.variants is None and core.of("LIMIT") and core.core is not None
+    assert (core.core.variants, core.core.wellformed) == (full.variants, full.wellformed)
+
+    def errors(a):
+        return {(x.code, x.element) for x in a.diagnostics if x.scope == "family" and x.severity == "error"}
+
+    def dead_options(a):
+        return {(x.element, json.dumps(x.data, sort_keys=True, default=str)) for x in a.of("DEAD")}
+
+    assert errors(core) == errors(full)
+    assert dead_options(core) == dead_options(full)
+    for x in core.of("K1"):                                  # 맞서는 분해와 변수 값의 예를 적는다
+        assert "맞서는 분해" in x.message and x.data["owners"] and m.find(x.address) == x.element
+    FAMILY["core_errors"] += len(errors(core))
+    FAMILY["core_dead"] += len(core.of("DEAD"))
+    FAMILY["core_docs"] += 1
+
+
+@pytest.mark.parametrize("seed", range(120))
+def test_core_analysis_beyond_the_limit_agrees_on_priorities_and_constraints(seed):
+    """우선순위, 분해의 규칙, 선택 제약을 가진 문서에서도 두 분석이 같다. 다른 구성원의 분해에 늘 밀리는 분해를
+    죽은 선택지로 알리는 것도 같다. 포트와 결합은 떼어 확장의 위반이 없게 했다."""
+    from test_folded import stripped
+    from test_parity import prioritized
+    d = stripped(prioritized(seed)[0])
+    functions = prioritized(seed)[2]
+    m = E.from_dict(d)
+    full, core = analyze(m, functions=functions), analyze(m, max_variants=0, functions=functions)
+    if full.variants is None:                                # 문서 범위의 오류가 있으면 두 분석 모두 하지 않는다
+        assert core.core is None
+        return
+    assert (core.core.variants, core.core.wellformed) == (full.variants, full.wellformed)
+    assert {(x.code, x.element) for x in core.errors} == {(x.code, x.element) for x in full.errors}
+    assert {(x.element, x.message.replace("핵 적격", "적격"), json.dumps(x.data, sort_keys=True, default=str))
+            for x in core.of("DEAD")} == \
+        {(x.element, x.message, json.dumps(x.data, sort_keys=True, default=str)) for x in full.of("DEAD")}
+    FAMILY["prio_docs"] += 1
+    FAMILY["prio_pushed_dead"] += sum("밀려" in x.message for x in core.of("DEAD"))
+    FAMILY["prio_k1"] += len(core.of("K1"))
+
+
+def test_core_analysis_reports_a_removable_root_and_scales():
+    """뿌리가 빠지는 변이(K0)를 알리고, 변이를 열거할 수 없는 크기에서도 답한다."""
+    d = {"ses": "1.0", "name": "R",
+         "entities": {"R": {"root": True, "specializations": {"s": {"alternatives": ["A", "Gone"]}},
+                            "multi_aspects": {"m": {"part": "Leaf", "cardinality": {"min": 1, "max": 300}}}},
+                      "A": {"extends": "R"}, "Gone": {"extends": "R", "stereotype": "void"},
+                      "Leaf": {"specializations": {"k": {"alternatives": ["K0", "K1", "K2"]}}},
+                      "K0": {"extends": "Leaf"}, "K1": {"extends": "Leaf"}, "K2": {"extends": "Leaf"}},
+         "constraints": [{"name": "c", "forbid": {"selected": "Leaf/k=K2"}}]}
+    a = analyze(E.from_dict(d))
+    assert a.variants is None and a.of("LIMIT")
+    assert a.core.variants == sum(2 ** n for n in range(1, 301)) + 1 and a.core.wellformed == a.core.variants - 1
+    assert [x.code for x in a.errors] == ["K0"]
+    # 뿌리의 대안 Gone 은 변이에는 나타나지만 적격인 변이에는 없다. K2 는 제약 때문에 어디에도 없다
+    assert [(x.data["owner"], x.data["option"], x.data["in_some_variant"]) for x in a.of("DEAD")] == \
+        [("R", "Gone", True), ("Leaf", "K2", False)]
+
+
+def test_core_sample_is_not_vacuous():
+    if not FAMILY["core_docs"]:
+        pytest.skip("앞의 시험과 함께 실행할 때만 센다")
+    assert FAMILY["core_docs"] == 200 and FAMILY["core_errors"] >= 40 and FAMILY["core_dead"] >= 60, FAMILY
+    assert FAMILY["prio_docs"] >= 80 and FAMILY["prio_pushed_dead"] >= 10 and FAMILY["prio_k1"] >= 20, FAMILY
+
+
 def test_limits_and_empty_families():
     m, ed, _ = open_doc(PROCESSING)
     a = analyze(m, max_variants=10)
     assert [(d.severity, d.code) for d in a.diagnostics] == [("info", "LIMIT")]
     assert a.variants is None and a.layered is not None
+    assert (a.core.variants, a.core.wellformed) == (15, 15)      # 열거하지 않고 센 핵의 수
     doc = m.get(m.root)
     ed.set(doc.id, "constraints", [{"name": "불가능", "require": {"var": "num_servers", "gt": 99}}])
     a = analyze(m)

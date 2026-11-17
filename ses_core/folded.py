@@ -153,10 +153,122 @@ def replica_name(ma: m.MultiAspect, i: int, n: int) -> str:
 # 정의를 그대로 옮긴 의미
 # ---------------------------------------------------------------------------
 
+MAX_ROWS = 20000                 # 조건 하나를 미리 평가해 보는 변수 값 조합의 수. 넘으면 미리 보지 않는다
+
+
+def reach(doc: m.SesDocument, d: str) -> list:
+    """d 와, d 의 specialization 들의 대안에서 다시 닿는 정의들. d 가 놓인 자리의 병합체에 들 수 있는 정의들이다."""
+    out, stack = [], [d]
+    while stack:
+        y = stack.pop()
+        if y in out:
+            continue
+        out.append(y)
+        stack += [alt for sp in doc.entities[y].specializations.values() for alt in sp.alternatives]
+    return out
+
+
+def all_counts(doc: m.SesDocument, ma: m.MultiAspect) -> list:
+    """어떤 변수 값에서든 그 multi-aspect 가 가질 수 있는 개수들."""
+    card = ma.cardinality
+    if isinstance(card, m.Fixed):
+        return [card.n]
+    if isinstance(card, m.VarCard):
+        return domain(doc, card.var)
+    return [] if card.max is None else list(range(card.min, card.max + 1))
+
+
+def possible_members(doc: m.SesDocument, path: tuple) -> list:
+    """구성요소 경로 path 에 놓일 수 있는 구성원의 정의들. 그 자리가 어떤 선택에도 없으면 빈 목록이다."""
+    if not path or path[0] != doc.root.name:
+        return []
+    comps = [doc.root.name]
+    for name in path[1:]:
+        nxt: list = []
+        for c in comps:
+            for y in reach(doc, c):
+                e = doc.entities[y]
+                nxt += [p.def_name for a in e.aspects.values() for p in a.parts if p.part_name == name]
+                for ma in e.multi_aspects.values():
+                    counts = all_counts(doc, ma)
+                    tops = counts if "{n}" in ma.naming else counts and [max(counts)]
+                    if any(name == replica_name(ma, i, n) for n in tops for i in range(n)):
+                        nxt.append(ma.part.def_name)
+        comps = list(dict.fromkeys(nxt))
+    return list(dict.fromkeys(y for c in comps for y in reach(doc, c)))
+
+
+def conditions(e) -> list:
+    """식에서 변수만 보는 조건들. 그리고, 또는, 아니다, selected 를 벗긴 나머지다."""
+    if e is None or isinstance(e, m.Selected):
+        return []
+    if isinstance(e, (m.And, m.Or)):
+        return [c for x in e.items for c in conditions(x)]
+    if isinstance(e, m.Not):
+        return conditions(e.item)
+    return [e]
+
+
+def variables_of(e) -> list:
+    if isinstance(e, m.Var):
+        return [e.name]
+    out: list = []
+    for x in list(getattr(e, "items", ()) or ()) + list(getattr(e, "args", ()) or ()):
+        out += variables_of(x)
+    for attr in ("left", "right", "item"):
+        if hasattr(e, attr):
+            out += variables_of(getattr(e, attr))
+    return list(dict.fromkeys(out))
+
+
+def validate(doc: m.SesDocument, functions=None) -> None:
+    """뜻을 정할 수 있는 문서인가. 아니면 AlgebraError 를 낸다. 적재기가 보지 못하는 두 가지다.
+
+    - 조건은 변수의 모든 값에서 값이 있어야 한다. 견줄 수 없는 값을 견주거나, 등록하지 않은 함수를 부르거나,
+      함수가 실패하면 안 된다. 그리고나 또는으로 묶여 있어 평가가 닿지 않는 조건도 본다.
+    - 제약의 selected 는 어떤 선택에든 있을 수 있는 곳을 가리켜야 한다. 가리키는 곳이 없는 것은 잘못 적은 것이다.
+    펼침(unfold.py)도 같은 문서를 거부한다.
+    """
+    exprs = [x for c in doc.constraints for x in (c.when, c.require, c.forbid)]
+    for name in reachable(doc):
+        e = doc.entities[name]
+        exprs += [x.rule for x in decompositions(e)]
+        for sp in e.specializations.values():
+            rule = sp.select
+            while rule is not None:
+                exprs.append(rule.when)
+                rule = rule.otherwise if isinstance(rule.otherwise, m.SelectRule) else None
+    for cond in (c for e in exprs for c in conditions(e)):
+        names = variables_of(cond)
+        domains = [domain(doc, n) for n in names]
+        rows = 1
+        for d in domains:
+            rows *= len(d)
+        if rows <= MAX_ROWS:
+            for row in product(*domains):
+                value(cond, dict(zip(names, row)), functions)
+    reachable_defs = set(reachable(doc))
+    for c in doc.constraints:
+        for x in (c.when, c.require, c.forbid):
+            for a in selected_atoms(x):
+                if a.path is None:
+                    d = a.node.partition("/")[0]
+                    if d not in reachable_defs:
+                        raise AlgebraError(f"selected 가 가리키는 곳이 없다: {a.node}")
+                    continue
+                hosts = possible_members(doc, tuple(a.path))
+                if not hosts:
+                    raise AlgebraError(f"selected 가 가리키는 곳이 없다: {'/'.join(a.path)}")
+                if all(selected_target(doc, a, y, a.node)[0] is None for y in hosts):
+                    raise AlgebraError(f"selected 가 가리키는 선택지가 구성요소 {'/'.join(a.path)} 에 없다: "
+                                       f"{a.node or '분해'}={a.choice}")
+
+
 class Semantics:
     """정준 문서의 뜻. 정의 2에서 7을 그대로 옮겼다."""
 
     def __init__(self, doc: m.SesDocument, functions=None) -> None:
+        validate(doc, functions)
         self.doc, self.functions = doc, functions
         self.root = doc.root.name
         self.names = list(doc.variables)
@@ -228,6 +340,14 @@ class Semantics:
     def admissible(self, owners: list, sigma: dict) -> list:
         """Dec: 그 병합체의 분해가 될 수 있는 (구성원, 분해)들."""
         return self.outcomes(owners, sigma)[0]
+
+    def ties(self, owners: list, sigma: dict) -> list:
+        """결과가 없는 요구의 조합 하나에서 맞서는 것들: (구성원, 분해)들. 그런 조합이 없으면 빈 목록."""
+        for combo in product(*(self.demands(y, sigma) for y in owners)):
+            pool = [(y, x) for y, group in zip(owners, combo) for x in group]
+            if not any(all(above(x.priority, w.priority) for _, w in pool if w is not x) for _, x in pool):
+                return [(y, x) for y, x in pool if not any(above(w.priority, x.priority) for _, w in pool)]
+        return []
 
     def counts(self, ma: m.MultiAspect, sigma: dict) -> list:
         card = ma.cardinality
@@ -386,37 +506,51 @@ class Semantics:
 # ---------------------------------------------------------------------------
 # 정리 3. 열거하지 않는 계산
 #
-# 값은 "본 것들의 집합에서 개수로 가는 사전"이다. 본 것은 제약이 묻는 선택(selected)과, 부적격을 뜻하는
-# 표지 ILL 이다. 두 값의 곱은 본 것의 합집합끼리 개수를 곱해 더한 것이고, 합은 개수를 더한 것이다.
-# 이것은 교환 반환을 이루고, 변이의 집합은 이 반환에서 정의 표 위의 식으로 계산된다.
+# 값은 "본 것들의 집합에서 (개수, 일어난 일들)로 가는 사전"이다. 본 것은 제약이 묻는 선택(selected)과,
+# 부적격을 뜻하는 표지 ILL 이다. 개수는 본 것이 정확히 그 집합인 구성요소 선택의 수이고, 일어난 일들은
+# 그 선택들 가운데 하나에서라도 일어난 일(대안, 분해, 개수의 선택과 부적격의 원인)의 집합이다.
+# 두 값의 곱은 본 것의 합집합끼리 개수를 곱하고 일을 합친 것이고, 합은 개수를 더하고 일을 합친 것이다.
+# 개수가 0 인 항은 두지 않는다. 이것은 교환 반환을 이루고(theory.md 4절), 변이의 집합에 대한 합이
+# 이 반환에서 정의 표 위의 식으로 계산된다. 일을 따라가지 않을 때는 일의 자리에 None 을 둔다.
 # ---------------------------------------------------------------------------
 
 ILL = ("ill",)
-ONE = {frozenset(): 1}
+ROOT_GONE = ("root-gone",)
+ONE = {frozenset(): (1, None)}                 # 일을 따라가지 않는 계산의 1
+ONE_LIVE = {frozenset(): (1, frozenset())}     # 일을 따라가는 계산의 1
+
+
+def c_add(a: tuple, b: tuple) -> tuple:
+    return a[0] + b[0], (None if a[1] is None else a[1] | b[1])
+
+
+def c_mul(a: tuple, b: tuple) -> tuple:
+    return a[0] * b[0], (None if a[1] is None else a[1] | b[1])
 
 
 def p_add(a: dict, b: dict) -> dict:
     out = dict(a)
     for k, v in b.items():
-        out[k] = out.get(k, 0) + v
+        out[k] = c_add(out[k], v) if k in out else v
     return out
 
 
 def p_mul(a: dict, b: dict) -> dict:
-    if a is ONE:
+    if a is ONE or a is ONE_LIVE:
         return b
-    if b is ONE:
+    if b is ONE or b is ONE_LIVE:
         return a
     out: dict = {}
     for ka, va in a.items():
         for kb, vb in b.items():
             k = ka | kb
-            out[k] = out.get(k, 0) + va * vb
+            v = c_mul(va, vb)
+            out[k] = c_add(out[k], v) if k in out else v
     return out
 
 
-def p_pow(a: dict, n: int) -> dict:
-    out, base = ONE, a
+def p_pow(a: dict, n: int, one: dict) -> dict:
+    out, base = one, a
     while n:
         if n & 1:
             out = p_mul(out, base)
@@ -426,23 +560,29 @@ def p_pow(a: dict, n: int) -> dict:
     return out
 
 
-def p_seen(a: dict, atoms) -> dict:
-    """모든 항이 atoms 를 보았다고 적는다."""
-    atoms = frozenset(atoms)
-    if not atoms:
+def p_seen(a: dict, atoms=(), events=()) -> dict:
+    """모든 항이 atoms 를 보았고 그 선택들에서 events 가 일어났다고 적는다."""
+    atoms, events = frozenset(atoms), frozenset(events)
+    if not atoms and not events:
         return a
     out: dict = {}
-    for k, v in a.items():
-        out[k | atoms] = out.get(k | atoms, 0) + v
+    for k, (n, live) in a.items():
+        v = (n, None if live is None else live | events)
+        out[k | atoms] = c_add(out[k | atoms], v) if (k | atoms) in out else v
     return out
 
 
 class Evaluator:
-    """정의 표 위에서 변이의 수를 구한다. 변이를 열거하지 않는다."""
+    """정의 표 위에서 변이에 대한 합을 구한다. 변이를 열거하지 않는다.
 
-    def __init__(self, doc: m.SesDocument, functions=None) -> None:
+    live 가 참이면 변이들에서 일어난 일(어떤 선택지가 쓰였는가, 어디서 분해를 정할 수 없는가)도 함께 모은다.
+    """
+
+    def __init__(self, doc: m.SesDocument, functions=None, live: bool = False) -> None:
         self.sem = Semantics(doc, functions)
         self.doc = doc
+        self.one = ONE_LIVE if live else ONE
+        self.live = live
         self.late = [c for c in doc.constraints if any(selected_atoms(x) for x in (c.when, c.require, c.forbid))]
         self.early = [c for c in doc.constraints if c not in self.late]
         atoms = [a for c in self.late for x in (c.when, c.require, c.forbid) for a in selected_atoms(x)]
@@ -467,23 +607,31 @@ class Evaluator:
                 out.add(a)
         return frozenset(out)
 
+    def mark(self, p: dict, pos: tuple, kind: str, d: str, group: str, choice) -> dict:
+        """그 선택을 한 항들에, 제약이 묻는 것과 일어난 일을 적는다."""
+        return p_seen(p, self.seen(pos, kind, d, group, choice), [(kind, d, group, choice)] if self.live else ())
+
+    def ill(self, event: tuple) -> dict:
+        return {frozenset([ILL]): (1, frozenset([event]) if self.live else None)}
+
     # 병합체: (빠졌는가, 분해를 가진 구성원들)에서 값으로 --------------------------
 
     def cluster(self, d: str, pos: tuple, sigma: dict) -> dict:
         ent = self.doc.entities[d]
         sig = (ent.stereotype == m.Stereotype.VOID, frozenset([d]) if decompositions(ent) else frozenset())
-        acc = {sig: ONE}
+        acc = {sig: self.one}
         for sp in ent.specializations.values():
             options: dict = {}
             for alt in self.sem.alternatives(sp, sigma):
-                saw = self.seen(pos, "spec", d, sp.name, alt)
                 for s, p in self.cluster(alt, pos, sigma).items():
-                    options[s] = p_add(options.get(s, {}), p_seen(p, saw))
+                    q = self.mark(p, pos, "spec", d, sp.name, alt)
+                    options[s] = p_add(options[s], q) if s in options else q
             nxt: dict = {}
             for (g1, o1), p1 in acc.items():
                 for (g2, o2), p2 in options.items():
                     key = (g1 or g2, o1 | o2)
-                    nxt[key] = p_add(nxt.get(key, {}), p_mul(p1, p2))
+                    q = p_mul(p1, p2)
+                    nxt[key] = p_add(nxt[key], q) if key in nxt else q
             acc = nxt
         return acc
 
@@ -496,52 +644,53 @@ class Evaluator:
         total: dict = {}
         for (gone, owners), p in self.cluster(d, pos, sigma).items():
             if gone:
-                body = {frozenset([ILL]): 1} if len(pos) == 1 else ONE     # 뿌리가 빠지면 부적격이다
+                body = self.ill(ROOT_GONE) if len(pos) == 1 else self.one     # 뿌리가 빠지면 부적격이다
             elif not owners:
-                body = ONE
+                body = self.one
             else:
                 dec, ambiguous = self.sem.outcomes(sorted(owners), sigma)
-                body = {frozenset([ILL]): 1} if ambiguous else {}              # 분해를 정할 수 없는 조합이 있다
-                if dec:
-                    for y, x in dec:
-                        saw = self.seen(pos, "aspect", y, "", x.name)
-                        if isinstance(x, m.Aspect):
-                            inner = ONE
-                            for part in x.parts:
-                                inner = p_mul(inner, self.comp(part.def_name, pos + (part.part_name,), sigma, memo))
-                            body = p_add(body, p_seen(inner, saw))
-                            continue
-                        for n in self.sem.counts(x, sigma):
-                            names = [replica_name(x, i, n) for i in range(n)]
-                            special = [nm for nm in names if pos + (nm,) in self.focus]
-                            inner = ONE
-                            for nm in special:
-                                inner = p_mul(inner, self.comp(x.part.def_name, pos + (nm,), sigma, memo))
-                            if len(special) < n:                           # 나머지 복제본은 서로 같다
-                                plain = next(nm for nm in names if pos + (nm,) not in self.focus)
-                                one = self.comp(x.part.def_name, pos + (plain,), sigma, memo)
-                                inner = p_mul(inner, p_pow(one, n - len(special)))
-                            body = p_add(body, p_seen(inner, saw | self.seen(pos, "count", y, x.name, n)))
-            total = p_add(total, p_mul(p, body))
+                body = self.ill(("stuck", d, tuple(sorted(owners)))) if ambiguous else {}   # 분해를 정할 수 없는 조합이 있다
+                for y, x in dec:
+                    pushed = [("pushed", z) for z in owners if z != y] if self.live else ()   # 분해를 내지 않은 주인들
+                    if isinstance(x, m.Aspect):
+                        inner = self.one
+                        for part in x.parts:
+                            inner = p_mul(inner, self.comp(part.def_name, pos + (part.part_name,), sigma, memo))
+                        body = p_add(body, p_seen(self.mark(inner, pos, "aspect", y, "", x.name), (), pushed))
+                        continue
+                    for n in self.sem.counts(x, sigma):
+                        names = [replica_name(x, i, n) for i in range(n)]
+                        special = [nm for nm in names if pos + (nm,) in self.focus]
+                        inner = self.one
+                        for nm in special:
+                            inner = p_mul(inner, self.comp(x.part.def_name, pos + (nm,), sigma, memo))
+                        if len(special) < n:                           # 나머지 복제본은 서로 같다
+                            plain = next(nm for nm in names if pos + (nm,) not in self.focus)
+                            one = self.comp(x.part.def_name, pos + (plain,), sigma, memo)
+                            inner = p_mul(inner, p_pow(one, n - len(special), self.one))
+                        inner = self.mark(inner, pos, "count", y, x.name, n)
+                        body = p_add(body, p_seen(self.mark(inner, pos, "aspect", y, "", x.name), (), pushed))
+            q = p_mul(p, body)
+            total = p_add(total, q) if total else q
         if shared:
             memo[d] = total
         return total
 
     # 뿌리 --------------------------------------------------------------------
 
-    def per_assignment(self) -> Iterator[tuple]:
-        """(변수 값, 변이 수, 적격 변이 수)들. 제약을 어기는 변이는 세지 않는다."""
+    def roots(self):
+        """제약(변수만 보는 것)을 통과한 변수 값마다, 제약을 만족하는 항들: (변수 값, [(본 것, 개수, 일들)])."""
         sem = self.sem
         for sigma in sem.assignments():
             if not all(sem.satisfied(c, sigma, set()) for c in self.early):
                 continue
-            total = wf = 0
-            for seen, n in self.comp(sem.root, (sem.root,), sigma, {}).items():
-                if all(self._satisfied(c, sigma, seen) for c in self.late):
-                    total += n
-                    if ILL not in seen:
-                        wf += n
-            yield sigma, total, wf
+            yield sigma, [(seen, n, live) for seen, (n, live) in self.comp(sem.root, (sem.root,), sigma, {}).items()
+                          if all(self._satisfied(c, sigma, seen) for c in self.late)]
+
+    def per_assignment(self):
+        """(변수 값, 변이 수, 적격 변이 수)들. 제약을 어기는 변이는 세지 않는다."""
+        for sigma, terms in self.roots():
+            yield sigma, sum(n for _, n, _ in terms), sum(n for seen, n, _ in terms if ILL not in seen)
 
     def _satisfied(self, c: m.Constraint, sigma: dict, seen: frozenset) -> bool:
         def holds(e) -> bool:
@@ -573,3 +722,94 @@ class Evaluator:
 def count(doc: m.SesDocument, functions=None) -> tuple:
     """(변이 수, 핵 적격 변이 수). 변이를 열거하지 않는다."""
     return Evaluator(doc, functions).count()
+
+
+# ---------------------------------------------------------------------------
+# 족 수준의 분석 (핵). 변이를 열거하지 않는다
+# ---------------------------------------------------------------------------
+
+def reachable(doc: m.SesDocument) -> list:
+    """뿌리에서 쓰임 관계로 닿는 정의들. 문서에 적힌 순서."""
+    seen, stack = set(), [doc.root.name]
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        e = doc.entities[name]
+        stack += [p.def_name for a in e.aspects.values() for p in a.parts]
+        stack += [ma.part.def_name for ma in e.multi_aspects.values()]
+        stack += [alt for sp in e.specializations.values() for alt in sp.alternatives]
+    return [name for name in doc.entities if name in seen]
+
+
+def points(doc: m.SesDocument) -> list:
+    """문서가 적은 선택 지점들: (종류, 정의 또는 변수, 묶음, 선택지들). 뿌리에서 닿는 정의의 것만.
+
+    종류는 variable, spec, aspect, count 다. 선택지가 하나뿐인 것도 든다.
+    """
+    out = [("variable", name, "", tuple(domain(doc, name))) for name in doc.variables]
+    for name in reachable(doc):
+        e = doc.entities[name]
+        for sp in e.specializations.values():
+            out.append(("spec", name, sp.name, tuple(sp.alternatives)))
+        if decompositions(e):
+            out.append(("aspect", name, "", tuple(x.name for x in decompositions(e))))
+        for ma in e.multi_aspects.values():
+            card = ma.cardinality
+            counts = [card.n] if isinstance(card, m.Fixed) else domain(doc, card.var) if isinstance(card, m.VarCard) \
+                else [] if card.max is None else list(range(card.min, card.max + 1))
+            out.append(("count", name, ma.name, tuple(counts)))
+    return out
+
+
+def declared(doc: m.SesDocument) -> list:
+    """문서가 적은 선택지들: (종류, 정의, 묶음, 선택지). 변수의 값은 들지 않는다."""
+    return [(kind, owner, group, option) for kind, owner, group, options in points(doc) if kind != "variable"
+            for option in options]
+
+
+@dataclass
+class Family:
+    """문서의 족에 대해 정의 표 위에서 구한 것."""
+    assignments: int                  # 변수만 보는 제약을 통과한 변수 값의 수
+    variants: int                     # 변이의 수
+    wellformed: int                   # 핵 적격인 변이의 수
+    live: frozenset                   # 어떤 변이에서 일어난 일들
+    live_wf: frozenset                # 어떤 핵 적격 변이에서 일어난 일들
+    values: dict                      # 변수 이름에서 (변이가 있는 값들, 핵 적격 변이가 있는 값들)로
+    examples: dict                    # 부적격의 원인(ROOT_GONE 또는 ("stuck", 정의, 주인들))에서 그것이 일어난 변수 값 하나로
+
+    def dead(self, doc: m.SesDocument) -> list:
+        """핵 적격인 변이에 나타나지 않는 선택지: (종류, 정의, 묶음, 선택지, 어떤 변이에는 나타나는가)."""
+        out = [c + (c in self.live,) for c in declared(doc) if c not in self.live_wf]
+        for name in doc.variables:
+            some, good = self.values.get(name, (set(), set()))
+            out += [("variable", name, "", v, v in some) for v in domain(doc, name) if v not in good]
+        return out
+
+
+def analyze(doc: m.SesDocument, functions=None) -> Family:
+    """변이 수, 핵 적격 변이 수, 살아 있는 선택지, 분해를 정할 수 없는 곳. 변이를 열거하지 않는다."""
+    ev = Evaluator(doc, functions, live=True)
+    assignments = variants = wellformed = 0
+    live, live_wf = set(), set()
+    values = {name: (set(), set()) for name in doc.variables}
+    examples: dict = {}
+    for sigma, terms in ev.roots():
+        assignments += 1
+        for seen, n, events in terms:
+            variants += n
+            live |= events
+            for name, v in sigma.items():
+                values[name][0].add(v)
+            if ILL in seen:
+                for e in events:
+                    if e == ROOT_GONE or e[0] == "stuck":
+                        examples.setdefault(e, dict(sigma))
+            else:
+                wellformed += n
+                live_wf |= events
+                for name, v in sigma.items():
+                    values[name][1].add(v)
+    return Family(assignments, variants, wellformed, frozenset(live), frozenset(live_wf), values, examples)

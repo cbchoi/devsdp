@@ -21,7 +21,7 @@ from test_parity import decorated, prioritized, with_paths  # noqa: E402
 
 from ses_core import classic, load_ses_dict  # noqa: E402
 from ses_core import folded as F  # noqa: E402
-from ses_core.algebra import sem  # noqa: E402
+from ses_core.algebra import AlgebraError, sem  # noqa: E402
 from ses_core.extension import Layered, violations  # noqa: E402
 from ses_core.unfold import unfold_annotated  # noqa: E402
 
@@ -87,6 +87,85 @@ def test_counting_on_the_definitions_equals_enumeration(seed):
     STATS["docs_with_selected"] += any(F.selected_atoms(x) for c in doc.constraints for x in (c.when, c.require, c.forbid))
     STATS["docs_with_paths"] += any(a.path is not None for c in doc.constraints
                                     for x in (c.when, c.require, c.forbid) for a in F.selected_atoms(x))
+
+
+@pytest.mark.parametrize("seed", range(400))
+def test_family_analysis_sees_what_enumeration_sees(seed):
+    """정의 표 위의 분석이 낸 것(변이 수, 살아 있는 선택지, 분해를 정할 수 없는 곳, 변이가 있는 변수 값)이
+    변이를 모두 열거해서 본 것과 같다."""
+    d, doc, functions = sample(seed)
+    s = F.Semantics(doc, functions)
+    some, good = set(), set()
+    values = {name: (set(), set()) for name in doc.variables}
+    n = wf = 0
+    for sigma, kappa in s.variants():
+        events = {(k, y, g, c) for _, k, y, g, c in s.choices(kappa)}
+        events |= {("stuck", c.member.name, tuple(sorted(s.owners(c.member))))
+                   for _, c in kappa.walk((s.root,)) if c.state == F.STUCK}
+        events |= {("pushed", z) for _, c in kappa.walk((s.root,)) if c.state == F.SPLIT
+                   for z in s.owners(c.member) if z != c.owner}
+        if kappa.state == F.GONE:
+            events.add(F.ROOT_GONE)
+        ok = s.well_formed(kappa)
+        n, wf = n + 1, wf + ok
+        some |= events
+        for name, v in sigma.items():
+            values[name][0].add(v)
+            if ok:
+                values[name][1].add(v)
+        if ok:
+            good |= events
+    fam = F.analyze(doc, functions)
+    assert (fam.variants, fam.wellformed) == (n, wf)
+    assert fam.live == some and fam.live_wf == good and fam.values == values
+    assert set(fam.examples) == {e for e in some if e == F.ROOT_GONE or e[0] == "stuck"}
+    dead = fam.dead(doc)
+    assert all((c[:4] in some) == c[4] for c in dead if c[0] != "variable")
+    STATS["dead"] += len(dead)
+    STATS["dead_but_in_some_variant"] += sum(c[4] for c in dead)
+    STATS["docs_with_dead"] += bool(dead)
+    STATS["stuck_places"] += sum(e[0] == "stuck" for e in fam.examples)
+    STATS["root_gone_docs"] += F.ROOT_GONE in fam.examples
+
+
+def spoiled(seed: int) -> tuple:
+    """무작위 문서에 뜻을 정할 수 없는 것을 하나 넣는다. (문서, 함수들, 넣었는가)"""
+    d, _, functions = decorated(seed)
+    d = json.loads(json.dumps(d))
+    root = d["name"]
+    kind = seed % 5
+    extra = None
+    if kind == 0:                                            # 어떤 선택에도 없는 자리
+        extra = {"name": "z", "forbid": {"selected": {"path": [root, "nowhere"], "aspect": "a0"}}}
+    elif kind == 1:                                          # 있는 자리이지만 그 구성요소에 없는 선택 지점
+        extra = {"name": "z", "forbid": {"selected": {"path": [root], "specialization": "zz", "alternative": "E9"}}}
+    elif kind == 2:                                          # 뿌리에서 닿지 않는 정의
+        d["entities"]["Lonely"] = {"specializations": {"u": {"alternatives": ["LonelyA"]}}}
+        d["entities"]["LonelyA"] = {"extends": "Lonely"}
+        extra = {"name": "z", "forbid": {"selected": "Lonely/u=LonelyA"}}
+    elif kind == 3:                                          # 앞의 항이 참이라 평가가 닿지 않는, 견줄 수 없는 조건
+        d.setdefault("variables", {}).setdefault("vz", {"type": "int", "range": [1, 2]})
+        extra = {"name": "z", "require": {"any": [{"all": []}, {"var": "vz", "lt": "x"}]}}
+    if extra is not None:
+        d["constraints"] = list(d.get("constraints") or []) + [extra]
+    return d, functions, extra is not None
+
+
+@pytest.mark.parametrize("seed", range(150))
+def test_documents_without_a_meaning_are_refused_by_both(seed):
+    """가리키는 곳이 없는 selected 와 값이 없는 조건을 가진 문서는 정의 표 위의 의미도 펼침도 거부한다.
+    한쪽만 답하는 문서가 없어야 두 길의 수가 어긋나지 않는다."""
+    d, functions, bad = spoiled(seed)
+    doc = load_ses_dict(d)
+    outcomes = []
+    for build in (lambda: F.Semantics(doc, functions), lambda: unfold_annotated(doc, functions)):
+        try:
+            build()
+            outcomes.append("ok")
+        except AlgebraError:
+            outcomes.append("refused")
+    assert outcomes == (["refused", "refused"] if bad else ["ok", "ok"])
+    STATS["refused"] += bad
 
 
 def stripped(d: dict) -> dict:
@@ -190,6 +269,25 @@ def test_a_member_whose_rules_tie_can_still_lose_to_another_member():
     assert states(merged(base, {"b": {"priority": 9}})) == ["stuck"]
 
 
+def test_a_removed_root_is_an_ill_formed_variant():
+    """뿌리가 없음 대안을 고른 것은 변이이되 핵 적격이 아니다 (K0). 세 길이 같은 답을 낸다."""
+    d = {"ses": "1.0", "name": "R",
+         "entities": {"R": {"root": True, "specializations": {"s": {"alternatives": ["A", "Gone"]}},
+                            "aspects": {"d": {"parts": ["P"]}}},
+                      "A": {"extends": "R"}, "Gone": {"extends": "R", "stereotype": "void"}, "P": {}}}
+    doc = load_ses_dict(d)
+    s = F.Semantics(doc)
+    assert sorted((k.state, s.well_formed(k)) for _, k in s.variants()) == [("gone", False), ("split", True)]
+    assert F.count(doc) == (2, 1)
+    fam = F.analyze(doc)
+    gone = ("spec", "R", "s", "Gone")
+    assert F.ROOT_GONE in fam.examples and gone in fam.live and gone not in fam.live_wf
+    assert ("spec", "R", "s", "A") in fam.live_wf
+    theirs, theirs_wf, n = unfolded(doc, None)
+    assert (n, len(theirs_wf)) == (2, 1)
+    assert {s.nodes(sigma, k) for sigma, k in s.variants() if s.well_formed(k)} == theirs_wf
+
+
 def pool(top: int, kinds: int, depth: int = 1) -> dict:
     """복제본이 1개에서 top 개인 풀. 복제본마다 kinds 가지 가운데 하나다. depth 겹으로 쌓는다."""
     ents = {"Leaf": {"specializations": {"k": {"alternatives": [f"K{i}" for i in range(kinds)]}}}}
@@ -228,3 +326,4 @@ def test_folded_samples_are_not_vacuous():
     assert STATS["variants"] >= 3000 and STATS["ill"] >= 150 and STATS["docs_with_ill"] >= 60, STATS
     assert STATS["counted"] >= 3000 and STATS["docs_with_selected"] >= 200 and STATS["docs_with_paths"] >= 60, STATS
     assert STATS["models"] >= 1500 and STATS["docs_with_hidden_ties"] >= 5, STATS
+    assert STATS["docs_with_dead"] >= 100 and STATS["dead_but_in_some_variant"] >= 30 and STATS["stuck_places"] >= 60, STATS

@@ -190,3 +190,62 @@ def test_values_of_a_variable_are_written_differently():
         with pytest.raises(LoadError, match="글자로 적으면 같다"):
             load_ses_dict(doc(values))
     load_ses_dict(doc([1, 2, "a"]))
+
+
+def test_a_cycle_is_found_through_a_shared_definition_and_deep_sharing_is_fast():
+    """쓰임 관계의 순환은 여러 곳에서 쓰이는 정의를 거쳐도 찾는다. 같은 정의를 여러 번 쓰는 깊은 문서도 금방 본다."""
+    import time
+    cyc = {"ses": "1.0", "name": "R",
+           "entities": {"R": {"root": True, "aspects": {"d": {"parts": ["X", "Y"]}}},
+                        "X": {"aspects": {"d": {"parts": ["S"]}}}, "Y": {"aspects": {"d": {"parts": ["S"]}}},
+                        "S": {"aspects": {"d": {"parts": ["T"]}}}, "T": {"aspects": {"d": {"parts": ["Y"]}}}}}
+    with pytest.raises(LoadError, match="strict hierarchy 위반"):
+        load_ses_dict(cyc)
+    depth = 60                                                # 경로의 수는 2의 60제곱이다
+    entities = {"L0": {"root": True}}
+    for i in range(depth):
+        entities[f"L{i}"].update({"aspects": {"a": {"parts": [f"L{i + 1}", {"def": f"L{i + 1}", "alias": "again"}]}}})
+        entities[f"L{i + 1}"] = {}
+    started = time.time()
+    load_ses_dict({"ses": "1.0", "name": "L0", "entities": entities})
+    assert time.time() - started < 5
+
+
+@pytest.mark.parametrize("why,entities,variables", [
+    ("두 번 적었다", {"R": {"root": True, "specializations": {"s": {"alternatives": ["A", "A"]}}}, "A": {"extends": "R"}}, None),
+    ("대안이 하나도 없다", {"R": {"root": True, "specializations": {"s": {"alternatives": []}}}}, None),
+    ("이름의 틀", {"R": {"root": True, "multi_aspects": {"m": {"part": "P", "cardinality": 2, "naming": "x"}}}, "P": {}}, None),
+    ("이름의 틀", {"R": {"root": True, "multi_aspects": {"m": {"part": "P", "cardinality": 2, "naming": "{part}_{n}"}}}, "P": {}}, None),
+    ("이름의 틀", {"R": {"root": True, "multi_aspects": {"m": {"part": "P", "cardinality": 2, "naming": "{part}/{i}"}}}, "P": {}}, None),
+    ("이름의 틀", {"R": {"root": True, "multi_aspects": {"m": {"part": "P", "cardinality": 2, "naming": "{who}_{i}"}}}, "P": {}}, None),
+    ("부분이 될 수 없다", {"R": {"root": True, "multi_aspects": {"m": {"part": "V", "cardinality": 2}}}, "V": {"stereotype": "void"}}, None),
+    ("쓸 수 없다", {"R": {"root": True, "aspects": {"a": {"parts": ["~"]}}}, "~": {}}, None),
+    ("쓸 수 없다", {"R": {"root": True, "aspects": {"a": {"parts": [{"def": "P", "alias": "-"}]}}}, "P": {}}, None),
+    ("값이 하나도 없다", {"R": {"root": True}}, {"v": {"type": "int", "range": [3, 1]}}),
+    ("값이 하나도 없다", {"R": {"root": True}}, {"v": {"type": "enum", "values": []}}),
+    ("우선순위는 정수", {"R": {"root": True, "aspects": {"a": {"parts": ["P"], "priority": 1.5}}}, "P": {}}, None),
+    ("우선순위는 정수", {"R": {"root": True, "aspects": {"a": {"parts": ["P"], "priority": True}}}, "P": {}}, None),
+    ("우선순위는 정수", {"R": {"root": True, "multi_aspects": {"m": {"part": "P", "cardinality": 1, "priority": "1"}}}, "P": {}}, None),
+])
+def test_the_conditions_of_a_document_are_enforced(why, entities, variables):
+    """theory.md 의 정의 1과 W1에서 W5가 문서에 요구하는 것을 적재기가 본다. 독립된 검토가 찾은 빈 곳들이다.
+    이 문서들에서 정의 표 위의 의미와 펼친 나무가 다른 수를 내거나 한쪽이 실패했다."""
+    d = {"ses": "1.0", "name": "R", "entities": entities}
+    if variables:
+        d["variables"] = variables
+    with pytest.raises(LoadError, match=why):
+        load_ses_dict(d)
+
+
+def test_definitions_that_the_root_does_not_reach_are_not_judged_for_cycles():
+    """쓰임 관계의 순환은 뿌리에서 닿는 정의들에서만 본다. 닿지 않는 정의는 뜻에 관여하지 않는다 (theory.md 의 W1)."""
+    load_ses_dict({"ses": "1.0", "name": "R",
+                   "entities": {"R": {"root": True}, "A": {"aspects": {"a": {"parts": ["B"]}}},
+                                "B": {"aspects": {"b": {"parts": ["A"]}}}}})
+
+
+def test_valid_replica_names_and_priorities_are_accepted():
+    load_ses_dict({"ses": "1.0", "name": "R",
+                   "entities": {"R": {"root": True, "multi_aspects": {
+                       "m": {"part": "P", "cardinality": 2, "naming": "unit{i}_of_{n}", "priority": -3},
+                       "k": {"part": "P", "cardinality": 1, "priority": 0}}}, "P": {}}})

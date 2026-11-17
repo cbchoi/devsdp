@@ -312,8 +312,12 @@ def check_integrity(doc: m.SesDocument) -> None:
         aliases = [p.alias for a in ent.aspects.values() for p in a.parts if p.alias is not None] + \
                   [ma.part.alias for ma in ent.multi_aspects.values() if ma.part.alias is not None]
         for x in dict.fromkeys([name] + list(names) + aliases):
-            if x not in MARKERS and not _IDENTIFIER.match(str(x)):
+            if not _IDENTIFIER.match(str(x)) and x not in MARKERS & set(names):     # 표시의 이름은 위에서 알렸다
                 errors.append(f"{name}: 이름 {x!r} 는 쓸 수 없다. 글자, 숫자, 밑줄로 쓰고 숫자로 시작하지 않는다")
+        # 분해의 우선순위는 정수다. 정수가 아니면 "같은 자리"가 동치 관계가 아닐 수 있다 (theory.md 정의 1)
+        for x in list(ent.aspects.values()) + list(ent.multi_aspects.values()):
+            if x.priority is not None and (not isinstance(x.priority, int) or isinstance(x.priority, bool)):
+                errors.append(f"{name}/{x.name}.priority: 우선순위는 정수여야 한다: {x.priority!r}")
         # 포트 타입
         for p in ent.ports.values():
             if p.type not in doc.port_types:
@@ -343,6 +347,17 @@ def check_integrity(doc: m.SesDocument) -> None:
         # multi-aspect
         for ma in ent.multi_aspects.values():
             ref_ok(ma.part.def_name, f"{name}/{ma.name}.part")
+            # 복제본의 이름은 번호마다 달라야 하고 이름의 글자로만 이루어져야 한다 (theory.md 정의 1, W4).
+            # 틀에 {i} 가 없으면 복제본들이 한 자리에 겹친다
+            try:
+                sample = [ma.naming.format(i=i, n=2, part=ma.part.part_name) for i in range(2)]
+            except (KeyError, IndexError, ValueError) as err:
+                sample = None
+                errors.append(f"{name}/{ma.name}.naming: 이름의 틀을 채울 수 없다: {err!r}")
+            if sample is not None and ("{i}" not in ma.naming or sample[0] == sample[1]
+                                       or not all(_IDENTIFIER.match(x) for x in sample)):
+                errors.append(f"{name}/{ma.name}.naming: 복제본의 이름의 틀 {ma.naming!r} 는 쓸 수 없다. "
+                              "{i} 를 담아 번호마다 다른 이름을 내고, 그 이름은 글자, 숫자, 밑줄이어야 한다")
             card, where = ma.cardinality, f"{name}/{ma.name}.cardinality"
             if isinstance(card, m.VarCard):
                 var = doc.variables.get(card.var)
@@ -365,6 +380,11 @@ def check_integrity(doc: m.SesDocument) -> None:
                 _check_couplings(doc, ent, (part,), all_c, f"{name}/{ma.name}", errors)
         # specialization
         for sp in ent.specializations.values():
+            if not sp.alternatives:
+                errors.append(f"{name}/{sp.name}: 대안이 하나도 없다")
+            twice = sorted({a for a in sp.alternatives if sp.alternatives.count(a) > 1})
+            if twice:                                         # 같은 대안을 두 번 적으면 선택지가 하나인지 둘인지 정해지지 않는다
+                errors.append(f"{name}/{sp.name}: 대안 {twice} 를 두 번 적었다")
             for alt in sp.alternatives:
                 ref_ok(alt, f"{name}/{sp.name}.alternatives")
                 if alt in ents and name not in doc.ancestors(alt):
@@ -396,6 +416,9 @@ def check_integrity(doc: m.SesDocument) -> None:
             for p in asp.parts:
                 if p.def_name in ents and ents[p.def_name].stereotype == m.Stereotype.VOID:
                     errors.append(f"{name}/{asp.name}: 없음 대안 {p.def_name} 은 부분이 될 수 없다")
+        for ma in ent.multi_aspects.values():
+            if ma.part.def_name in ents and ents[ma.part.def_name].stereotype == m.Stereotype.VOID:
+                errors.append(f"{name}/{ma.name}: 없음 대안 {ma.part.def_name} 은 부분이 될 수 없다")
 
     # 한 구성요소에 같은 정의가 두 번 합쳐질 수 없다. 한 엔티티의 서로 다른 specialization 은 함께 골라지므로,
     # 둘이 같은 정의에 닿으면 그 정의가 병합체에 두 번 든다. 대수는 그것을 분해 둘, 바인딩 둘로 보고
@@ -433,6 +456,9 @@ def check_integrity(doc: m.SesDocument) -> None:
     for vname, var in doc.variables.items():
         if not _IDENTIFIER.match(str(vname)):
             errors.append(f"variables.{vname}: 이름 {vname!r} 는 쓸 수 없다. 글자, 숫자, 밑줄로 쓰고 숫자로 시작하지 않는다")
+        if (isinstance(var.domain, m.Range) and var.domain.min > var.domain.max) or \
+                (isinstance(var.domain, m.EnumSet) and not var.domain.values):
+            errors.append(f"variables.{vname}: 가질 수 있는 값이 하나도 없다")
         if isinstance(var.domain, m.EnumSet):                 # 값은 글자로 적어 구별한다 (theory.md 의 W5)
             written = [str(v) for v in var.domain.values]
             twice = sorted({w for w in written if written.count(w) > 1})
@@ -441,6 +467,8 @@ def check_integrity(doc: m.SesDocument) -> None:
 
     # strict hierarchy: 펼친 경로에서 같은 정의 반복 금지
     try:
+        # 뿌리에서 닿는 정의들만 본다. 닿지 않는 정의는 문서의 뜻에 관여하지 않는다 (theory.md 의 W1).
+        # 편집 중인 문서에는 쓰이지 않는 정의가 흔하고, 편집기의 진단은 그것을 경고(UNUSED)로만 알린다
         _check_strict_hierarchy(doc, doc.root.name, (), errors)
     except ValueError:
         pass
@@ -532,9 +560,16 @@ def _check_couplings(doc, ent, parts, couplings, where, errors) -> None:
             errors.append(f"{where}: 결합 {c.src} 에서 {c.dst} 의 포트 타입이 다르다 ({a.type}, {b.type})")
 
 
-def _check_strict_hierarchy(doc, def_name, path, errors) -> None:
+def _check_strict_hierarchy(doc, def_name, path, errors, done=None) -> None:
+    """쓰임 관계에 순환이 없는가 (theory.md 의 W1). 한 번 끝까지 본 정의는 다시 보지 않는다.
+
+    같은 정의를 여러 곳에서 쓰는 깊은 문서는 경로의 수가 지수적이다. 경로마다 내려가면 끝나지 않는다.
+    """
+    done = set() if done is None else done
     if def_name in path:
         errors.append("strict hierarchy 위반: " + "/".join(path + (def_name,)))
+        return
+    if def_name in done:
         return
     ent = doc.entities.get(def_name)
     if ent is None:
@@ -542,9 +577,10 @@ def _check_strict_hierarchy(doc, def_name, path, errors) -> None:
     nxt = path + (def_name,)
     for asp in ent.aspects.values():
         for p in asp.parts:
-            _check_strict_hierarchy(doc, p.def_name, nxt, errors)
+            _check_strict_hierarchy(doc, p.def_name, nxt, errors, done)
     for ma in ent.multi_aspects.values():
-        _check_strict_hierarchy(doc, ma.part.def_name, nxt, errors)
+        _check_strict_hierarchy(doc, ma.part.def_name, nxt, errors, done)
     for sp in ent.specializations.values():
         for alt in sp.alternatives:
-            _check_strict_hierarchy(doc, alt, nxt, errors)
+            _check_strict_hierarchy(doc, alt, nxt, errors, done)
+    done.add(def_name)

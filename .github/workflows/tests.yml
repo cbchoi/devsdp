@@ -1,0 +1,29 @@
+# 전체 시험. 파이썬 3.11 과 3.13 에서 돌린다.
+# cevsim 을 붙인 시험은 엔진의 소스(CEVSIM_HOME)가 있어야 하므로 여기서는 건너뛴다.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[test]"
+          pip install pyevsim || echo "pyevsim 을 설치할 수 없다. 그 시험은 건너뛴다"
+      - name: tests
+        run: python -m pytest tests -q
+      - name: mutant list matches the sources
+        run: python tools/mutate.py --dry
