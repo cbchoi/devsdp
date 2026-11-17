@@ -406,6 +406,9 @@ class Unfolding:
             self.kinds[s] = SPEC
             for v in self.domain(name):
                 self.kinds[s + (str(v),)] = ENT
+                # 값의 노드는 정의가 놓인 노드가 아니다. 표지를 변수의 이름으로 두어, 값의 글이 정의의 이름과
+                # 같아도 "그 정의가 나타나는 곳"으로 읽히지 않게 한다 (이름에는 $ 가 없다)
+                self.labels[s + (str(v),)] = var_node(name)
         self.gone = frozenset(self.void)
 
     # 분해의 규칙과 우선순위 ---------------------------------------------

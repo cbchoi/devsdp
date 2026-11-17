@@ -178,6 +178,25 @@ def all_counts(doc: m.SesDocument, ma: m.MultiAspect) -> list:
     return [] if card.max is None else list(range(card.min, card.max + 1))
 
 
+def occurring(doc: m.SesDocument) -> list:
+    """어떤 선택에든 놓일 수 있는 정의들. 펼친 나무 T(D)에 엔티티 노드로 나타나는 정의와 같다.
+
+    뿌리에서 대안, aspect 의 부분, 그리고 개수가 0 보다 클 수 있는 multi-aspect 의 부분을 따라 닿는 정의다.
+    개수가 늘 0 인 multi-aspect 의 부분은 쓰이기는 하나 어디에도 놓이지 않는다.
+    """
+    seen, stack = set(), [doc.root.name]
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        e = doc.entities[name]
+        stack += [alt for sp in e.specializations.values() for alt in sp.alternatives]
+        stack += [p.def_name for a in e.aspects.values() for p in a.parts]
+        stack += [ma.part.def_name for ma in e.multi_aspects.values() if any(n > 0 for n in all_counts(doc, ma))]
+    return [name for name in doc.entities if name in seen]
+
+
 def possible_members(doc: m.SesDocument, path: tuple) -> list:
     """구성요소 경로 path 에 놓일 수 있는 구성원의 정의들. 그 자리가 어떤 선택에도 없으면 빈 목록이다."""
     if not path or path[0] != doc.root.name:
@@ -227,6 +246,8 @@ def validate(doc: m.SesDocument, functions=None) -> None:
     - 조건은 변수의 모든 값에서 값이 있어야 한다. 견줄 수 없는 값을 견주거나, 등록하지 않은 함수를 부르거나,
       함수가 실패하면 안 된다. 그리고나 또는으로 묶여 있어 평가가 닿지 않는 조건도 본다.
     - 제약의 selected 는 어떤 선택에든 있을 수 있는 곳을 가리켜야 한다. 가리키는 곳이 없는 것은 잘못 적은 것이다.
+      정의 수준이면 그 정의가 어디엔가 놓일 수 있어야 하고(occurring), 경로 수준이면 그 자리가 있을 수 있고
+      거기 놓일 수 있는 구성원 가운데 그 선택 지점을 가진 것이 있어야 한다.
     펼침(unfold.py)도 같은 문서를 거부한다.
     """
     exprs = [x for c in doc.constraints for x in (c.when, c.require, c.forbid)]
@@ -247,13 +268,13 @@ def validate(doc: m.SesDocument, functions=None) -> None:
         if rows <= MAX_ROWS:
             for row in product(*domains):
                 value(cond, dict(zip(names, row)), functions)
-    reachable_defs = set(reachable(doc))
+    placed = set(occurring(doc))
     for c in doc.constraints:
         for x in (c.when, c.require, c.forbid):
             for a in selected_atoms(x):
                 if a.path is None:
                     d = a.node.partition("/")[0]
-                    if d not in reachable_defs:
+                    if d not in placed:
                         raise AlgebraError(f"selected 가 가리키는 곳이 없다: {a.node}")
                     continue
                 hosts = possible_members(doc, tuple(a.path))
@@ -519,15 +540,27 @@ class Semantics:
     # 정의 8. 실현 구조 ---------------------------------------------------
 
     def shape(self, kappa: Comp):
-        """적격 변이의 구조 (정의 8): (합쳐진 정의들, 고른 분해, 살아 있는 부분들의 구조). 빠진 부분은 없다.
+        """핵 적격인 변이의 구조 (정의 8): (합쳐진 정의들, 고른 분해, 부분들).
 
         고른 분해는 (그것을 낸 구성원, 분해의 이름)이고, 분해가 없는 구성요소에서는 None 이다.
+        부분들은 적힌 순서의 (이름, 그 부분의 구조)다. 빠진 부분은 이름만 남고 구조의 자리에 None 이 온다.
+        빠진 부분의 이름을 남기는 까닭은 결합이 그것을 보기 때문이다. 개수 2 에서 둘째 복제본이 빠진 것과
+        개수 1 은 살아 있는 부분이 같아도 결합이 다르다. multi-aspect 의 개수는 부분의 수다.
         """
         if kappa.state == GONE:
             return None
-        kids = tuple((name, self.shape(c)) for name, c in kappa.parts if c.state != GONE)
+        kids = tuple((name, self.shape(c)) for name, c in kappa.parts)
         chosen = (kappa.owner, kappa.dec) if kappa.state == SPLIT else None
         return tuple(sorted(kappa.member.names())), chosen, kids
+
+
+def live_shape(shape):
+    """구조에서 고른 분해의 이름과 빠진 부분을 잊은 것: (합쳐진 정의들, 살아 있는 부분들).
+
+    문헌의 절차가 내는 구조에는 그 둘이 없다. 그것과 견줄 때 쓴다.
+    """
+    names, _, kids = shape
+    return names, tuple((name, live_shape(k)) for name, k in kids if k is not None)
 
 
 # ---------------------------------------------------------------------------

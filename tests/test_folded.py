@@ -52,9 +52,12 @@ def unfolded(doc, functions) -> tuple:
 
 
 def skeleton_shape(T, c):
-    """뼈대(skeleton.py)를 Semantics.shape 와 같은 꼴로."""
+    """뼈대(skeleton.py)를 Semantics.shape 와 같은 꼴로. 빠진 부분은 이름만 남는다."""
     chosen = (T.label(c.aspect[:-1]), family(c.aspect[-1])) if c.aspect is not None else None
-    return tuple(sorted(c.labels)), chosen, tuple((name, skeleton_shape(T, k)) for name, k in c.parts.items())
+    names = [q[-1] for q in T.children(c.aspect)] if c.aspect is not None else []
+    assert sorted(names) == sorted(list(c.parts) + list(c.absent))
+    return tuple(sorted(c.labels)), chosen, \
+        tuple((name, skeleton_shape(T, c.parts[name]) if name in c.parts else None) for name in names)
 
 
 @pytest.mark.parametrize("seed", range(600))
@@ -211,19 +214,13 @@ def classic_shape(n: dict):
     return tuple(n["labels"]), tuple((name, classic_shape(c)) for name, c in n["children"].items())
 
 
-def without_decomposition(shape):
-    """고전 절차가 낸 구조에는 고른 분해의 이름이 없다. 견줄 때는 그것을 뺀다."""
-    names, _, kids = shape
-    return names, tuple((name, without_decomposition(k)) for name, k in kids)
-
-
 @pytest.mark.parametrize("seed", range(300))
 def test_well_formed_variants_are_the_models_of_the_classic_procedure(seed):
     """적격 변이의 (변수 값, 구조)가 고전 절차가 내는 것과 같다. 여러 변이가 같은 구조를 낼 수 있다."""
     d, _, functions = prioritized(seed) if seed % 2 == 0 else decorated(seed)    # 고전 절차는 경로로 가리킨 제약을 읽지 않는다
     doc = load_ses_dict(stripped(d))
     s = F.Semantics(doc, functions)
-    mine = collections.Counter((tuple(sorted(sigma.items())), without_decomposition(s.shape(kappa)))
+    mine = collections.Counter((tuple(sorted(sigma.items())), F.live_shape(s.shape(kappa)))
                                for sigma, kappa in s.variants() if s.well_formed(kappa))
     theirs = collections.Counter((tuple(sorted(sigma.items())), classic_shape(n))
                                  for sigma, n in classic.enumerate_classic(doc, functions))
@@ -320,6 +317,73 @@ def test_a_removed_root_is_an_ill_formed_variant():
     theirs, theirs_wf, n = unfolded(doc, None)
     assert (n, len(theirs_wf)) == (2, 1)
     assert {s.nodes(sigma, k) for sigma, k in s.variants() if s.well_formed(k)} == theirs_wf
+
+
+def refusals(d: dict) -> list:
+    """정의 표 위의 의미와 펼침이 그 문서를 받는가. 거부하면 그 글의 앞머리."""
+    doc = load_ses_dict(d)
+    out = []
+    for build in (lambda: F.Semantics(doc), lambda: unfold_annotated(doc)):
+        try:
+            build()
+            out.append("ok")
+        except AlgebraError as e:
+            out.append(str(e).split(":")[0])
+    return out
+
+
+def test_a_selected_must_point_at_a_definition_that_is_placed_somewhere():
+    """정의 수준의 selected 가 가리키는 정의는 어떤 선택에든 놓일 수 있어야 한다 (W7).
+
+    개수가 늘 0 인 multi-aspect 의 부분은 쓰이기는 하나 어디에도 놓이지 않는다. 전에는 정의 표 위의 의미가
+    그런 문서에 답을 내고 펼침은 거부했다. 변수의 값이 그 정의의 이름과 같은 글이면 펼침이 값의 노드를
+    그 정의가 놓인 곳으로 읽어 거부하지 않던 것도 같이 본다.
+    """
+    def doc(card, variables=None):
+        d = {"ses": "1.0", "name": "R",
+             "entities": {"R": {"root": True, "multi_aspects": {"m": {"part": "P", "cardinality": card}}},
+                          "P": {"specializations": {"k": {"alternatives": ["A", "B"]}}},
+                          "A": {"extends": "P"}, "B": {"extends": "P"}},
+             "constraints": [{"name": "c", "forbid": {"selected": "P/k=A"}}]}
+        if variables:
+            d["variables"] = variables
+        return d
+    nowhere = "selected 가 가리키는 곳이 없다"
+    assert refusals(doc(0)) == [nowhere, nowhere]
+    assert refusals(doc({"min": 0, "max": 0})) == [nowhere, nowhere]
+    assert refusals(doc(0, {"v": {"type": "enum", "values": ["P", "Q"]}})) == [nowhere, nowhere]
+    assert refusals(doc({"min": 0, "max": 1})) == ["ok", "ok"]
+    assert refusals(doc({"var": "n"}, {"n": {"type": "int", "values": [0]}})) == [nowhere, nowhere]
+    assert refusals(doc({"var": "n"}, {"n": {"type": "int", "values": [0, 2]}})) == ["ok", "ok"]
+    ok = load_ses_dict(doc({"min": 0, "max": 1}))
+    assert F.count(ok) == (2, 2) and unfolded(ok, None)[2] == 2          # 개수 0, 그리고 개수 1 에서 B
+    assert "P" in F.reachable(load_ses_dict(doc(0))) and "P" not in F.occurring(load_ses_dict(doc(0)))
+
+
+def test_the_structure_keeps_the_names_of_removed_parts():
+    """정의 8. 구조는 빠진 부분의 이름을 남긴다. 결합이 그것을 보기 때문이다.
+
+    개수 1 과, 개수 2 에서 둘째 복제본이 빠진 것은 살아 있는 부분이 같다. 그러나 "마지막 복제본"이 다르므로
+    결합이 다르고, 구조도 달라야 한다. 문헌의 절차와 견줄 때 쓰는 꼴(live_shape)에서는 둘이 같다.
+    """
+    d = {"ses": "1.0", "name": "R",
+         "entities": {"R": {"root": True, "multi_aspects": {"m": {"part": "P", "cardinality": {"min": 1, "max": 2}}}},
+                      "P": {"specializations": {"k": {"alternatives": ["On", "Off"]}}},
+                      "On": {"extends": "P"}, "Off": {"extends": "P", "stereotype": "void"}}}
+    doc = load_ses_dict(d)
+    s = F.Semantics(doc)
+    shapes = {}
+    for _, kappa in s.variants():
+        states_of = tuple(c.state for _, c in kappa.parts)
+        shapes[states_of] = s.shape(kappa)
+    one, two = shapes[("atom",)], shapes[("atom", "gone")]
+    assert one == (("R",), ("R", "m"), (("P_0", (("On", "P"), None, ())),))
+    assert two == (("R",), ("R", "m"), (("P_0", (("On", "P"), None, ())), ("P_1", None)))
+    assert one != two and F.live_shape(one) == F.live_shape(two)
+    assert len(set(shapes.values())) == 6 and len({F.live_shape(x) for x in shapes.values()}) == 4
+    S, ann = unfold_annotated(doc)                           # 뼈대도 같은 것을 적는다
+    for sigma, kappa in s.variants():
+        assert skeleton_shape(S.tree, skeleton(S.tree, ann.void, s.nodes(sigma, kappa))) == s.shape(kappa)
 
 
 def pool(top: int, kinds: int, depth: int = 1) -> dict:
