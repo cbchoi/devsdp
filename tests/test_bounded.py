@@ -1,4 +1,4 @@
-"""작은 문서의 전수 검사 (docs/ses-platform/theory.md 의 8절).
+"""작은 문서의 전수 검사 (docs/ses-platform/theory.md 의 9절).
 
 bounded_docs.py 가 열한 묶음의 작은 문서를 빠짐없이 낸다(73,693개). 문서마다 bounded_check.py 의 검사를 한다.
 정리 1 (c), 정리 2, 정리 3, 정리 5, 따름정리 5.1, 정의 9 와 10 의 글과 펼침의 구현, 고전 절차와의 대조다.

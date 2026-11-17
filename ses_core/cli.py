@@ -2,13 +2,17 @@
 
     ses check    문서 [--functions 모듈:이름] [--profile 파일] [--max-variants N]
     ses choices  문서 [--decisions 파일] [--functions 모듈:이름]
-    ses variants 문서 [--decisions 파일] [--limit N] [--functions 모듈:이름]
+    ses variants 문서 [--decisions 파일] [--limit N] [--max-variants N] [--functions 모듈:이름]
     ses build    문서 --decisions 파일 [--defaults] [--depth N] [--functions 모듈:이름]
     ses plan     문서 --decisions 파일 --binding 파일 --library 모듈:이름 [--json] [...]
     ses run      문서 --decisions 파일 --binding 파일 --library 모듈:이름 --until 시각 [--log N] [...]
 
 check 는 문서와 변이 공간 전체를 진단한다(편집기의 진단과 같다). choices 와 variants 는 결정 집합을
-적용한 족에서 남은 선택지와 변이를 보인다. 이 셋은 족 전체를 펼친다.
+적용한 족에서 남은 선택지와 변이를 보인다.
+
+choices 는 족을 펼치지 않는다. 남은 변이의 수와 선택 지점 표를 정의 표 위에서 구한다(theory.md 7절).
+복제본이 많은 족에서도 답한다. 결정이 펼친 나무의 노드를 가리킬 때(node)만 족을 펼친다. variants 는
+변이를 늘어놓으므로 족을 펼치되, 남은 변이의 수를 먼저 세어 한도를 넘으면 펼치지 않고 멈춘다.
 
 build, plan, run 은 결정이 끝난 변이 하나를 위에서 아래로 만든다(ses_core/direct.py). 족을 펼치지
 않으므로 큰 모델에 쓴다. plan 은 실행기를 붙여 계획을 만들고, run 은 그 계획을 참조 시뮬레이터(devs)로 돌린다.
@@ -141,9 +145,52 @@ def _family(args):
     return doc, S, pruned, variable_domains(doc)
 
 
+MAX_ASSIGNMENTS = 200000        # 정의 표 위의 계산이 돌아보는 변수 값의 조합의 한도
+
+
+def _on_definitions(args):
+    """문서, 결정 집합, 그리고 결정을 적용한 족을 정의 표 위에서 분석한 것. 나무를 펼치지 않는다.
+
+    결정이 펼친 나무의 노드를 가리키면(node) 분석의 자리에 None 을 낸다. 그때는 부르는 쪽이 족을 펼친다.
+    """
+    from . import folded
+    from .algebra import AlgebraError
+    doc = _document(args.document)
+    ds = _decisions(args.decisions)
+    if any(c.node is not None for c in ds.choose):
+        return doc, ds, None
+    combos = 1
+    for name in doc.variables:
+        keeps = [{str(v) for v in values} for key, values in ds.variables.items() if key == name]
+        combos *= sum(all(str(v) in keep for keep in keeps) for v in folded.domain(doc, name)) or 1
+    if combos > MAX_ASSIGNMENTS:
+        raise Stop(FAILED, f"변수 값의 조합이 {combos}가지로 한도 {MAX_ASSIGNMENTS}가지를 넘는다. 변수의 값을 결정으로 줄인다")
+    try:
+        return doc, ds, folded.analyze(doc, _resolve(args.functions, "--functions"), ds)
+    except AlgebraError as e:
+        raise Stop(FAILED, f"변이 공간을 만들 수 없다. {e}")
+
+
+def _print_table(points, out) -> None:
+    for p in points:
+        everything = [o for o, _ in p.options]
+        where = f"{p.owner} {p.kind}" + (f" {p.group}" if p.group else "")
+        state = "정해짐" if p.decided else ("남은 것 없음" if not p.active else "열림")
+        print(f"{where}: {state}. 남은 선택지 {list(p.remaining)} / 전체 {everything}", file=out)
+
+
 def cmd_choices(args, out) -> int:
+    from . import folded
     from .algebra import count_variants, sem
-    from .decisions import choice_table
+    from .decisions import ChoicePoint, choice_table
+    doc, ds, fam = _on_definitions(args)
+    if fam is not None:                                      # 정의 표 위에서. 족을 펼치지 않는다
+        if not fam.variants:
+            print("남은 변이가 없다", file=out)
+            return FAILED
+        print(f"남은 변이 {fam.variants}개", file=out)
+        _print_table([ChoicePoint(*row) for row in folded.choice_rows(doc, fam)], out)
+        return OK
     doc, S, pruned, domains = _family(args)
     if pruned is None:
         print("남은 변이가 없다", file=out)
@@ -151,17 +198,20 @@ def cmd_choices(args, out) -> int:
     n = count_variants(pruned.tree)
     print(f"남은 변이 {len(sem(pruned))}개" if n <= args.max_variants else
           f"구조상 남은 변이 {n}개 (한도 {args.max_variants}개를 넘어 제약은 세지 않았다)", file=out)
-    for p in choice_table(S, pruned, domains):
-        everything = [o for o, _ in p.options]
-        where = f"{p.owner} {p.kind}" + (f" {p.group}" if p.group else "")
-        state = "정해짐" if p.decided else ("남은 것 없음" if not p.active else "열림")
-        print(f"{where}: {state}. 남은 선택지 {list(p.remaining)} / 전체 {everything}", file=out)
+    _print_table(choice_table(S, pruned, domains), out)
     return OK
 
 
 def cmd_variants(args, out) -> int:
     from .algebra import count_variants, sem
     from .decisions import witness
+    doc, ds, fam = _on_definitions(args)
+    if fam is not None:                                      # 펼치기 전에 센다. 한도를 넘으면 펼치지 않는다
+        if not fam.variants:
+            print("남은 변이가 없다", file=out)
+            return FAILED
+        if fam.variants > args.max_variants:
+            raise Stop(FAILED, f"변이가 {fam.variants}개로 한도 {args.max_variants}개를 넘어 열거하지 않는다")
     doc, S, pruned, domains = _family(args)
     if pruned is None:
         print("남은 변이가 없다", file=out)

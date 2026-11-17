@@ -11,7 +11,7 @@ FO, UN, SK, LO = "ses_core/folded.py", "ses_core/unfold.py", "ses_core/skeleton.
 
 # 빠른 묶음: 의미의 핵을 직접 보는 시험. 여기서 살아남으면 전체를 돌린다
 FAST = ["tests/test_folded.py", "tests/test_loader.py", "tests/test_parity.py", "tests/test_local.py",
-        "tests/test_diagnose.py"]
+        "tests/test_diagnose.py", "tests/test_decide.py"]
 FULL = ["tests"]
 
 
@@ -55,8 +55,8 @@ MUTANTS = [
       "                body = self.ill(ROOT_GONE) if len(pos) == 1 else self.one     # 뿌리가 빠지면 부적격이다",
       "                body = self.one"),
     m("F11 정할 수 없는 조합을 세지 않음", FO,
-      "                body = self.ill((\"stuck\", d, tuple(sorted(owners)))) if ambiguous else {}",
-      "                body = self.ill((\"stuck\", d, tuple(sorted(owners)))) if ambiguous and not dec else {}"),
+      "                body = self.ill((\"stuck\", d, tuple(sorted(owners)))) if ambiguous and not bound else {}",
+      "                body = self.ill((\"stuck\", d, tuple(sorted(owners)))) if ambiguous and not bound and not dec else {}"),
     m("F12 따로 센 복제본을 거듭제곱에서 빼지 않음", FO,
       "                                inner = p_mul(inner, p_pow(rest, n - len(special), self.one))",
       "                                inner = p_mul(inner, p_pow(rest, n, self.one))"),
@@ -64,7 +64,7 @@ MUTANTS = [
       "                            power, at = p_mul(power, p_pow(one, n - at, self.one)), n",
       "                            power, at = p_mul(power, p_pow(one, n, self.one)), n"),
     m("F17 병합체의 값을 자리와 무관하게 한 번만 구함", FO,
-      "        key = (\"cluster\", d, pos if pos in self.by_path else None)", "        key = (\"cluster\", d, None)"),
+      "        key = (\"cluster\", d, pos if pos in self.sites else None)", "        key = (\"cluster\", d, None)"),
     m("F18 닫힌 꼴: 두 주인이 같은 자리에 맞서는 경우를 보지 않음", FO,
       "            if len(here) >= 2 or any(", "            if len(here) >= 3 or any("),
     m("F19 닫힌 꼴: 한 주인의 규칙 둘이 다투는 경우를 보지 않음", FO,
@@ -193,6 +193,33 @@ MUTANTS = [
       "        kids = tuple((name, self.shape(c)) for name, c in kappa.parts)",
       "        kids = tuple((name, self.shape(c)) for name, c in kappa.parts if c.state != GONE)"),
     m("V3 평가가 닿지 않는 조건을 미리 보지 않음", FO, "        if rows <= MAX_ROWS:", "        if False:"),
+    # 정의 15. 결정 ---------------------------------------------------------
+    m("R1 분해를 내야 하는 다른 주인이 있어도 분해를 냄", FO,
+      "                    if limit and (any(z != y for z in bound) or not limit.give_ok(pos, y, x.name)):",
+      "                    if limit and not limit.give_ok(pos, y, x.name):"),
+    m("R2 분해를 내야 하는 주인이 있어도 정할 수 없는 변이를 남김", FO,
+      "                body = self.ill((\"stuck\", d, tuple(sorted(owners)))) if ambiguous and not bound else {}",
+      "                body = self.ill((\"stuck\", d, tuple(sorted(owners)))) if ambiguous else {}"),
+    m("R3 자리를 가리킨 대안의 결정을 보지 않음", FO,
+      "            all(a in keep for name, keep in self.spec_on.get(pos, ()) if name == s)", "            True"),
+    m("R4 개수의 결정을 보지 않음", FO,
+      "                        if limit and not limit.count_ok(pos, y, x.name, n):", "                        if False:"),
+    m("R5 변수의 결정을 보지 않음", FO, "            if self.rest and not self.rest.value_ok(sigma):", "            if False:"),
+    m("R6 자리를 가리킨 분해의 결정이 분해를 내라고 하지 않음", FO,
+      "        return any(names & keep for keep in self.give_on.get(pos, ()))", "        return False"),
+    m("R7 결정이 가리킨 자리의 병합체를 다른 자리의 것과 섞음", FO,
+      "        key = (\"cluster\", d, pos if pos in self.sites else None)",
+      "        key = (\"cluster\", d, pos if pos in self.by_path else None)"),
+    m("R8 남길 선택지가 문서에 없는 결정을 받음", FO, "        if want - found:", "        if False:"),
+    m("R9 놓이지 않는 정의의 선택 지점을 표에 넣음", FO,
+      "            if any(n > 0 for n in all_counts(doc, ma)):\n                visit(ma.part.def_name)",
+      "            if True:\n                visit(ma.part.def_name)"),
+    m("R10 자리를 가리킨 분해의 결정이 다른 분해를 금하지 않음", FO,
+      "        return all(x in keep for keep in self.give_at.get(y, ())) and all(x in keep for keep in self.give_on.get(pos, ()))",
+      "        return all(x in keep for keep in self.give_at.get(y, ()))"),
+    m("R11 정의를 가리킨 대안의 결정을 보지 않음", FO,
+      "        return all(a in keep for keep in self.spec_at.get((d, s), ())) and \\",
+      "        return True and \\"),
     m("L2 (W4) 변수 이름의 글자를 보지 않음", LO, "        if not _IDENTIFIER.match(str(vname)):", "        if False:"),
     m("L3 (W5) 글자로 적으면 같은 값을 받음", LO,
       "            twice = sorted({w for w in written if written.count(w) > 1})\n            if twice:",

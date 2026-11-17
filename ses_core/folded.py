@@ -285,6 +285,135 @@ def validate(doc: m.SesDocument, functions=None) -> None:
                                        f"{a.node or '분해'}={a.choice}")
 
 
+# ---------------------------------------------------------------------------
+# 정의 15. 결정
+# ---------------------------------------------------------------------------
+
+class Restriction:
+    """결정 집합을 정의 표 위의 제한으로 옮긴 것 (theory.md 7절의 정의 15).
+
+    결정 하나는 가리키는 곳, 선택 지점, 남길 선택지로 이루어진다. 가리키는 곳은 정의 하나(그 정의가 구성원으로
+    놓인 모든 자리)이거나 자리 하나(그 자리의 구성원 전부)다. 변이가 결정을 따른다는 것은 다음과 같다.
+
+    - 대안의 결정: 가리킨 구성원이 그 specialization 에서 고른 대안이 남길 것 가운데 있다. 빠진 구성요소에서도 본다.
+    - 개수의 결정: 가리킨 구성원이 그 multi-aspect 를 분해로 냈으면 그 개수가 남길 것 가운데 있다.
+    - 분해의 결정: 가리킨 구성원이 빠지지 않은 병합체에 있고 분해를 가졌을 때 본다. 남길 이름의 분해를
+      가진 구성원은 그 가운데 하나를 그 병합체의 분해로 내야 한다(밀리거나 정할 수 없으면 안 된다).
+      남길 이름의 분해가 없는 구성원은 분해를 내지 않아야 한다.
+    - 변수의 결정: 변수의 값이 남길 것 가운데 있다. 값은 글로 적은 것으로 견준다.
+
+    펼친 나무에서 그 결정이 배제하는 노드를 고르지 않는 변이와 같다(decisions.excluded, theory.md 정리 9).
+    펼친 나무의 노드 하나를 가리키는 결정(node)은 여기서 다루지 않는다. 그것은 그 표현에 딸린 주소다.
+    결정이 문서에 맞지 않으면(가리키는 곳, 선택 지점, 남길 선택지가 없으면) AlgebraError 를 낸다.
+    """
+
+    def __init__(self, doc: m.SesDocument, decisions) -> None:
+        self.doc = doc
+        self.values: dict = {}        # 변수 이름에서, 남길 값을 글로 적은 집합들로
+        self.spec_at: dict = {}       # (정의, specialization)에서 남길 대안의 집합들로
+        self.count_at: dict = {}      # (정의, multi-aspect)에서 남길 개수의 집합들로
+        self.give_at: dict = {}       # 정의에서 남길 분해의 이름의 집합들로
+        self.spec_on: dict = {}       # 자리에서 (specialization, 남길 대안의 집합)들로
+        self.count_on: dict = {}      # 자리에서 (multi-aspect, 남길 개수의 집합)들로
+        self.give_on: dict = {}       # 자리에서 남길 분해의 이름의 집합들로
+        placed = set(occurring(doc))
+        for name, values in decisions.variables.items():
+            try:
+                if name not in doc.variables:
+                    raise AlgebraError("결정이 가리키는 선택 지점이 대상에 없다")
+                want = {str(v) for v in values}
+                missing = want - {str(v) for v in domain(doc, name)}
+                if missing:
+                    raise AlgebraError(f"남기려는 선택지가 대상에 없다: {sorted(missing)}")
+            except AlgebraError as e:
+                raise AlgebraError(f"variable/{name}: {e}") from None
+            self.values.setdefault(name, []).append(frozenset(want))
+        for c in decisions.choose:
+            try:
+                self._add(c, placed)
+            except AlgebraError as e:
+                raise AlgebraError(f"{'/'.join(map(str, c.key))}: {e}") from None
+        self.positions = set(self.spec_on) | set(self.count_on) | set(self.give_on)
+
+    def _add(self, c, placed: set) -> None:
+        bad = c.problems()
+        if bad:
+            raise AlgebraError("; ".join(bad))
+        if c.node is not None:
+            raise AlgebraError("펼친 나무의 노드를 가리킨 결정(node)은 정의 표 위에서 계산하지 않는다")
+        hosts = ([c.at] if c.at in placed else []) if c.at is not None else possible_members(self.doc, tuple(c.path))
+        if not hosts:
+            raise AlgebraError("결정이 가리키는 곳이 대상에 없다")
+        ents = self.doc.entities
+        pos = None if c.at is not None else tuple(c.path)
+        if c.specialization is not None:
+            want, name = frozenset(c.alternative), c.specialization
+            having = [ents[y].specializations[name] for y in hosts if name in ents[y].specializations]
+            found = {a for sp in having for a in sp.alternatives}
+            table, key, entry = (self.spec_at, (c.at, name), want) if pos is None else (self.spec_on, pos, (name, want))
+        elif c.multi_aspect is not None:
+            want, name = frozenset(c.count), c.multi_aspect
+            having = [ents[y].multi_aspects[name] for y in hosts if name in ents[y].multi_aspects]
+            found = {n for ma in having for n in all_counts(self.doc, ma)}
+            table, key, entry = (self.count_at, (c.at, name), want) if pos is None else (self.count_on, pos, (name, want))
+        else:
+            want = frozenset(c.aspect)
+            having = [y for y in hosts if decompositions(ents[y])]
+            found = {x.name for y in having for x in decompositions(ents[y])}
+            table, key, entry = (self.give_at, c.at, want) if pos is None else (self.give_on, pos, want)
+        if not having:
+            raise AlgebraError("결정이 가리키는 선택 지점이 대상에 없다")
+        if want - found:
+            raise AlgebraError(f"남기려는 선택지가 대상에 없다: {sorted(map(str, want - found))}")
+        table.setdefault(key, []).append(entry)
+
+    # 선택 하나가 결정을 따르는가 -------------------------------------------
+
+    def value_ok(self, sigma: dict) -> bool:
+        return all(str(sigma[name]) in keep for name, keeps in self.values.items() for keep in keeps)
+
+    def alt_ok(self, pos: tuple, d: str, s: str, a: str) -> bool:
+        """자리 pos 의 구성원 d 가 specialization s 에서 대안 a 를 골라도 되는가."""
+        return all(a in keep for keep in self.spec_at.get((d, s), ())) and \
+            all(a in keep for name, keep in self.spec_on.get(pos, ()) if name == s)
+
+    def count_ok(self, pos: tuple, y: str, x: str, n: int) -> bool:
+        """자리 pos 의 구성원 y 가 multi-aspect x 를 개수 n 으로 내도 되는가."""
+        return all(n in keep for keep in self.count_at.get((y, x), ())) and \
+            all(n in keep for name, keep in self.count_on.get(pos, ()) if name == x)
+
+    def give_ok(self, pos: tuple, y: str, x: str) -> bool:
+        """자리 pos 의 구성원 y 가 분해 x 를 그 병합체의 분해로 내도 되는가."""
+        return all(x in keep for keep in self.give_at.get(y, ())) and all(x in keep for keep in self.give_on.get(pos, ()))
+
+    def must_give(self, pos: tuple, z: str) -> bool:
+        """빠지지 않은 병합체의 구성원 z (분해를 가졌다)가 분해를 내야 하는가."""
+        if self.give_at.get(z):
+            return True
+        names = {x.name for x in decompositions(self.doc.entities[z])}
+        return any(names & keep for keep in self.give_on.get(pos, ()))
+
+    def obeys(self, root: str, sigma: dict, kappa: Comp) -> bool:
+        """변이 (sigma, kappa) 가 결정을 따르는가. 정의 15 를 구성요소 선택 위에서 그대로 읽은 것이다."""
+        if not self.value_ok(sigma):
+            return False
+        for pos, c in kappa.walk((root,)):
+            for mem in c.member.members():
+                if not all(self.alt_ok(pos, mem.name, s, sub.name) for s, sub in mem.picks):
+                    return False
+            if c.state == GONE:
+                continue
+            owners = [y for y in c.member.names() if decompositions(self.doc.entities[y])]
+            if any(self.must_give(pos, z) and not (c.state == SPLIT and c.owner == z) for z in owners):
+                return False
+            if c.state == SPLIT:
+                if not self.give_ok(pos, c.owner, c.dec):
+                    return False
+                if c.count is not None and not self.count_ok(pos, c.owner, c.dec, c.count):
+                    return False
+        return True
+
+
 class Semantics:
     """정준 문서의 뜻. 정의 2에서 7을 그대로 옮겼다."""
 
@@ -638,9 +767,10 @@ class Evaluator:
     live 가 참이면 변이들에서 일어난 일(어떤 선택지가 쓰였는가, 어디서 분해를 정할 수 없는가)도 함께 모은다.
     """
 
-    def __init__(self, doc: m.SesDocument, functions=None, live: bool = False) -> None:
+    def __init__(self, doc: m.SesDocument, functions=None, live: bool = False, decisions=None) -> None:
         self.sem = Semantics(doc, functions)
         self.doc = doc
+        self.rest = Restriction(doc, decisions) if decisions is not None else None   # 결정을 따르는 변이만 센다
         self.one = ONE_LIVE if live else ONE
         self.live = live
         self.late = [c for c in doc.constraints if any(selected_atoms(x) for x in (c.when, c.require, c.forbid))]
@@ -655,7 +785,9 @@ class Evaluator:
                 self.by_def.setdefault((kind, d, group if kind != "aspect" else "", choice), set()).add(a)
             else:
                 self.by_path.setdefault(tuple(a.path), set()).add(a)
-        self.focus = {q[:i] for q in self.by_path for i in range(1, len(q) + 1)}   # 따로 계산해야 하는 자리들
+        # 그 자리에서만 달리 셈해야 하는 자리들: 그 자리를 묻는 selected 가 있거나 그 자리를 가리킨 결정이 있다
+        self.sites = set(self.by_path) | (self.rest.positions if self.rest else set())
+        self.focus = {q[:i] for q in self.sites for i in range(1, len(q) + 1)}     # 따로 계산해야 하는 자리들
         self.below: dict = {}                     # 따로 계산해야 하는 자리에서, 그 바로 아래의 그런 자리의 이름들로
         for q in self.focus:
             if len(q) > 1:
@@ -681,8 +813,8 @@ class Evaluator:
     # 병합체: (빠졌는가, 분해를 가진 구성원들)에서 값으로 --------------------------
 
     def cluster(self, d: str, pos: tuple, sigma: dict, memo: dict) -> dict:
-        # 대안의 선택이 보게 하는 것은 그 자리를 가리키는 selected 가 있을 때만 자리에 달려 있다
-        key = ("cluster", d, pos if pos in self.by_path else None)
+        # 대안의 선택이 보게 하는 것과 금해지는 것은 그 자리를 가리키는 selected 나 결정이 있을 때만 자리에 달려 있다
+        key = ("cluster", d, pos if pos in self.sites else None)
         if key not in memo:
             memo[key] = self._cluster(d, pos, sigma, memo)
         return memo[key]
@@ -694,6 +826,8 @@ class Evaluator:
         for sp in ent.specializations.values():
             options: dict = {}
             for alt in self.sem.alternatives(sp, sigma):
+                if self.rest and not self.rest.alt_ok(pos, d, sp.name, alt):
+                    continue                             # 결정이 금한 대안: 무게 0
                 for s, p in self.cluster(alt, pos, sigma, memo).items():
                     q = self.mark(p, pos, "spec", d, sp.name, alt)
                     options[s] = p_add(options[s], q) if s in options else q
@@ -730,8 +864,13 @@ class Evaluator:
                 body = self.one
             else:
                 dec, ambiguous = self.decided(owners, sigma, memo)
-                body = self.ill(("stuck", d, tuple(sorted(owners)))) if ambiguous else {}   # 분해를 정할 수 없는 조합이 있다
+                limit = self.rest
+                bound = [z for z in owners if limit.must_give(pos, z)] if limit else []   # 결정이 분해를 내라고 한 주인들
+                # 분해를 정할 수 없는 조합이 있다. 분해를 내야 하는 주인이 있으면 결정이 그것을 금한다
+                body = self.ill(("stuck", d, tuple(sorted(owners)))) if ambiguous and not bound else {}
                 for y, x in dec:
+                    if limit and (any(z != y for z in bound) or not limit.give_ok(pos, y, x.name)):
+                        continue                         # 결정이 금한 분해: 무게 0
                     pushed = [("pushed", z) for z in owners if z != y] if self.live else ()   # 분해를 내지 않은 주인들
                     if isinstance(x, m.Aspect):
                         inner = self.one
@@ -745,6 +884,8 @@ class Evaluator:
                     one = self.comp(x.part.def_name, pos + ("",), sigma, memo) if not watched else None
                     power, at = self.one, 0
                     for n in sorted(self.sem.counts(x, sigma)):
+                        if limit and not limit.count_ok(pos, y, x.name, n):
+                            continue                     # 결정이 금한 개수: 무게 0
                         if watched:
                             names = [replica_name(x, i, n) for i in range(n)]
                             special = [nm for nm in names if nm in watched]
@@ -771,6 +912,8 @@ class Evaluator:
         sem = self.sem
         for sigma in sem.assignments():
             if not all(sem.satisfied(c, sigma, set()) for c in self.early):
+                continue
+            if self.rest and not self.rest.value_ok(sigma):
                 continue
             yield sigma, [(seen, n, live) for seen, (n, live) in self.comp(sem.root, (sem.root,), sigma, {}).items()
                           if all(self._satisfied(c, sigma, seen) for c in self.late)]
@@ -807,9 +950,9 @@ class Evaluator:
         return total, wf
 
 
-def count(doc: m.SesDocument, functions=None) -> tuple:
-    """(변이 수, 핵 적격 변이 수). 변이를 열거하지 않는다."""
-    return Evaluator(doc, functions).count()
+def count(doc: m.SesDocument, functions=None, decisions=None) -> tuple:
+    """(변이 수, 핵 적격 변이 수). 변이를 열거하지 않는다. 결정 집합을 주면 그것을 따르는 변이만 센다."""
+    return Evaluator(doc, functions, decisions=decisions).count()
 
 
 # ---------------------------------------------------------------------------
@@ -877,9 +1020,12 @@ class Family:
         return out
 
 
-def analyze(doc: m.SesDocument, functions=None) -> Family:
-    """변이 수, 핵 적격 변이 수, 살아 있는 선택지, 분해를 정할 수 없는 곳. 변이를 열거하지 않는다."""
-    ev = Evaluator(doc, functions, live=True)
+def analyze(doc: m.SesDocument, functions=None, decisions=None) -> Family:
+    """변이 수, 핵 적격 변이 수, 살아 있는 선택지, 분해를 정할 수 없는 곳. 변이를 열거하지 않는다.
+
+    결정 집합을 주면 그것을 따르는 변이들에 대해 같은 것을 낸다.
+    """
+    ev = Evaluator(doc, functions, live=True, decisions=decisions)
     assignments = variants = wellformed = 0
     live, live_wf = set(), set()
     values = {name: (set(), set()) for name in doc.variables}
@@ -901,3 +1047,42 @@ def analyze(doc: m.SesDocument, functions=None) -> Family:
                 for name, v in sigma.items():
                     values[name][1].add(v)
     return Family(assignments, variants, wellformed, frozenset(live), frozenset(live_wf), values, examples)
+
+
+def choice_rows(doc: m.SesDocument, family: Family) -> list:
+    """선택 지점 표: (정의 또는 변수, 종류, 묶음, ((선택지, 남았는가), ...))들. 선택지가 둘 이상인 지점만 든다.
+
+    종류는 variable, alternative, aspect, count 다. 남았다는 것은 족의 어떤 변이가 어떤 자리에서 그 선택지를
+    골랐다는 뜻이다(theory.md 따름정리 9.2). 어디에도 놓이지 않는 정의의 선택 지점은 표에 없다.
+    줄의 순서는 변수가 먼저이고, 그다음은 뿌리에서 내려가며 정의를 처음 만나는 순서다. 한 정의에서는
+    분해, 개수, 대안의 순서다. 펼친 나무에서 만든 표(decisions.choice_table)와 같은 순서다.
+    """
+    rows = [(name, "variable", "", tuple((v, v in family.values[name][0]) for v in domain(doc, name)))
+            for name in doc.variables]
+    seen: set = set()
+
+    def visit(name: str) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        e = doc.entities[name]
+        fams = decompositions(e)
+        if fams:
+            rows.append((name, "aspect", "", tuple((x.name, ("aspect", name, "", x.name) in family.live) for x in fams)))
+        for ma in e.multi_aspects.values():
+            rows.append((name, "count", ma.name,
+                         tuple((n, ("count", name, ma.name, n) in family.live) for n in all_counts(doc, ma))))
+        for sp in e.specializations.values():
+            rows.append((name, "alternative", sp.name,
+                         tuple((a, ("spec", name, sp.name, a) in family.live) for a in sp.alternatives)))
+            for a in sp.alternatives:
+                visit(a)
+        for x in e.aspects.values():
+            for part in x.parts:
+                visit(part.def_name)
+        for ma in e.multi_aspects.values():
+            if any(n > 0 for n in all_counts(doc, ma)):
+                visit(ma.part.def_name)
+
+    visit(doc.root.name)
+    return [r for r in rows if len(r[3]) > 1]
