@@ -340,17 +340,22 @@ def test_merged_decompositions_are_decided_by_priority():
     assert shapes(figure12(None, 100)) == realized(figure12(None, 100)) == {d_kept, (("a", "e"), ("f", "g"))}  # 어떤 수든 없는 것을 누른다
     assert shapes(figure12(0, None)) == realized(figure12(0, None)) == {d_kept, (("a", "e"), ("b", "c"))}      # 0도 수다
     assert shapes(figure12(-1, 0)) == realized(figure12(-1, 0)) == {d_kept, (("a", "e"), ("b", "c"))}
-    for tie in (figure12(None, None), figure12(1, 1)):       # 가를 수 없으면 종전대로 합칠 수 없다
+    for tie in (figure12(None, None), figure12(1, 1)):       # 가를 수 없으면 합칠 수 없다
         assert shapes(tie) == realized(tie) == {d_kept}
         S, ann = unfold_annotated(load_ses_dict(tie))
-        assert len(sem(S)) == 2 and NO_ASPECT not in {n[-1] for n in S.tree.nodes}
+        assert len(sem(S)) == 2
         assert sorted(len(core_violations(S.tree, ann.void, V)) for V in sem(S)) == [0, 1]
+        # 분해를 정할 수 없는 병합체는 분해를 하나도 고르지 않는다. 두 구성원이 모두 "분해 없음"을 고르고 그 아래는 없다
+        stuck = next(V for V in sem(S) if ("a", "aSPEC", "e") in V)
+        assert stuck == {("a",), ("a", NO_ASPECT), ("a", "aSPEC"), ("a", "aSPEC", "e"), ("a", "aSPEC", "e", NO_ASPECT)}
+        assert [msg for _, _, msg in core_violations(S.tree, ann.void, stuck)] == ["분해를 하나로 정할 수 없다"]
     # 밀린 쪽은 "분해 없음"을 고른다. 그 아래의 선택을 따로 세지 않으므로 변이는 구조마다 하나다
     S, ann = unfold_annotated(load_ses_dict(higher_child))
     assert len(sem(S)) == 2 and all(not core_violations(S.tree, ann.void, V) for V in sem(S))
     e_variant = next(V for V in sem(S) if ("a", "aSPEC", "e") in V)
     assert ("a", NO_ASPECT) in e_variant and ("a", "aDEC") not in e_variant and ("a", "aSPEC", "e", "eDEC") in e_variant
-    assert ("a", "aSPEC", "e", NO_ASPECT) not in S.tree.nodes            # 밀릴 일이 없는 구성원에는 만들지 않는다
+    # 표시는 넉넉하게 만든다. 함께 골라질 수 있는 구성원이 분해를 가지면 둘 다 받는다. 실제로 고르는지는 제약식이 정한다
+    assert ("a", "aSPEC", "e", NO_ASPECT) in S.tree.nodes and not any(("a", "aSPEC", "e", NO_ASPECT) in V for V in sem(S))
 
 
 OVERLAP = {"ses": "1.0", "name": "R",
@@ -373,26 +378,29 @@ def with_priorities(d: dict, **priorities) -> dict:
 
 
 def by_variable(d: dict, functions=None) -> dict:
-    """변수 v의 값에서 뿌리가 가질 수 있는 분해들로 (대수 쪽)."""
+    """변수 v의 값에서 뿌리가 가질 수 있는 분해들로 (대수 쪽). 분해를 정할 수 없으면 None 이다."""
     S, ann = unfold_annotated(load_ses_dict(d), functions)
     out: dict = {}
     for V in sem(S):
         v = next(x[2] for x in V if len(x) == 3 and x[1] == "$v")
-        out.setdefault(v, set()).add(family(skeleton(S.tree, ann.void, V).aspect[-1]))
+        sk = skeleton(S.tree, ann.void, V)
+        assert sk.stuck == (sk.aspect is None) == bool(core_violations(S.tree, ann.void, V))
+        out.setdefault(v, set()).add(None if sk.stuck else family(sk.aspect[-1]))
     return out
 
 
 def test_overlapping_rules_are_decided_by_priority():
     """한 엔티티의 두 분해 규칙이 함께 참이면 우선순위가 높은 것이 적용된다 (09 문서의 결함 1.2)."""
-    assert by_variable(OVERLAP) == {"b": {"d2"}, "c": {"d1", "d2"}}             # v가 a이면 두 규칙이 다투어 변이가 없다
-    assert n_variants(OVERLAP) == (3, 3)
+    # v가 a이면 두 규칙이 다툰다. 그 변수 값은 사라지지 않고, 분해를 정할 수 없는 부적격 변이 하나로 남는다
+    assert by_variable(OVERLAP) == {"a": {None}, "b": {"d2"}, "c": {"d1", "d2"}}
+    assert n_variants(OVERLAP) == (4, 3)
     first = with_priorities(OVERLAP, d1=1, d2=2)
     assert by_variable(first) == {"a": {"d1"}, "b": {"d2"}, "c": {"d1", "d2"}} and n_variants(first) == (4, 4)
     second = with_priorities(OVERLAP, d1=2, d2=1)
     assert by_variable(second) == {"a": {"d2"}, "b": {"d2"}, "c": {"d1", "d2"}} and n_variants(second) == (4, 4)
     assert by_variable(with_priorities(OVERLAP, d1=1)) == by_variable(first)    # 없는 것은 가장 뒤다
     for tie in (with_priorities(OVERLAP, d1=3, d2=3), with_priorities(OVERLAP, d2=None)):
-        assert by_variable(tie) == by_variable(OVERLAP) and n_variants(tie) == (3, 3)
+        assert by_variable(tie) == by_variable(OVERLAP) and n_variants(tie) == (4, 3)
 
 
 POOLS = {"ses": "1.0", "name": "R",
@@ -406,8 +414,8 @@ POOLS = {"ses": "1.0", "name": "R",
 
 def test_rules_of_multi_aspects_are_applied():
     """문헌의 패턴 6과 7. multi-aspect 형제도 규칙으로 고른다. 고치기 전에는 multi-aspect의 규칙을 읽지 않았다."""
-    assert by_variable(POOLS) == {"2": {"many"}, "3": {"one", "few", "many"}}
-    assert n_variants(POOLS) == (1 + 4, 5)                    # v가 1이면 두 규칙이 다툰다
+    assert by_variable(POOLS) == {"1": {None}, "2": {"many"}, "3": {"one", "few", "many"}}
+    assert n_variants(POOLS) == (1 + 1 + 4, 5)                # v가 1이면 두 규칙이 다툰다. 부적격 변이 하나다
     assert by_variable(with_priorities(POOLS, few=5)) == {"1": {"few"}, "2": {"many"}, "3": {"one", "few", "many"}}
     assert n_variants(with_priorities(POOLS, few=5)) == (2 + 1 + 4, 7)
     assert by_variable(with_priorities(POOLS, many=5))["1"] == {"many"}
@@ -476,7 +484,9 @@ def test_alternatives_of_two_specializations_compete():
     expected = {(("A", "C", "X"), ("P",)), (("A", "C0", "X"), ("P",)), (("A0", "C", "X"), ("Q",)), (("A0", "C0", "X"), ())}
     assert shapes(d) == realized(d) == expected
     S, ann = unfold_annotated(load_ses_dict(d))
-    assert [n for n in S.tree.nodes if n[-1] == NO_ASPECT] == [("X", "t", "C", NO_ASPECT)]
+    marks = [n for n in S.tree.nodes if n[-1] == NO_ASPECT]
+    assert sorted(marks) == [("X", "s", "A", NO_ASPECT), ("X", "t", "C", NO_ASPECT)]      # 함께 골라질 수 있는 둘이 모두 받는다
+    assert {m for V in sem(S) for m in marks if m in V} == {("X", "t", "C", NO_ASPECT)}    # 고르는 것은 밀리는 쪽뿐이다
 
 
 def test_a_member_is_pushed_out_only_by_what_it_could_have_chosen():
@@ -624,10 +634,10 @@ def test_rules_of_a_removed_component_do_not_remove_variants():
     for V in sem(S):
         v = next(int(x[2]) for x in V if len(x) == 3 and x[1] == "$v")
         alive[(v, skeleton(S.tree, ann.void, V).parts.keys() == {"X"})] += 1
-    # 빠진 X 는 분해를 고르지 않으므로 X 없음이 값마다 하나다. 고치기 전에는 a 와 b 를 따로 세어 둘이었다
-    assert alive == {(1, False): 1, (2, False): 1, (2, True): 1, (3, False): 1, (3, True): 2}
+    # 빠진 X 는 분해를 고르지 않으므로 X 없음이 값마다 하나다. v가 1이고 X가 있으면 분해를 정할 수 없는 부적격 변이 하나다
+    assert alive == {(1, False): 1, (1, True): 1, (2, False): 1, (2, True): 1, (3, False): 1, (3, True): 2}
     algebraic, procedural, skipped = both(doc, None)
-    assert algebraic == procedural and len(procedural) == 6 and skipped == 0
+    assert algebraic == procedural and len(procedural) == 6 and skipped == 1
 
 
 # ---------------------------------------------------------------------------

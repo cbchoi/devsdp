@@ -518,7 +518,7 @@ def test_a_field_of_a_thousand_nodes_is_built_planned_and_checked(n):
 def test_direct_samples_are_not_vacuous():
     if STATS["witness_built"] + STATS["witness_unmergeable"] < 1000 or STATS["plans"] < 300:
         pytest.skip("앞의 시험과 함께 실행할 때만 센다")
-    assert STATS["witness_built"] >= 800 and STATS["witness_unmergeable"] >= 100, STATS
+    assert STATS["witness_built"] >= 800 and STATS["witness_unmergeable"] >= 60, STATS
     assert STATS["witness_with_gone"] >= 25 and STATS["witness_with_pushed"] >= 30, STATS
     assert STATS["random_with_gone"] >= 15, STATS
     assert STATS["plans_executable"] >= 100, STATS

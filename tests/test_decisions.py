@@ -596,19 +596,21 @@ CLUSTER = {
 
 def test_path_level_decision_reaches_every_member_of_the_cluster():
     S = unfold(load_ses_dict(CLUSTER))
-    assert len(sem(S)) == 2 + 2
+    # X1을 고르면 X의 분해 q와 X1의 분해가 다투어 분해를 정할 수 없다. 부적격 변이 하나다. X2를 고르면 둘이다
+    assert len(sem(S)) == 1 + 2
     # 구성요소 경로로 적은 결정은 그 구성요소의 병합체에 든 대안의 선택 지점에도 닿는다
     inner = Choice(path=("R", "X"), specialization="t", alternative=("X2a",))
     assert problems(S, DecisionSet(choose=(inner,))) == []
-    assert len(sem(apply(S, DecisionSet(choose=(inner,))))) == 2 + 1
+    assert len(sem(apply(S, DecisionSet(choose=(inner,))))) == 1 + 1
     # 분해에 대한 경로 수준의 결정은 "이 구성요소의 분해는 이것"이라는 뜻이다. 병합체의 모든
     # 구성원에 적용되므로, 바탕 정의의 분해 q가 배제되면 X는 어떤 변이에도 나타날 수 없다
     by_p1 = Choice(path=("R", "X"), aspect=("p1",))
     assert problems(S, DecisionSet(choose=(by_p1,))) == []
     assert apply(S, DecisionSet(choose=(by_p1,))) is None
-    # 바탕의 분해와 함께 남기면 X1의 분해 가운데 하나가 정해진다
+    # 분해를 이름으로 남기는 결정은 그 구성원이 분해를 내지 않는 변이를 배제한다. X1을 고른 변이는 분해를 정할 수
+    # 없으므로 남지 않는다. X2를 고른 둘이 남는다
     both = Choice(path=("R", "X"), aspect=("q", "p1"))
-    assert len(sem(apply(S, DecisionSet(choose=(both,))))) == 1 + 2
+    assert len(sem(apply(S, DecisionSet(choose=(both,))))) == 2
     # 정의 수준의 결정은 그 정의의 분해만 본다
     only_x1 = Choice(at="X1", aspect=("p1",))
-    assert len(sem(apply(S, DecisionSet(choose=(only_x1,))))) == 1 + 2
+    assert len(sem(apply(S, DecisionSet(choose=(only_x1,))))) == 2

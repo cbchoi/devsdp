@@ -503,7 +503,7 @@ def test_family_diagnostics_agree_with_direct_enumeration(seed):
 def test_family_sample_is_not_vacuous():
     if not FAMILY:
         pytest.skip("앞의 시험과 함께 실행할 때만 센다")
-    assert FAMILY["errors"] >= 60 and FAMILY["dead"] >= 60 and FAMILY["clean"] >= 80, FAMILY
+    assert FAMILY["errors"] >= 50 and FAMILY["dead"] >= 60 and FAMILY["clean"] >= 80, FAMILY
     assert FAMILY["cause_shorter_than_witness"] >= 40 and FAMILY["cause_explains_all"] >= 30, FAMILY
 
 

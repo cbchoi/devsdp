@@ -10,20 +10,13 @@
 
 기본값(default)은 변이 공간을 바꾸지 않는 선호이므로 여기서는 다루지 않는다.
 
-우선순위(priority)는 분해 사이의 다툼을 가른다 (docs/ses-platform/18_classic_parity.md). 수가 작을수록 앞선다.
-정준 문서의 스키마와 04 문서가 처음부터 정해 둔 약속이다.
-- 한 엔티티에 적힌 분해들의 규칙이 함께 참이면 우선순위가 가장 높은 것이 적용된다.
-- 엔티티와 고른 대안이 각자 분해를 가지면 병합체 안에서 형제가 된다. 우선순위가 가장 높은 것이
-  그 구성요소의 분해가 되고, 밀린 구성원은 "분해 없음"(skeleton.NO_ASPECT)을 고른다.
-우선순위가 같거나 없어서 가를 수 없으면 종전과 같다. 규칙은 모순이 되고 병합은 부적격이 된다.
-
-빠진 구성요소 (docs/ses-platform/18_classic_parity.md 5.3절)
-- 선택 대수는 골라진 엔티티마다 분해를 하나 고르게 한다. 그대로 두면 없음 대안을 골라 빠진 구성요소도
-  분해와 그 아래를 골라야 하고, 그 아래의 선택이 변이를 부풀리며, 거기에 걸린 결정과 규칙이 어긋나면
-  족이 빈다. 문헌의 절차는 빠진 구성요소의 아래를 평가하지 않는다.
-- 그래서 빠질 수 있는 구성요소의 구성원 가운데 분해를 가진 것에 "빠짐"(skeleton.GONE)을 준다. 구성요소가
-  빠지면 그것을 고르고, 빠지지 않았으면 고를 수 없다. 빠진 구성요소의 병합체 안의 대안 선택은 그대로 남는다.
-  그 선택으로 구성요소가 빠지기 때문이다.
+병합체의 분해 (docs/ses-platform/theory.md 정의 3과 정리 5)
+- 뜻은 정의 표 위에서 정한다(folded.py). 살아 있는 병합체는 규칙과 우선순위(수가 작을수록 앞선다)가 남기는
+  분해 Dec 가운데 하나를 고르고, Dec 가 비면 분해를 정할 수 없다(핵 부적격). 빠진 구성요소는 분해를 고르지
+  않고 그 아래도 없다. 병합체 안의 대안 선택은 빠진 구성요소에서도 한 선택이다.
+- 펼친 나무의 선택 대수는 골라진 엔티티마다 분해를 하나 고르게 한다. 그래서 분해를 내지 않는 구성원이 고를
+  표시 둘을 나무에 넣고(skeleton.NO_ASPECT, skeleton.GONE), 위의 뜻을 제약식으로 적는다(rules).
+  이렇게 만든 나무의 변이는 정의 표 위의 변이와 하나씩 대응한다.
 
 식 (docs/ses-platform/18_classic_parity.md)
 - 규칙과 제약의 원자는 변수에 대한 조건이다. 변수의 범위가 유한하므로 원자가 참이 되는 변수 값의
@@ -418,8 +411,12 @@ class Unfolding:
     # 분해의 규칙과 우선순위 ---------------------------------------------
 
     def rules(self) -> None:
-        """분해의 규칙과 우선순위를 제약식으로 옮기고 나무를 만든다. 밀릴 수 있는 구성원에게 "분해 없음"을,
-        빠질 수 있는 구성요소의 구성원에게 "빠짐"을 준다."""
+        """병합체의 분해를 고르는 규칙을 제약식으로 옮기고 나무를 만든다 (theory.md 정의 3, 정리 5).
+
+        살아 있는 병합체는 고를 수 있는 분해 Dec 가운데 하나를 고른다. Dec 가 비면 아무도 분해를 내지 않는다.
+        나무에서는 분해를 가진 구성원마다 하나를 골라야 하므로, 분해를 내지 않는 구성원은 "분해 없음"을,
+        빠진 구성요소의 구성원은 "빠짐"을 고른다.
+        """
         kinds, labels, decomps, gone = self.kinds, self.labels, self.decomps, self.gone
 
         def together(y: tuple, z: tuple) -> bool:
@@ -433,20 +430,28 @@ class Unfolding:
                 i += 1
             return i == len(y) or i == len(z) or kinds[y[:i]] != SPEC
 
+        def tied(a, b) -> bool:
+            return not above(a[3], b[3]) and not above(b[3], a[3])
+
         plain = Tree(kinds, labels)
-        rivals: dict = {}                            # 구성원에서, 함께 선택될 수 있고 분해를 가진 다른 구성원들로
+        groups: list = []                            # (구성 노드, 분해를 가진 구성원들, 구성원에서 함께 골라질 수 있는 다른 구성원들로, 빠질 수 있는가)
         removable: dict = {}                         # 빠질 수 있는 구성요소의, 분해를 가진 구성원에서 그 구성요소로
         for e in components(plain):
             ms = members(plain, e)
             owners = [y for y in ms if y in decomps]
             voids = [z for z in ms if z in gone]
+            rivals = {y: [z for z in owners if z != y and together(y, z)] for y in owners}
             for y in owners:
-                rivals[y] = [z for z in owners if z != y and together(y, z)]
-                if any(above(pb, pa) for z in rivals[y] for *_, pb in decomps[z] for *_, pa in decomps[y]):
+                ruled = [d for d in decomps[y] if d[2] is not None]
+                # 분해를 내지 않을 수 있는 구성원: 다른 구성원의 분해가 골라질 수 있거나, 자기 규칙 둘이 함께 참이
+                # 되어 가를 수 없을 수 있다. 넉넉하게 잡는다. 실제로 그렇게 되는지는 아래의 제약식이 정한다
+                if rivals[y] or any(tied(a, b) for i, a in enumerate(ruled) for b in ruled[i + 1:]):
                     kinds[y + (NO_ASPECT,)] = ASP
                 if any(together(y, z) for z in voids):
                     kinds[y + (GONE,)] = ASP
                     removable[y] = e
+            if owners:
+                groups.append((e, owners, rivals, bool(voids)))
         tree = self.tree = Tree(kinds, labels)
 
         # 빠진 구성요소의 구성원은 분해 대신 "빠짐"을 고른다. 그래서 그 아래는 아무것도 골라지지 않는다.
@@ -459,36 +464,64 @@ class Unfolding:
         def one_of(nodes):
             return sel(nodes[0]) if len(nodes) == 1 else f_or(*(sel(n) for n in nodes))
 
-        # 분해의 규칙과 우선순위는 살아 있는 구성요소에서만 적용된다. 없음이 된 구성요소나 그 아래의 것은 만들어지지
-        # 않으므로 거기서 두 규칙이 함께 참이 되어도 변이를 지우지 않는다. 고전 절차도 그런 곳은 평가하지 않는다
-        for y, mine in decomps.items():
-            alive = f_and(sel(y), live_formula(tree, gone, component_of(tree, y)))
-            out = y + (NO_ASPECT,)
-            pushed = sel(out) if out in tree.nodes else None
-            ruled = [(d, self.tr(d[2])) for d in mine if d[2] is not None]
+        for e, owners, rivals, can_go in groups:
+            # 구성원마다 변수 값의 식으로 적는다. free: 참인 규칙이 없어 분해 하나를 고른다.
+            # top[i]: 규칙이 참이고 더 앞선 참인 규칙이 없다(요구에 든다)
+            free, top = {}, {}
+            for y in owners:
+                mine = decomps[y]
+                forced = {i: self.tr(d[2]) for i, d in enumerate(mine) if d[2] is not None}
+                free[y] = f_not(f_or(*forced.values())) if forced else TRUE
+                top[y] = {i: f_and(forced[i], *(f_not(forced[j]) for j in forced
+                                                if j != i and above(mine[j][3], mine[i][3]))) for i in forced}
 
-            def beaten(d):
-                """같은 엔티티에서 우선순위가 더 높은 분해의 규칙이 참이다."""
-                return [f for other, f in ruled if other is not d and above(other[3], d[3])]
+            def demanded(y, i):
+                """분해 i 가 y 의 요구에 들 수 있다."""
+                return f_or(free[y], top[y][i]) if i in top[y] else free[y]
 
-            for d, holds_ in ruled:                  # 규칙이 참이면 그 분해를 고른다. 더 앞선 규칙이 참이면 물러선다
-                guard = [alive, holds_] + [f_not(f) for f in beaten(d)] + ([f_not(pushed)] if pushed is not None else [])
-                self.clauses.append(f_imp(f_and(*guard), one_of(d[1])))
-            for d in mine:                           # 다른 구성원의 더 앞선 분해와 함께 고를 수 없다
-                for z in rivals.get(y, ()):
-                    for other in decomps[z]:
-                        if above(other[3], d[3]):
-                            self.clauses.append(f_imp(alive, f_not(f_and(one_of(d[1]), one_of(other[1])))))
-            if pushed is not None:                   # 밀려나려면, 고를 수 있었던 분해가 실제로 밀려야 한다
-                no_rule = f_not(f_or(*(f for _, f in ruled)))
-                reasons = []
-                for d in mine:
-                    mine_ok = f_or(no_rule, *([f_and(next(f for o, f in ruled if o is d), *(f_not(f) for f in beaten(d)))]
-                                              if d[2] is not None else []))
-                    winners = [one_of(other[1]) for z in rivals[y] for other in decomps[z] if above(other[3], d[3])]
-                    if winners:
-                        reasons.append(f_and(mine_ok, f_or(*winners)))
-                self.clauses.append(f_imp(f_and(alive, pushed), f_or(*reasons)))
+            def alone(y, i):
+                """분해 i 가 y 의 요구의 전부일 수 있다."""
+                if i not in top[y]:
+                    return free[y]
+                return f_or(free[y], f_and(top[y][i], *(f_not(top[y][j]) for j in top[y] if j != i)))
+
+            # (y, x) 가 Dec 에 든다: x 가 y 의 요구의 전부이고, 함께 골라진 다른 구성원마다 x 보다 뒤인 분해만 든 요구가 있다
+            wins: dict = {}
+            for y in owners:
+                for i, d in enumerate(decomps[y]):
+                    conds = [sel(y), alone(y, i)]
+                    for z in rivals[y]:
+                        conds.append(f_imp(sel(z), f_or(*(demanded(z, j) for j, w in enumerate(decomps[z])
+                                                         if above(d[3], w[3])))))
+                    wins[y, i] = f_and(*conds)
+                    self.clauses.append(f_imp(one_of(d[1]), wins[y, i]))       # 고른 분해는 Dec 에 든 것이다
+            real = {y: f_or(*(one_of(d[1]) for d in decomps[y])) for y in owners}
+            for i, y in enumerate(owners):                                     # 분해는 구성요소에 하나다
+                for z in owners[i + 1:]:
+                    if z in rivals[y]:
+                        self.clauses.append(f_not(f_and(real[y], real[z])))
+
+            # Amb: 가장 앞선 우선순위에 분해가 둘 이상 놓이는 요구의 조합이 있다. 우선순위 c 마다 본다.
+            # 모든 구성원이 c 보다 앞서지 않는 요구를 낼 수 있고, c 인 분해가 한 구성원의 요구에 둘이거나 두 구성원의 요구에 하나씩 있다
+            ambiguous = []
+            for c in dict.fromkeys(d[3] for y in owners for d in decomps[y]):
+                at, two, behind = {}, {}, {}
+                for y in owners:
+                    mine = decomps[y]
+                    at[y] = f_or(*([free[y]] if any(d[3] == c for d in mine) else []),
+                                 *(top[y][i] for i in top[y] if mine[i][3] == c))
+                    two[y] = f_or(*(f_and(top[y][i], top[y][j]) for i in top[y] for j in top[y]
+                                    if i < j and mine[i][3] == c and mine[j][3] == c))
+                    behind[y] = f_or(*([free[y]] if any(not above(d[3], c) for d in mine) else []),
+                                     *(top[y][i] for i in top[y] if not above(mine[i][3], c)))
+                tie = f_or(*(f_and(sel(y), two[y]) for y in owners),
+                           *(f_and(sel(y), sel(z), at[y], at[z]) for i, y in enumerate(owners)
+                             for z in owners[i + 1:] if z in rivals[y]))
+                ambiguous.append(f_and(tie, *(f_imp(sel(y), behind[y]) for y in owners)))
+            # 살아 있는 병합체에서 분해가 하나도 골라지지 않는 것은 분해를 정할 수 없을 때뿐이다
+            alive = f_not(void_formula(tree, gone, e)) if can_go else TRUE
+            nobody = f_and(alive, f_or(*(sel(y) for y in owners)), f_not(f_or(*real.values())))
+            self.clauses.append(f_imp(nobody, f_or(*ambiguous)))
 
     # 선택에 대한 제약 ---------------------------------------------------
 

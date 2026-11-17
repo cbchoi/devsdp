@@ -30,9 +30,12 @@ def component_of(T: Tree, y: tuple) -> tuple:
 
 
 VARIABLE_PREFIX = "$"       # 변수는 뿌리의 specialization으로 부호화된다 (unfold.var_node)
-NO_ASPECT = "~"             # 우선순위에 밀린 구성원이 고르는 "분해 없음". 펼침이 만든다 (18 문서 3절)
-GONE = "-"                  # 구성요소가 없음 대안을 골라 빠졌을 때 구성원이 고르는 "분해 없음". 펼침이 만든다 (5.3절)
-MARKERS = frozenset({NO_ASPECT, GONE})   # 펼침이 만드는 표시. 분해도 아니고 사람이 고르는 선택지도 아니다
+# 펼친 나무에서는 분해를 가진 엔티티가 골라지면 그 가운데 하나를 골라야 한다. 정의 표 위의 의미
+# (folded.py, theory.md)에서는 병합체 하나가 분해를 하나만 내므로, 분해를 내지 않는 구성원이 고를 것이
+# 나무에 있어야 한다. 펼침이 그 표시 둘을 만든다. 분해도 아니고 사람이 고르는 선택지도 아니다.
+NO_ASPECT = "~"             # 살아 있는 병합체에서 분해를 내지 않는 구성원. 다른 구성원의 분해가 골라졌거나, 분해를 정할 수 없다
+GONE = "-"                  # 없음 대안을 골라 빠진 구성요소의 구성원
+MARKERS = frozenset({NO_ASPECT, GONE})
 
 
 def real_aspects(T: Tree, y: tuple) -> tuple:
@@ -96,6 +99,7 @@ class Comp:
     aspects: tuple                    # 선택된 분해. 핵 적격이면 하나 이하
     parts: Mapping[str, "Comp"]       # 살아 있는 부분 (이름에서 Comp로)
     absent: tuple                     # 없음이 된 부분의 이름
+    stuck: bool = False               # 구성원이 "분해 없음"을 골랐는데 분해가 하나도 골라지지 않았다 (분해를 정할 수 없다)
 
     @property
     def name(self) -> str:
@@ -129,13 +133,15 @@ def skeleton(T: Tree, void: frozenset, V: frozenset) -> Optional[Comp]:
                     absent.append(q[-1])
                 else:
                     parts[q[-1]] = c
-        return Comp(e, tuple(ms), tuple(T.label(y) for y in ms), asps, parts, tuple(absent))
+        # 변이만 보고 정한다. 골라지지 않은 노드는 가지치기에서 없어질 수 있으므로 보지 않는다 (11 문서의 정리 14)
+        stuck = not asps and any(y + (NO_ASPECT,) in V for y in ms)
+        return Comp(e, tuple(ms), tuple(T.label(y) for y in ms), asps, parts, tuple(absent), stuck)
 
     return build(T.root)
 
 
 def core_violations(T: Tree, void: frozenset, V: frozenset) -> list:
-    """핵 적격성: 뿌리는 없음이 아니고, 살아 있는 병합체의 분해는 하나 이하."""
+    """핵 적격성: 뿌리는 없음이 아니고, 살아 있는 병합체는 분해가 없거나 분해를 정확히 하나 고른다."""
     sk = skeleton(T, void, V)
     if sk is None:
         return [("K0", T.root, "뿌리가 없음 대안을 골랐다")]
@@ -144,6 +150,8 @@ def core_violations(T: Tree, void: frozenset, V: frozenset) -> list:
     def walk(c: Comp) -> None:
         if len(c.aspects) > 1:
             out.append(("K1", c.path, "분해가 둘 이상 선택되었다"))
+        if c.stuck:
+            out.append(("K1", c.path, "분해를 하나로 정할 수 없다"))
         for child in c.parts.values():
             walk(child)
 
@@ -169,11 +177,16 @@ def core_psi(T: Tree, void: frozenset):
     """핵 적격성의 특성식."""
     clauses = [f_not(void_formula(T, void, T.root))]
     for e in components(T):
-        asps = [(y, a) for y in members(T, e) for a in real_aspects(T, y)]
+        ms = members(T, e)
+        asps = [(y, a) for y in ms for a in real_aspects(T, y)]
         le = None
         for i, (y, a) in enumerate(asps):
             for y2, a2 in asps[i + 1:]:
                 if y != y2:
                     le = le or live_formula(T, void, e)
                     clauses.append(f_imp(le, f_not(f_and(sel(a), sel(a2)))))
+        none = [y + (NO_ASPECT,) for y in ms if y + (NO_ASPECT,) in T.nodes]
+        if none:                                                  # "분해 없음"을 고른 구성원이 있으면 분해가 하나는 골라져 있다
+            le = le or live_formula(T, void, e)
+            clauses.append(f_imp(f_and(le, f_or(*(sel(n) for n in none))), f_or(*(sel(a) for _, a in asps))))
     return f_and(*clauses)

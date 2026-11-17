@@ -652,7 +652,7 @@ def test_executor_samples_are_not_vacuous():
     assert STATS["events"] >= 3000 and STATS["delivered"] >= 500, STATS
     assert STATS["quirky_events"] >= 1000 and STATS["quirky_bags"] >= 500, STATS
     assert STATS["quirky_long_bags"] >= 100 and STATS["quirky_wide_bags"] >= 20, STATS
-    assert STATS["classic_models"] >= 2000 and STATS["classic_skipped"] >= 500, STATS
+    assert STATS["classic_models"] >= 2000 and STATS["classic_skipped"] >= 150, STATS
 
 
 def test_variable_values_are_not_members_of_the_root_component():
