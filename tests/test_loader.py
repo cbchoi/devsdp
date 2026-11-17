@@ -180,6 +180,22 @@ def test_names_are_identifiers(bad):
     load_ses_dict(doc({"R": {"root": True, "aspects": {"분해_1": {"parts": [{"def": "A", "alias": "첫째"}]}}}, "A": {}}))
 
 
+def test_values_of_a_variable_are_different_values():
+    """글자는 달라도 같은 값으로 읽히는 두 값은 함께 둘 수 없다. 0 과 false, 1 과 true, 1 과 1.0 이 그렇다.
+
+    선택 지점 표는 값으로 줄을 만든다. 그런 값들이 함께 있으면 표가 둘을 구별하지 못한다 (theory.md 의 W5).
+    """
+    def doc(values):
+        return {"ses": "1.0", "name": "R", "variables": {"v": {"type": "enum", "values": values}},
+                "entities": {"R": {"root": True}}}
+
+    for values in ([0, False, "a"], [True, 1], [1, 1.0], ["x", 2, 2.0]):
+        with pytest.raises(LoadError, match="같은 값으로 읽힌다"):
+            load_ses_dict(doc(values))
+    for values in ([0, 1, "a"], [True, False], [1, 2.5], ["0", "False"]):
+        load_ses_dict(doc(values))
+
+
 def test_values_of_a_variable_are_written_differently():
     """변수의 값은 글자로 적어 구별한다. 1 과 "1" 처럼 적으면 같은 두 값은 펼친 나무에서 한 노드가 된다 (theory.md 의 W5)."""
     def doc(values):

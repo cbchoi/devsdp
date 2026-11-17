@@ -34,6 +34,7 @@ from .algebra import AlgebraError
 from .loader import selected_target
 
 GONE, ATOM, STUCK, SPLIT = "gone", "atom", "stuck", "split"
+NO_DECOMPOSITION = "~"          # 결정이 남길 선택지로 적는 "분해를 내지 않는다". 펼친 나무의 표시(skeleton.NO_ASPECT)와 같은 글이다
 
 _OPS = {"eq": operator.eq, "ne": operator.ne, "lt": operator.lt, "le": operator.le,
         "gt": operator.gt, "ge": operator.ge, "in": lambda v, c: v in c}
@@ -149,6 +150,23 @@ def replica_name(ma: m.MultiAspect, i: int, n: int) -> str:
     return ma.naming.format(i=i, n=n, part=ma.part.part_name)
 
 
+def replica_index(ma: m.MultiAspect, name: str, n: int) -> Optional[int]:
+    """name 이 개수 n 일 때의 복제본 이름이면 그 번호, 아니면 None.
+
+    이름의 틀에 번호가 한 번 나오면 복제본의 이름을 늘어놓지 않고 이름에서 번호를 읽는다. 개수가 클 때
+    자리 하나를 찾으려고 이름을 모두 만들지 않기 위해서다.
+    """
+    if ma.naming.count("{i}") != 1:
+        return next((i for i in range(n) if replica_name(ma, i, n) == name), None)
+    head, tail = (part.format(n=n, part=ma.part.part_name) for part in ma.naming.split("{i}"))
+    if len(name) <= len(head) + len(tail) or not name.startswith(head) or not name.endswith(tail):
+        return None
+    digits = name[len(head):len(name) - len(tail)]
+    if not (digits.isascii() and digits.isdigit()) or str(int(digits)) != digits or int(digits) >= n:
+        return None
+    return int(digits)
+
+
 # ---------------------------------------------------------------------------
 # 정의를 그대로 옮긴 의미
 # ---------------------------------------------------------------------------
@@ -199,6 +217,11 @@ def occurring(doc: m.SesDocument) -> list:
 
 def possible_members(doc: m.SesDocument, path: tuple) -> list:
     """구성요소 경로 path 에 놓일 수 있는 구성원의 정의들. 그 자리가 어떤 선택에도 없으면 빈 목록이다."""
+    return list(dict.fromkeys(y for c in possible_bases(doc, path) for y in reach(doc, c)))
+
+
+def possible_bases(doc: m.SesDocument, path: tuple) -> list:
+    """구성요소 경로 path 에 놓일 수 있는 구성요소의 바탕 정의들. 부분으로 적힌 정의다. 대안은 들지 않는다."""
     if not path or path[0] != doc.root.name:
         return []
     comps = [doc.root.name]
@@ -211,10 +234,57 @@ def possible_members(doc: m.SesDocument, path: tuple) -> list:
                 for ma in e.multi_aspects.values():
                     counts = all_counts(doc, ma)
                     tops = counts if "{n}" in ma.naming else counts and [max(counts)]
-                    if any(name == replica_name(ma, i, n) for n in tops for i in range(n)):
+                    if any(replica_index(ma, name, n) is not None for n in tops):
                         nxt.append(ma.part.def_name)
         comps = list(dict.fromkeys(nxt))
-    return list(dict.fromkeys(y for c in comps for y in reach(doc, c)))
+    return comps
+
+
+def placed_bases(doc: m.SesDocument) -> list:
+    """어떤 자리에든 구성요소의 바탕으로 놓일 수 있는 정의들. 뿌리와, 놓일 수 있는 정의의 분해가 부분으로 적은 정의다."""
+    out = [doc.root.name]
+    for name in occurring(doc):
+        e = doc.entities[name]
+        out += [p.def_name for a in e.aspects.values() for p in a.parts]
+        out += [ma.part.def_name for ma in e.multi_aspects.values() if any(n > 0 for n in all_counts(doc, ma))]
+    return list(dict.fromkeys(out))
+
+
+def can_abstain(doc: m.SesDocument, base: str, y: str) -> bool:
+    """바탕이 base 인 구성요소에 든 구성원 y 가 분해를 내지 않을 수 있는 자리인가.
+
+    펼친 나무에서 그 구성원의 노드에 "분해 없음"의 표시가 놓이는 조건이다(theory.md 정의 9). y 와 함께 그
+    병합체에 들 수 있는, 분해를 가진 다른 구성원이 있거나, y 의 규칙을 가진 분해 둘이 같은 자리에 있다.
+    함께 들 수 있는 구성원은 base 에서 y 까지의 대안의 길 위에 있는 것, y 아래에 있는 것, 그리고 그 길 위의
+    구성원에서 길이 지나지 않는 다른 specialization 으로 닿는 것이다. 길마다 나무를 펼치지 않고 정의 위에서 본다.
+    """
+    ents = doc.entities
+    ruled = [x for x in decompositions(ents[y]) if x.rule is not None]
+    if any(not above(a.priority, b.priority) and not above(b.priority, a.priority)
+           for i, a in enumerate(ruled) for b in ruled[i + 1:]):
+        return True
+    if any(decompositions(ents[z]) for z in reach(doc, y) if z != y):
+        return True
+    owning = {u: any(decompositions(ents[z]) for z in reach(doc, u)) for u in reach(doc, base)}
+    memo: dict = {}
+
+    def via(u: str) -> bool:
+        """u 에서 y 로 가는 대안의 길 가운데, 길 위나 길 옆에 분해를 가진 다른 구성원이 있는 것이 있는가."""
+        if u == y:
+            return False
+        if u not in memo:
+            memo[u] = False
+            for sp in ents[u].specializations.values():
+                for a in sp.alternatives:
+                    if y not in reach(doc, a):
+                        continue
+                    beside = any(owning[b] for t in ents[u].specializations.values() if t is not sp
+                                 for b in t.alternatives)
+                    if decompositions(ents[u]) or beside or via(a):
+                        memo[u] = True
+        return memo[u]
+
+    return via(base)
 
 
 def conditions(e) -> list:
@@ -297,9 +367,10 @@ class Restriction:
 
     - 대안의 결정: 가리킨 구성원이 그 specialization 에서 고른 대안이 남길 것 가운데 있다. 빠진 구성요소에서도 본다.
     - 개수의 결정: 가리킨 구성원이 그 multi-aspect 를 분해로 냈으면 그 개수가 남길 것 가운데 있다.
-    - 분해의 결정: 가리킨 구성원이 빠지지 않은 병합체에 있고 분해를 가졌을 때 본다. 남길 이름의 분해를
-      가진 구성원은 그 가운데 하나를 그 병합체의 분해로 내야 한다(밀리거나 정할 수 없으면 안 된다).
-      남길 이름의 분해가 없는 구성원은 분해를 내지 않아야 한다.
+    - 분해의 결정: 가리킨 구성원이 빠지지 않은 병합체에 있고 분해를 가졌을 때 본다. 남길 것은 분해의 이름들과
+      "분해를 내지 않는다"(NO_DECOMPOSITION)다. 그 구성원이 분해를 내면 그 이름이 남길 것에 들어야 한다.
+      분해를 내지 않는 것(밀리거나 정할 수 없는 것)은 남길 것에 "분해를 내지 않는다"가 있거나, 남길 이름의
+      분해를 그 구성원이 하나도 가지지 않았을 때만 된다.
     - 변수의 결정: 변수의 값이 남길 것 가운데 있다. 값은 글로 적은 것으로 견준다.
 
     펼친 나무에서 그 결정이 배제하는 노드를 고르지 않는 변이와 같다(decisions.excluded, theory.md 정리 9).
@@ -319,6 +390,8 @@ class Restriction:
         placed = set(occurring(doc))
         for name, values in decisions.variables.items():
             try:
+                if not values:
+                    raise AlgebraError("specialization 에는 남길 alternative 가 있어야 한다")   # 펼친 쪽과 같은 글
                 if name not in doc.variables:
                     raise AlgebraError("결정이 가리키는 선택 지점이 대상에 없다")
                 want = {str(v) for v in values}
@@ -360,6 +433,10 @@ class Restriction:
             want = frozenset(c.aspect)
             having = [y for y in hosts if decompositions(ents[y])]
             found = {x.name for y in having for x in decompositions(ents[y])}
+            if NO_DECOMPOSITION in want:                     # 가리킨 구성원 가운데 분해를 내지 않을 수 있는 것이 있어야 맞는다
+                bases = placed_bases(self.doc) if pos is None else possible_bases(self.doc, pos)
+                if any(y in reach(self.doc, b) and can_abstain(self.doc, b, y) for b in bases for y in having):
+                    found.add(NO_DECOMPOSITION)
             table, key, entry = (self.give_at, c.at, want) if pos is None else (self.give_on, pos, want)
         if not having:
             raise AlgebraError("결정이 가리키는 선택 지점이 대상에 없다")
@@ -387,11 +464,13 @@ class Restriction:
         return all(x in keep for keep in self.give_at.get(y, ())) and all(x in keep for keep in self.give_on.get(pos, ()))
 
     def must_give(self, pos: tuple, z: str) -> bool:
-        """빠지지 않은 병합체의 구성원 z (분해를 가졌다)가 분해를 내야 하는가."""
-        if self.give_at.get(z):
-            return True
+        """빠지지 않은 병합체의 구성원 z (분해를 가졌다)가 분해를 내야 하는가.
+
+        z 를 가리킨 분해의 결정 가운데, 남길 것에 "분해를 내지 않는다"가 없고 z 가 남길 이름의 분해를 가진 것이 있을 때다.
+        """
         names = {x.name for x in decompositions(self.doc.entities[z])}
-        return any(names & keep for keep in self.give_on.get(pos, ()))
+        return any(NO_DECOMPOSITION not in keep and names & keep
+                   for keep in list(self.give_at.get(z, ())) + list(self.give_on.get(pos, ())))
 
     def obeys(self, root: str, sigma: dict, kappa: Comp) -> bool:
         """변이 (sigma, kappa) 가 결정을 따르는가. 정의 15 를 구성요소 선택 위에서 그대로 읽은 것이다."""
@@ -887,14 +966,13 @@ class Evaluator:
                         if limit and not limit.count_ok(pos, y, x.name, n):
                             continue                     # 결정이 금한 개수: 무게 0
                         if watched:
-                            names = [replica_name(x, i, n) for i in range(n)]
-                            special = [nm for nm in names if nm in watched]
+                            # 따로 세야 하는 이름 가운데 이 개수에서 복제본인 것. 복제본의 이름을 늘어놓지 않는다
+                            special = [nm for nm in sorted(watched) if replica_index(x, nm, n) is not None]
                             inner = self.one
                             for nm in special:
                                 inner = p_mul(inner, self.comp(x.part.def_name, pos + (nm,), sigma, memo))
                             if len(special) < n:
-                                plain = next(nm for nm in names if nm not in watched)
-                                rest = self.comp(x.part.def_name, pos + (plain,), sigma, memo)
+                                rest = self.comp(x.part.def_name, pos + ("",), sigma, memo)
                                 inner = p_mul(inner, p_pow(rest, n - len(special), self.one))
                         else:
                             power, at = p_mul(power, p_pow(one, n - at, self.one)), n

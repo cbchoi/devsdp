@@ -301,7 +301,8 @@ def load_decisions(path: str) -> DecisionSet:
 def owners(T: Tree, c) -> list:
     """결정이나 재정의가 가리키는 엔티티 노드들."""
     if c.at is not None:
-        return occurrences(T, c.at)
+        # 변수의 값의 노드는 정의가 놓인 곳이 아니다. 그 노드의 표지는 $ 로 시작하는 변수의 이름이다
+        return [] if str(c.at).startswith(VAR_PREFIX) else occurrences(T, c.at)
     if c.path is not None:
         want = tuple(c.path)
         return [y for q in T.kinds
@@ -389,7 +390,17 @@ def _entries(T: Tree, ds: DecisionSet) -> list:
     """(열쇠, Choice)의 목록. 변수 값도 뿌리의 specialization에 대한 결정으로 본다."""
     out = [(("variable", name), _variable_choice(T, name, values))
            for name, values in ds.variables.items()]
-    return out + [(c.key, c) for c in ds.choose]
+    return out + [(c.key, _no_variable(c)) for c in ds.choose]
+
+
+def _no_variable(c: Choice) -> Choice:
+    """선택의 결정이 변수를 specialization 인 것처럼 가리키면, 없는 선택 지점을 가리킨 것으로 만든다.
+
+    변수는 펼친 나무에서 뿌리의 specialization 으로 적혀 있을 뿐이다. 변수의 값은 결정 집합의 variables 로 정한다.
+    """
+    if c.specialization is not None and str(c.specialization).startswith(VAR_PREFIX):
+        return replace(c, specialization="")
+    return c
 
 
 def problems(S: SES, ds: DecisionSet) -> list:

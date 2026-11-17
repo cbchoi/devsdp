@@ -464,6 +464,13 @@ def check_integrity(doc: m.SesDocument) -> None:
             twice = sorted({w for w in written if written.count(w) > 1})
             if twice:
                 errors.append(f"variables.{vname}: 값 {twice} 가 글자로 적으면 같다. 값은 서로 달라야 한다")
+            # 값으로도 서로 달라야 한다. 0 과 false, 1 과 true, 1 과 1.0 은 글자는 달라도 같은 값으로 읽힌다.
+            # 그런 값들을 함께 두면 선택 지점 표가 둘을 구별하지 못한다
+            alike = [(a, b) for i, a in enumerate(var.domain.values) for b in var.domain.values[i + 1:]
+                     if a == b and str(a) != str(b)]
+            if alike:
+                errors.append(f"variables.{vname}: 값 {alike[0][0]!r} 와 {alike[0][1]!r} 는 같은 값으로 읽힌다. "
+                              "값은 서로 달라야 한다")
 
     # strict hierarchy: 펼친 경로에서 같은 정의 반복 금지
     try:
