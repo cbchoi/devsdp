@@ -14,6 +14,11 @@ choices 는 족을 펼치지 않는다. 남은 변이의 수와 선택 지점 �
 복제본이 많은 족에서도 답한다. 결정이 펼친 나무의 노드를 가리킬 때(node)만 족을 펼친다. variants 는
 변이를 늘어놓으므로 족을 펼치되, 남은 변이의 수를 먼저 세어 한도를 넘으면 펼치지 않고 멈춘다.
 
+choices 는 선택의 핵만 본다. 속성의 식, 결합의 틀, 포트는 보지 않는다. 그래서 족을 펼치면 거부될
+문서(등록하지 않은 함수를 부르는 속성 등)에도 답한다. 문서 전체의 검사는 check 가 한다.
+변수 값의 조합은 결정과 변수 하나만 보는 제약으로 줄인 뒤에 돌아본다. 그 수가 --max-assignments
+(기본 200,000)를 넘으면 멈춘다.
+
 build, plan, run 은 결정이 끝난 변이 하나를 위에서 아래로 만든다(ses_core/direct.py). 족을 펼치지
 않으므로 큰 모델에 쓴다. plan 은 실행기를 붙여 계획을 만들고, run 은 그 계획을 참조 시뮬레이터(devs)로 돌린다.
 
@@ -33,6 +38,7 @@ import sys
 from typing import Optional
 
 OK, FAILED, USAGE, UNDECIDED = 0, 1, 2, 3
+MAX_ASSIGNMENTS = 200000        # 정의 표 위의 계산이 돌아보는 변수 값의 조합의 한도
 
 
 class Stop(Exception):
@@ -81,6 +87,10 @@ def _decisions(path: Optional[str]):
         raise Stop(FAILED, f"결정 집합을 읽을 수 없다: {e}")
     except (AttributeError, KeyError, TypeError, ValueError) as e:
         raise Stop(FAILED, f"결정 집합의 모양이 틀렸다: {type(e).__name__}: {e}")
+    except Exception as e:                                   # noqa: BLE001  YAML 의 문법 오류 등
+        if type(e).__module__.split(".")[0] != "yaml":
+            raise
+        raise Stop(FAILED, f"결정 집합을 읽을 수 없다: {str(e).splitlines()[0]}")
 
 
 def _build(args, out):
@@ -123,7 +133,7 @@ def cmd_check(args, out) -> int:
     for d in a.diagnostics:
         print(f"{d.severity} {d.code} {d.address or '-'}: {d.message}", file=out)
     if a.variants is None and a.core is not None:
-        print(f"변이 {a.core.variants}개, 그 가운데 핵 적격 {a.core.wellformed}개 "
+        print(f"변이 {_count(a.core.variants)}개, 그 가운데 핵 적격 {_count(a.core.wellformed)}개 "
               "(열거하지 않고 정의 표 위에서 셌다. 확장은 결합의 국소 검사만 했다)", file=out)
     elif a.variants is None:
         print("변이 분석을 하지 않았다", file=out)
@@ -145,7 +155,15 @@ def _family(args):
     return doc, S, pruned, variable_domains(doc)
 
 
-MAX_ASSIGNMENTS = 200000        # 정의 표 위의 계산이 돌아보는 변수 값의 조합의 한도
+def _count(n: int) -> str:
+    """수를 적는다. 서른 자리가 넘으면 앞의 몇 자리와 자릿수만 적는다. 아주 큰 수는 글로 다 옮길 수도 없다."""
+    if n < 10 ** 30:
+        return str(n)
+    k = int((n.bit_length() - 1) * 0.30102999566398120)      # 자릿수에서 1 을 뺀 것의 어림
+    while n >= 10 ** (k + 1):
+        k += 1
+    lead = str(n // 10 ** (k - 5))
+    return f"약 {lead[0]}.{lead[1:]}e+{k} ({k + 1}자리)"
 
 
 def _on_definitions(args):
@@ -157,18 +175,18 @@ def _on_definitions(args):
     from .algebra import AlgebraError
     doc = _document(args.document)
     ds = _decisions(args.decisions)
-    if any(c.node is not None for c in ds.choose):
-        return doc, ds, None
-    combos = 1
-    for name in doc.variables:
-        keeps = [{str(v) for v in values} for key, values in ds.variables.items() if key == name]
-        combos *= sum(all(str(v) in keep for keep in keeps) for v in folded.domain(doc, name)) or 1
-    if combos > MAX_ASSIGNMENTS:
-        raise Stop(FAILED, f"변수 값의 조합이 {combos}가지로 한도 {MAX_ASSIGNMENTS}가지를 넘는다. 변수의 값을 결정으로 줄인다")
     try:
-        return doc, ds, folded.analyze(doc, _resolve(args.functions, "--functions"), ds)
+        if any(c.node is not None for c in ds.choose):
+            return doc, ds, None
+        return doc, ds, folded.analyze(doc, _resolve(args.functions, "--functions"), ds,
+                                       max_assignments=args.max_assignments)
+    except folded.TooManyAssignments as e:
+        raise Stop(FAILED, f"돌아볼 변수 값의 조합이 {_count(e.count)}가지로 한도 {args.max_assignments}가지를 넘는다. "
+                           "변수의 값을 결정으로 줄이거나 --max-assignments 로 한도를 올린다")
     except AlgebraError as e:
         raise Stop(FAILED, f"변이 공간을 만들 수 없다. {e}")
+    except (AttributeError, TypeError) as e:
+        raise Stop(FAILED, f"결정 집합의 모양이 틀렸다: {type(e).__name__}: {e}")
 
 
 def _print_table(points, out) -> None:
@@ -188,7 +206,7 @@ def cmd_choices(args, out) -> int:
         if not fam.variants:
             print("남은 변이가 없다", file=out)
             return FAILED
-        print(f"남은 변이 {fam.variants}개", file=out)
+        print(f"남은 변이 {_count(fam.variants)}개", file=out)
         _print_table([ChoicePoint(*row) for row in folded.choice_rows(doc, fam)], out)
         return OK
     doc, S, pruned, domains = _family(args)
@@ -211,13 +229,13 @@ def cmd_variants(args, out) -> int:
             print("남은 변이가 없다", file=out)
             return FAILED
         if fam.variants > args.max_variants:
-            raise Stop(FAILED, f"변이가 {fam.variants}개로 한도 {args.max_variants}개를 넘어 열거하지 않는다")
+            raise Stop(FAILED, f"변이가 {_count(fam.variants)}개로 한도 {args.max_variants}개를 넘어 열거하지 않는다")
     doc, S, pruned, domains = _family(args)
     if pruned is None:
         print("남은 변이가 없다", file=out)
         return FAILED
     n = count_variants(pruned.tree)
-    if n > args.max_variants:
+    if fam is None and n > args.max_variants:                # 정확한 수를 모를 때만 구조상의 수로 멈춘다
         raise Stop(FAILED, f"구조상 변이가 {n}개로 한도 {args.max_variants}개를 넘어 열거하지 않는다")
     variants = sem(pruned)
     print(f"변이 {len(variants)}개", file=out)
@@ -353,12 +371,17 @@ def parser() -> argparse.ArgumentParser:
     c.set_defaults(run=cmd_check)
 
     c = common(sub.add_parser("choices", help="결정 집합을 적용한 뒤 남은 선택지"))
-    c.add_argument("--max-variants", type=int, default=5000)
+    c.add_argument("--max-variants", type=int, default=5000,
+                   help="결정이 펼친 나무의 노드를 가리켜 족을 펼칠 때만 쓴다")
+    c.add_argument("--max-assignments", type=int, default=MAX_ASSIGNMENTS,
+                   help="돌아볼 변수 값의 조합의 한도")
     c.set_defaults(run=cmd_choices)
 
     c = common(sub.add_parser("variants", help="결정 집합을 적용한 뒤 남은 변이와 그것을 재현하는 결정"))
     c.add_argument("--limit", type=int, default=10)
     c.add_argument("--max-variants", type=int, default=5000)
+    c.add_argument("--max-assignments", type=int, default=MAX_ASSIGNMENTS,
+                   help="돌아볼 변수 값의 조합의 한도")
     c.set_defaults(run=cmd_variants)
 
     for name, help_, run in (("build", "결정이 끝난 변이 하나를 만든다", cmd_build),

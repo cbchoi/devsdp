@@ -588,8 +588,8 @@ def choices(S: SES, ds: Optional[DecisionSet] = None, domains: Optional[Mapping]
 def choices_on_definitions(doc, ds: Optional[DecisionSet] = None, functions=None) -> list:
     """결정 집합을 적용한 뒤의 선택 지점 표를 정의 표 위에서 구한다. 나무를 펼치지 않고 변이를 열거하지 않는다.
 
-    choices 와 같은 표를 낸다(theory.md 정리 9 와 따름정리 9.2). 줄의 순서만 다를 수 있다. 펼친 나무의
-    노드를 가리킨 결정(node)이 있으면 AlgebraError 를 낸다. 그때는 choices 를 쓴다.
+    choices 와 같은 표를 같은 순서로 낸다(theory.md 정리 9 와 따름정리 9.2). 펼친 나무의 노드를 가리킨
+    결정(node)이 있으면 AlgebraError 를 낸다. 그때는 choices 를 쓴다.
     """
     from . import folded
     fam = folded.analyze(doc, functions, ds if ds is not None else DecisionSet())

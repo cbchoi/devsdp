@@ -360,6 +360,33 @@ def test_a_selected_must_point_at_a_definition_that_is_placed_somewhere():
     assert "P" in F.reachable(load_ses_dict(doc(0))) and "P" not in F.occurring(load_ses_dict(doc(0)))
 
 
+def test_definitions_that_are_never_placed_do_not_matter_and_open_counts_are_refused_at_once():
+    """놓이지 않는 정의의 조건은 보지 않는다. 위가 열린 개수는 그 분해가 쓰이지 않아도 거부한다. 펼침과 같다.
+
+    전에는 정의 표 위의 계산이 닿는 정의 전부의 조건을 미리 보아, 놓이지 않는 정의의 조건 때문에 거부했다.
+    위가 열린 개수는 그 분해에 닿을 때만 거부해서, 선택 규칙이 그 대안을 고르지 않으면 답을 냈다.
+    """
+    never = {"ses": "1.0", "name": "R", "variables": {"v": {"type": "int", "range": [1, 2]}},
+             "entities": {"R": {"root": True, "specializations": {"s": {"alternatives": ["D", "E"]}},
+                                "multi_aspects": {"m": {"part": "Q", "cardinality": 0}}},
+                          "D": {"extends": "R"}, "E": {"extends": "R"},
+                          "Q": {"aspects": {"a": {"parts": ["L"], "rule": {"call": "f", "args": [{"var": "v"}], "eq": 1}}}},
+                          "L": {}}}
+    assert refusals(never) == ["ok", "ok"]
+    doc = load_ses_dict(never)
+    assert F.count(doc) == (4, 4) and unfolded(doc, None)[2] == 4
+    placed = json.loads(json.dumps(never))
+    placed["entities"]["R"]["multi_aspects"]["m"]["cardinality"] = 1          # 이제 Q 가 놓인다
+    assert refusals(placed) == ["등록되지 않은 함수 f", "등록되지 않은 함수 f"]
+    open_count = {"ses": "1.0", "name": "R",
+                  "entities": {"R": {"root": True, "specializations": {"s": {
+                      "alternatives": ["D", "E"], "select": {"when": {"all": []}, "then": "D"}}}},
+                      "D": {"extends": "R"},
+                      "E": {"extends": "R", "multi_aspects": {"m": {"part": "L", "cardinality": {"min": 1}}}},
+                      "L": {}}}
+    assert refusals(open_count) == ["multi-aspect m 의 개수에 상한이 필요하다"] * 2
+
+
 def test_the_structure_keeps_the_names_of_removed_parts():
     """정의 8. 구조는 빠진 부분의 이름을 남긴다. 결합이 그것을 보기 때문이다.
 

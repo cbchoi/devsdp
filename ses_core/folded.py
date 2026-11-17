@@ -321,8 +321,11 @@ def validate(doc: m.SesDocument, functions=None) -> None:
     펼침(unfold.py)도 같은 문서를 거부한다.
     """
     exprs = [x for c in doc.constraints for x in (c.when, c.require, c.forbid)]
-    for name in reachable(doc):
+    for name in occurring(doc):                              # 놓이지 않는 정의는 뜻에 관여하지 않는다. 펼침도 그것을 보지 않는다
         e = doc.entities[name]
+        for ma in e.multi_aspects.values():
+            if isinstance(ma.cardinality, m.RangeCard) and ma.cardinality.max is None:
+                raise AlgebraError(f"multi-aspect {ma.name} 의 개수에 상한이 필요하다")
         exprs += [x.rule for x in decompositions(e)]
         for sp in e.specializations.values():
             rule = sp.select
@@ -446,8 +449,10 @@ class Restriction:
 
     # 선택 하나가 결정을 따르는가 -------------------------------------------
 
-    def value_ok(self, sigma: dict) -> bool:
-        return all(str(sigma[name]) in keep for name, keeps in self.values.items() for keep in keeps)
+    def value_ok(self, sigma: dict, only: Optional[str] = None) -> bool:
+        """변수 값이 변수의 결정을 따르는가. only 를 주면 그 변수의 결정만 본다."""
+        return all(str(sigma[name]) in keep for name, keeps in self.values.items()
+                   if only is None or name == only for keep in keeps)
 
     def alt_ok(self, pos: tuple, d: str, s: str, a: str) -> bool:
         """자리 pos 의 구성원 d 가 specialization s 에서 대안 a 를 골라도 되는가."""
@@ -635,9 +640,10 @@ class Semantics:
                     for combo in product(*(self.selections(p.def_name, sigma, memo) for p in x.parts)):
                         out.append(Comp(mu, SPLIT, y, x.name, None, tuple(zip(names, combo))))
                     continue
-                below = self.selections(x.part.def_name, sigma, memo)
                 for n in self.counts(x, sigma):
                     names = [replica_name(x, i, n) for i in range(n)]
+                    # 개수가 0 이면 부분의 정의를 보지 않는다. 놓이지 않는 정의는 뜻에 관여하지 않는다
+                    below = self.selections(x.part.def_name, sigma, memo) if n else []
                     for combo in product(below, repeat=n):
                         out.append(Comp(mu, SPLIT, y, x.name, n, tuple(zip(names, combo))))
         memo[d] = out
@@ -866,6 +872,17 @@ class Evaluator:
                 self.by_path.setdefault(tuple(a.path), set()).add(a)
         # 그 자리에서만 달리 셈해야 하는 자리들: 그 자리를 묻는 selected 가 있거나 그 자리를 가리킨 결정이 있다
         self.sites = set(self.by_path) | (self.rest.positions if self.rest else set())
+        # 변수마다 볼 값들. 결정이 남긴 값과, 그 변수 하나만 보는 제약을 통과하는 값만 남긴다. 변수 값의 조합을
+        # 늘어놓기 전에 줄이기 위해서다. 변수 둘 이상을 보는 제약은 조합마다 본다
+        self.space: dict = {}
+        for name in doc.variables:
+            values = domain(doc, name)
+            if self.rest:
+                values = [v for v in values if self.rest.value_ok({name: v}, only=name)]
+            for c in self.early:
+                if all(variables_of(x) in ([], [name]) for x in (c.when, c.require, c.forbid) if x is not None):
+                    values = [v for v in values if self.sem.satisfied(c, {name: v}, set())]
+            self.space[name] = values
         self.focus = {q[:i] for q in self.sites for i in range(1, len(q) + 1)}     # 따로 계산해야 하는 자리들
         self.below: dict = {}                     # 따로 계산해야 하는 자리에서, 그 바로 아래의 그런 자리의 이름들로
         for q in self.focus:
@@ -960,7 +977,7 @@ class Evaluator:
                     # 복제본들은 서로 같다. 따로 세야 하는 자리의 복제본만 하나씩 세고 나머지는 거듭제곱한다.
                     # 그런 자리가 없으면 복제본의 이름을 만들지도 않는다. 개수가 이어지면 앞의 거듭제곱을 이어 쓴다
                     watched = self.below.get(pos, ())
-                    one = self.comp(x.part.def_name, pos + ("",), sigma, memo) if not watched else None
+                    one = None                               # 복제본 하나의 값. 개수가 0 뿐이면 구하지 않는다
                     power, at = self.one, 0
                     for n in sorted(self.sem.counts(x, sigma)):
                         if limit and not limit.count_ok(pos, y, x.name, n):
@@ -975,7 +992,10 @@ class Evaluator:
                                 rest = self.comp(x.part.def_name, pos + ("",), sigma, memo)
                                 inner = p_mul(inner, p_pow(rest, n - len(special), self.one))
                         else:
-                            power, at = p_mul(power, p_pow(one, n - at, self.one)), n
+                            if n > at:
+                                if one is None:
+                                    one = self.comp(x.part.def_name, pos + ("",), sigma, memo)
+                                power, at = p_mul(power, p_pow(one, n - at, self.one)), n
                             inner = power
                         inner = self.mark(inner, pos, "count", y, x.name, n)
                         body = p_add(body, p_seen(self.mark(inner, pos, "aspect", y, "", x.name), (), pushed))
@@ -988,13 +1008,26 @@ class Evaluator:
     def roots(self):
         """제약(변수만 보는 것)을 통과한 변수 값마다, 제약을 만족하는 항들: (변수 값, [(본 것, 개수, 일들)])."""
         sem = self.sem
-        for sigma in sem.assignments():
+        for sigma in self.assignments():
             if not all(sem.satisfied(c, sigma, set()) for c in self.early):
                 continue
             if self.rest and not self.rest.value_ok(sigma):
                 continue
             yield sigma, [(seen, n, live) for seen, (n, live) in self.comp(sem.root, (sem.root,), sigma, {}).items()
                           if all(self._satisfied(c, sigma, seen) for c in self.late)]
+
+    def assignments(self) -> Iterator[dict]:
+        """돌아볼 변수 값들. 결정과, 변수 하나만 보는 제약으로 줄인 값들의 조합이다."""
+        names = list(self.space)
+        for values in product(*(self.space[n] for n in names)):
+            yield dict(zip(names, values))
+
+    def assignment_count(self) -> int:
+        """돌아볼 변수 값의 조합의 수."""
+        total = 1
+        for values in self.space.values():
+            total *= len(values)
+        return total
 
     def per_assignment(self):
         """(변수 값, 변이 수, 적격 변이 수)들. 제약을 어기는 변이는 세지 않는다."""
@@ -1078,6 +1111,14 @@ def declared(doc: m.SesDocument) -> list:
             for option in options]
 
 
+class TooManyAssignments(Exception):
+    """돌아볼 변수 값의 조합이 한도보다 많다. 그 수를 담는다."""
+
+    def __init__(self, count: int) -> None:
+        super().__init__(count)
+        self.count = count
+
+
 @dataclass
 class Family:
     """문서의 족에 대해 정의 표 위에서 구한 것."""
@@ -1098,12 +1139,15 @@ class Family:
         return out
 
 
-def analyze(doc: m.SesDocument, functions=None, decisions=None) -> Family:
+def analyze(doc: m.SesDocument, functions=None, decisions=None, max_assignments: Optional[int] = None) -> Family:
     """변이 수, 핵 적격 변이 수, 살아 있는 선택지, 분해를 정할 수 없는 곳. 변이를 열거하지 않는다.
 
-    결정 집합을 주면 그것을 따르는 변이들에 대해 같은 것을 낸다.
+    결정 집합을 주면 그것을 따르는 변이들에 대해 같은 것을 낸다. max_assignments 를 주면, 돌아볼 변수 값의
+    조합이 그보다 많을 때 TooManyAssignments 를 낸다. 조합은 결정과 변수 하나만 보는 제약으로 줄인 뒤에 센다.
     """
     ev = Evaluator(doc, functions, live=True, decisions=decisions)
+    if max_assignments is not None and ev.assignment_count() > max_assignments:
+        raise TooManyAssignments(ev.assignment_count())
     assignments = variants = wellformed = 0
     live, live_wf = set(), set()
     values = {name: (set(), set()) for name in doc.variables}
