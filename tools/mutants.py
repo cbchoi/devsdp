@@ -30,11 +30,8 @@ MUTANTS = [
       "        return any(self.doc.entities[y].stereotype == m.Stereotype.VOID for y in mu.names())",
       "        return False"),
     # 정의 3. 요구, Dec, Amb -------------------------------------------------
-    m("F4 참인 규칙의 분해를 우선순위로 거르지 않음", FO,
-      "        return [[x for x in forced if not any(above(w.priority, x.priority) for w in forced)]]",
-      "        return [forced]",
-      "밀린 분해는 요구에 남아 있어도 결과를 바꾸지 않는다. 그것보다 앞선 분해가 같은 요구에 있으므로 홀로 가장 앞선 것도, "
-      "가장 앞선 자리에서 맞서는 것도 될 수 없다"),
+    m("F4 규칙이 참이어도 분해를 고를 수 있다고 봄", FO,
+      "        return [forced] if forced else [[x] for x in fams]", "        return [[x] for x in fams]"),
     m("F5 홀로 가장 앞선 것 대신 밀리지 않은 것을 결과로 봄", FO,
       "            first = [(y, x) for y, x in pool if all(above(x.priority, w.priority) for _, w in pool if w is not x)]",
       "            first = [(y, x) for y, x in pool if not any(above(w.priority, x.priority) for _, w in pool if w is not x)]"),
@@ -184,7 +181,8 @@ MUTANTS = [
     m("L8 값이 없는 변수를 받음", LO, "        if (isinstance(var.domain, m.Range) and var.domain.min > var.domain.max) or \\",
       "        if False and (isinstance(var.domain, m.Range) and var.domain.min > var.domain.max) or \\"),
     m("V1 가리키는 곳이 없는 selected 를 받음 (경로)", FO, "                if not hosts:\n                    raise AlgebraError",
-      "                if False:\n                    raise AlgebraError"),
+      "                if False:\n                    raise AlgebraError",
+      "자리가 없으면 그 자리의 구성원도 없으므로 바로 다음 검사가 거부한다. 알리는 글만 다르다"),
     m("V2 닿지 않는 정의를 가리키는 selected 를 받음", FO, "                    if d not in reachable_defs:", "                    if False:"),
     m("V3 평가가 닿지 않는 조건을 미리 보지 않음", FO, "        if rows <= MAX_ROWS:", "        if False:"),
     m("L2 (W4) 변수 이름의 글자를 보지 않음", LO, "        if not _IDENTIFIER.match(str(vname)):", "        if False:"),

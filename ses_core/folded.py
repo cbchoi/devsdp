@@ -313,13 +313,11 @@ class Semantics:
         """구성원 y 가 낼 수 있는 요구들. 요구는 분해들의 묶음이다.
 
         참인 규칙이 없으면 자기 분해 가운데 하나를 고른다(요구가 분해마다 하나씩이다). 참인 규칙이 있으면
-        고를 것이 없다. 그 규칙들의 분해 가운데 우선순위에서 밀리지 않은 것 전부가 요구 하나다.
+        고를 것이 없다. 규칙이 참인 분해 전부가 요구 하나다.
         """
         fams = decompositions(self.doc.entities[y])
         forced = [x for x in fams if x.rule is not None and value(x.rule, sigma, self.functions)]
-        if not forced:
-            return [[x] for x in fams]
-        return [[x for x in forced if not any(above(w.priority, x.priority) for w in forced)]]
+        return [forced] if forced else [[x] for x in fams]
 
     def outcomes(self, owners: list, sigma: dict) -> tuple:
         """(Dec, Amb). 구성원들이 낸 요구의 조합마다, 다른 모든 분해보다 우선순위가 앞선 분해가 있으면 그것이
@@ -521,11 +519,15 @@ class Semantics:
     # 정의 8. 실현 구조 ---------------------------------------------------
 
     def shape(self, kappa: Comp):
-        """적격 변이의 구조: (합쳐진 정의들, 고른 분해, 살아 있는 부분들의 구조). 빠진 부분은 없다."""
+        """적격 변이의 구조 (정의 8): (합쳐진 정의들, 고른 분해, 살아 있는 부분들의 구조). 빠진 부분은 없다.
+
+        고른 분해는 (그것을 낸 구성원, 분해의 이름)이고, 분해가 없는 구성요소에서는 None 이다.
+        """
         if kappa.state == GONE:
             return None
         kids = tuple((name, self.shape(c)) for name, c in kappa.parts if c.state != GONE)
-        return tuple(sorted(kappa.member.names())), kids
+        chosen = (kappa.owner, kappa.dec) if kappa.state == SPLIT else None
+        return tuple(sorted(kappa.member.names())), chosen, kids
 
 
 # ---------------------------------------------------------------------------

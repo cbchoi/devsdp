@@ -22,7 +22,9 @@ from test_parity import decorated, prioritized, with_paths  # noqa: E402
 from ses_core import classic, load_ses_dict  # noqa: E402
 from ses_core import folded as F  # noqa: E402
 from ses_core.algebra import AlgebraError, sem  # noqa: E402
+from ses_core.decisions import family  # noqa: E402
 from ses_core.extension import Layered, violations  # noqa: E402
+from ses_core.skeleton import component_path, skeleton  # noqa: E402
 from ses_core.unfold import unfold_annotated  # noqa: E402
 
 STATS: collections.Counter = collections.Counter()
@@ -49,6 +51,12 @@ def unfolded(doc, functions) -> tuple:
     return set(variants), {V for V in variants if not violations(core, V)}, len(variants)
 
 
+def skeleton_shape(T, c):
+    """뼈대(skeleton.py)를 Semantics.shape 와 같은 꼴로."""
+    chosen = (T.label(c.aspect[:-1]), family(c.aspect[-1])) if c.aspect is not None else None
+    return tuple(sorted(c.labels)), chosen, tuple((name, skeleton_shape(T, k)) for name, k in c.parts.items())
+
+
 @pytest.mark.parametrize("seed", range(600))
 def test_variants_are_the_variants_of_the_unfolded_tree(seed):
     """정리 5. 접힌 형태의 변이와 펼친 나무의 변이가 하나씩 대응하고, 핵 적격인 것끼리 대응한다."""
@@ -59,6 +67,14 @@ def test_variants_are_the_variants_of_the_unfolded_tree(seed):
     assert len({V for V, _ in mine}) == len(mine)            # 서로 다른 변이는 서로 다른 노드 집합이다
     assert {V for V, ok in mine if ok} == theirs_wf
     assert {V for V, _ in mine} == theirs
+    S, ann = unfold_annotated(doc, functions)                # 따름정리 5.1: 뼈대가 정의 표 위의 구조와 같다
+    for sigma, kappa in s.variants():
+        sk = skeleton(S.tree, ann.void, s.nodes(sigma, kappa))
+        assert (sk is None) == (kappa.state == F.GONE)
+        if sk is not None:
+            assert skeleton_shape(S.tree, sk) == s.shape(kappa)
+            assert {q for q, c in kappa.walk((s.root,)) if c.state == F.STUCK} == \
+                {component_path(S.tree, c.path) for c in walk_skeleton(sk) if c.stuck}
     STATS["variants"] += len(mine)
     STATS["ill"] += sum(not ok for _, ok in mine)
     STATS["docs_with_ill"] += any(not ok for _, ok in mine)
@@ -174,6 +190,12 @@ def test_documents_without_a_meaning_are_refused_by_both(seed):
     STATS["refused"] += bad
 
 
+def walk_skeleton(c):
+    yield c
+    for k in c.parts.values():
+        yield from walk_skeleton(k)
+
+
 def stripped(d: dict) -> dict:
     """포트와 결합을 뗀 문서. 고전 절차는 포트를 합칠 수 없는 구조를 내놓지 않으므로 구조만 견준다."""
     d = json.loads(json.dumps(d))
@@ -189,13 +211,19 @@ def classic_shape(n: dict):
     return tuple(n["labels"]), tuple((name, classic_shape(c)) for name, c in n["children"].items())
 
 
+def without_decomposition(shape):
+    """고전 절차가 낸 구조에는 고른 분해의 이름이 없다. 견줄 때는 그것을 뺀다."""
+    names, _, kids = shape
+    return names, tuple((name, without_decomposition(k)) for name, k in kids)
+
+
 @pytest.mark.parametrize("seed", range(300))
 def test_well_formed_variants_are_the_models_of_the_classic_procedure(seed):
     """적격 변이의 (변수 값, 구조)가 고전 절차가 내는 것과 같다. 여러 변이가 같은 구조를 낼 수 있다."""
     d, _, functions = prioritized(seed) if seed % 2 == 0 else decorated(seed)    # 고전 절차는 경로로 가리킨 제약을 읽지 않는다
     doc = load_ses_dict(stripped(d))
     s = F.Semantics(doc, functions)
-    mine = collections.Counter((tuple(sorted(sigma.items())), s.shape(kappa))
+    mine = collections.Counter((tuple(sorted(sigma.items())), without_decomposition(s.shape(kappa)))
                                for sigma, kappa in s.variants() if s.well_formed(kappa))
     theirs = collections.Counter((tuple(sorted(sigma.items())), classic_shape(n))
                                  for sigma, n in classic.enumerate_classic(doc, functions))
