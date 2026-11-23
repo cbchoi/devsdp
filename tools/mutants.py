@@ -356,6 +356,12 @@ MUTANTS = [
     m("PK29 구조만 가진 묶음이 아닌데도 구조의 기록으로 넘어감", PA,
       "        if not pack.library:                                 # 구조만 가진 묶음. 모델 베이스를 선언하지 않았다",
       "        if library is None:"),
+    m("PK30 모델 베이스를 바이트코드 캐시를 거쳐 실음", PA,
+      "        exec(compile(source, path, \"exec\"), mod.__dict__)    # noqa: S102  묶음의 코드를 돌리는 것이 이 함수의 일이다",
+      "        spec.loader.exec_module(mod)"),
+    m("PK31 전역 난수를 쓰는 모델을 알리지 않음", PA,
+      "            if modules.get(f.value.id) == \"random\" and f.attr not in (\"Random\", \"SystemRandom\"):",
+      "            if False:"),
     # 결정 집합의 파일 ---------------------------------------------------------
     m("Q1 결정 집합의 모르는 항목을 조용히 넘김", "ses_core/decisions.py",
       "        for key in sorted(map(str, set(x) - keys)):\n            meant = _MEANT.get(key)", "        for key in ():\n            meant = _MEANT.get(key)"),

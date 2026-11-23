@@ -168,8 +168,12 @@ def load(root: str) -> Pack:
         raise PackError(f"executors: {list(EXECUTORS)} 가운데에서 고르고 devs(참조 시뮬레이터)는 늘 든다")
     cases = []
     for i, c in enumerate(d.get("cases") or ()):
-        if not isinstance(c, dict) or set(c) - CASE_KEYS or not isinstance(c.get("name"), str):
-            raise PackError(f"cases[{i}]: 사례는 name 을 가지고, 쓸 수 있는 항목은 {sorted(CASE_KEYS)} 다")
+        if not isinstance(c, dict):
+            raise PackError(f"cases[{i}]: 사례는 이름과 값의 표로 적는다. 예: {{name: fast, decisions: cases/fast.decisions.yaml, until: 20}}")
+        if set(c) - CASE_KEYS:
+            raise PackError(f"cases[{i}]: 모르는 항목 {sorted(map(str, set(c) - CASE_KEYS))} 가 있다. 쓸 수 있는 것은 {sorted(CASE_KEYS)} 다")
+        if not isinstance(c.get("name"), str):
+            raise PackError(f"cases[{i}]: 사례에 name 이 없다")
         until = c.get("until")
         if until is not None and (isinstance(until, bool) or not isinstance(until, (int, float)) or until < 0):
             raise PackError(f"cases[{i}].until: 돌릴 시각은 0 이상의 수여야 한다")
@@ -194,6 +198,10 @@ def module(pack: Pack):
     묶음마다 다른 이름으로 싣고, 싣는 동안 불러온 묶음 안의 보조 파일은 끝나면 모듈 표에서 뺀다. 그래서 두 묶음이
     같은 이름의 보조 파일을 가져도 섞이지 않고, 파일을 고친 뒤 다시 실으면 고친 것이 읽힌다. 싣는 동안에는
     바이트코드 파일을 쓰지 않는다. 검사는 묶음의 디렉터리에 아무것도 남기지 않는다.
+
+    모델 베이스 파일은 바이트코드 캐시를 거치지 않고 원본을 읽어 돌린다. 캐시는 파일의 시각(초 단위)과 크기로
+    낡았는지를 가리므로, 같은 초 안에 같은 크기로 고친 파일은 옛 코드로 읽힌다. 고치고 바로 검사하는 흐름에서
+    그것은 고친 것을 보지 않은 검사가 된다.
     """
     path = pack.path(pack.model_file)
     name = "ses_pack_" + pack.name + "_" + hashlib.sha256(path.encode()).hexdigest()[:8]
@@ -204,7 +212,9 @@ def module(pack: Pack):
     sys.path.insert(0, pack.root)                            # 묶음 안의 다른 파일을 불러 쓸 수 있게
     quiet, sys.dont_write_bytecode = sys.dont_write_bytecode, True
     try:
-        spec.loader.exec_module(mod)
+        with open(path, "rb") as f:
+            source = f.read()
+        exec(compile(source, path, "exec"), mod.__dict__)    # noqa: S102  묶음의 코드를 돌리는 것이 이 함수의 일이다
     finally:
         sys.dont_write_bytecode = quiet
         sys.path.remove(pack.root)
@@ -338,12 +348,62 @@ def _first_difference(a: list, b: list) -> str:
 FAILED = object()                       # 읽거나 만들지 못했다는 표지. 까닭은 say 로 적었다
 
 
+_CLOCKS = {("time", "time"), ("time", "time_ns"), ("time", "monotonic"), ("time", "perf_counter"),
+           ("datetime", "now"), ("datetime", "utcnow"), ("datetime", "today"), ("date", "today")}
+
+
+def lint(source: str) -> list:
+    """모델 베이스의 글에서 재현을 깨뜨릴 수 있는 것을 찾는다: (줄 번호, 글). 전역 난수와 벽시계다.
+
+    돌려 봐서는 드러나지 않을 수 있다. 전역 난수에 씨앗을 주면 한 프로세스 안의 두 번의 실행은 같은 기록을 낸다.
+    그러나 난수를 쓰는 구성요소가 하나 더 생기면 결과가 달라진다. 글만 보는 것이라 놓치는 것도 있고
+    (이름을 바꿔 부르면 모른다), 모델이 아닌 곳에서 쓴 것을 알릴 수도 있다. 그래서 경고다.
+    """
+    import ast
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    modules, names = {}, {}                                  # 이 파일에서의 이름이 가리키는 모듈과, 모듈에서 꺼낸 이름
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                modules[a.asname or a.name] = a.name
+        elif isinstance(node, ast.ImportFrom) and node.module in ("random", "time", "datetime"):
+            for a in node.names:
+                names[a.asname or a.name] = (node.module, a.name)
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+            owner = modules.get(f.value.id) or (names.get(f.value.id) or (None, None))[1]
+            if modules.get(f.value.id) == "random" and f.attr not in ("Random", "SystemRandom"):
+                out.append((node.lineno, f"전역 난수 random.{f.attr}() 를 쓴다. random.Random(씨앗)을 모델 안에 만들어 그것을 쓴다"))
+            elif (owner, f.attr) in _CLOCKS:
+                out.append((node.lineno, f"벽시계 {owner}.{f.attr}() 를 쓴다. 모델의 시각은 self.now 만 쓴다"))
+        elif isinstance(f, ast.Name) and f.id in names:
+            origin, what = names[f.id]
+            if origin == "random" and what not in ("Random", "SystemRandom"):
+                out.append((node.lineno, f"전역 난수 {what}() 를 쓴다. random.Random(씨앗)을 모델 안에 만들어 그것을 쓴다"))
+            elif (origin, what) in _CLOCKS:
+                out.append((node.lineno, f"벽시계 {what}() 를 쓴다. 모델의 시각은 self.now 만 쓴다"))
+    return sorted(set(out))
+
+
 def model_base(pack: Pack, say) -> tuple:
     """묶음의 모델 베이스에서 (모듈 라이브러리, 함수 사전). 없거나 읽지 못한 것은 None 이고 까닭을 P2 로 적는다."""
     from . import executor as X
     library, functions = None, None
     if not pack.model_file:
         return library, functions
+    try:
+        with open(pack.path(pack.model_file), encoding="utf-8") as f:
+            for line, text in lint(f.read()):
+                say("warning", "P2", pack.model_file, f"{line}번째 줄: {text}")
+    except (OSError, UnicodeDecodeError):
+        pass                                                 # 읽지 못하면 아래에서 실을 때 알린다
     try:
         mod = module(pack)
     except (Exception, SystemExit) as e:                     # noqa: BLE001  묶음의 코드가 낸 것은 무엇이든 알린다

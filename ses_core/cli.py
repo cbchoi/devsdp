@@ -73,12 +73,17 @@ def _resolve(spec: Optional[str], what: str):
         raise Stop(FAILED, f"{what} 는 '모듈:이름' 꼴이어야 한다: {spec}")
     if os.getcwd() not in sys.path:
         sys.path.insert(0, os.getcwd())
+    quiet, sys.dont_write_bytecode = sys.dont_write_bytecode, True       # 쓰는 사람의 디렉터리에 캐시를 남기지 않는다
     try:
         obj = importlib.import_module(module)
         for part in attr.split("."):
             obj = getattr(obj, part)
     except (ImportError, AttributeError) as e:
         raise Stop(FAILED, f"{what} {spec} 를 찾을 수 없다: {e}")
+    except Exception as e:                                   # noqa: BLE001  쓰는 사람의 모듈이 실리다가 낸 것
+        raise Stop(FAILED, f"{what} {spec} 를 실을 수 없다: {type(e).__name__}: {e}")
+    finally:
+        sys.dont_write_bytecode = quiet
     return obj
 
 

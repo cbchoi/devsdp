@@ -517,3 +517,73 @@ def test_small_things_the_trial_asked_for(line, tmp_path):
     edit(line, "pack.yaml", 'pack: "1.0"', 'pack: "2"')
     code, out = ses("pack", "check", line)
     assert code == 1 and out.strip().endswith("묶음 line: 오류 1건")      # 선언을 읽지 못해도 디렉터리의 이름으로 부른다
+
+
+def test_an_edit_made_within_the_same_second_is_seen(line):
+    """같은 초 안에 같은 크기로 고친 모델 베이스. 파이썬의 바이트코드 캐시는 그것을 옛 코드로 읽는다.
+
+    검증자가 찾았다. 뼈대를 만든 직후에 모델을 고치고 검사하면 열 번에 열 번 옛 코드가 돌았다.
+    고치고 바로 검사하는 것이 이 도구를 쓰는 방식이므로 캐시를 거치지 않고 원본을 읽는다."""
+    import importlib.util
+    import py_compile
+    path = os.path.join(line, "model_base.py")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("MARK = 1\n")
+    stamp = os.stat(path)
+    py_compile.compile(path)                                 # 누군가 이 파일을 불러와 캐시가 생겼다
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text.replace("MARK = 1", "MARK = 2").replace("        self.count += 1", "        self.count += 2"))
+    os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))    # 같은 시각, 같은 크기
+    assert os.stat(path).st_size == stamp.st_size
+    spec = importlib.util.spec_from_file_location("stale_probe", path)
+    stale = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stale)
+    assert stale.MARK == 1                                   # 보통의 불러오기는 옛 코드를 읽는다. 이 시험의 전제다
+    assert P.module(P.load(line)).MARK == 2                  # 묶음의 싣기는 고친 것을 읽는다
+    log, _, _ = P.run(line, "fast")
+    assert [v["id"] for _, p, _, v in log if p == ("Source",)][:3] == [0, 2, 4]
+    assert codes(P.check(line)) == {"P6"}                    # 그래서 검사가 달라진 기록을 알린다
+
+
+def test_global_randomness_and_wall_clocks_are_pointed_out(line):
+    """전역 난수와 벽시계. 돌려 봐서는 드러나지 않을 수 있어 글에서 찾아 경고한다."""
+    found = P.lint("import random\nimport time as t\nfrom datetime import datetime\nfrom random import randint, Random\n"
+                   "a = random.Random(3)\nb = random.random()\nrandom.seed(1)\nc = randint(1, 2)\nd = Random(4)\n"
+                   "e = t.time()\nf = datetime.now()\ng = a.random()\n")
+    assert [n for n, _ in found] == [6, 7, 8, 10, 11]
+    assert "전역 난수 random.random()" in found[0][1] and "전역 난수 randint()" in found[2][1]
+    assert "벽시계 time.time()" in found[3][1] and "벽시계 datetime.now()" in found[4][1]
+    assert P.lint("def broken(:\n") == [] and P.lint("") == []
+    for name in sorted(os.listdir(PACKS)):                   # 저장소의 묶음은 지킨다
+        with open(os.path.join(PACKS, name, "model_base.py"), encoding="utf-8") as f:
+            assert P.lint(f.read()) == []
+
+    edit(line, "model_base.py", "from ses_core.devs import", "import random\nfrom ses_core.devs import")
+    edit(line, "model_base.py", "        self.count = 0", "        self.count = 0\n        random.seed(7)")
+    edit(line, "model_base.py", '        return {"out": [{"id": self.count}]}',
+         '        return {"out": [{"id": self.count, "luck": random.random()}]}')
+    report = P.check(line)
+    warned = [f.message for f in report.findings if f.severity == "warning" and f.code == "P2"]
+    assert len(warned) == 2 and all("전역 난수 random." in w and "번째 줄" in w for w in warned)
+    # 씨앗을 주었으므로 두 번 돌린 기록은 같다. 돌려 봐서는 재현되지 않는다는 것이 드러나지 않는다
+    assert "재현되지 않는다" not in said(report, "P6")
+
+
+def test_an_unknown_key_of_a_case_is_named(line):
+    edit(line, "pack.yaml", "{name: slow, decisions: cases/slow.decisions.yaml, until: 20}",
+         "{name: slow, decisions: cases/slow.decisions.yaml, untill: 20}")
+    text = said(P.check(line), "P0")
+    assert "cases[1]: 모르는 항목 ['untill'] 가 있다" in text and "'until'" in text
+    edit(line, "pack.yaml", "{name: slow, decisions: cases/slow.decisions.yaml, untill: 20}", "{decisions: cases/slow.decisions.yaml}")
+    assert "cases[1]: 사례에 name 이 없다" in said(P.check(line), "P0")
+
+
+def test_a_document_without_a_wellformed_variant_is_an_error(line):
+    """족의 어떤 변이가 규칙을 어기는 것은 경고다. 적격인 변이가 하나도 없으면 오류다."""
+    edit(line, "line.ses.yaml", "          - {from: Source.out, to: Worker.in}\n", "")
+    report = P.check(line)
+    assert report.family == (2, 0) and "P1" in codes(report)
+    assert "변이 2개 가운데 적격인 것이 하나도 없다" in said(report, "P1")
+    assert any(f.severity == "warning" and "적격이 아닌 변이가 있다" in f.message for f in report.of("P1"))
