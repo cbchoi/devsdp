@@ -12,7 +12,9 @@
 
 족 전체를 펼치는 길과 다른 점
 - 되돌아가지 않는다. 선택지가 둘 이상 남으면 Undecided 로 멈춘다. 제약이 나중에 걸러 낼 선택도
-  미리 정해 주어야 한다.
+  미리 정해 주어야 한다. 다만 infer 를 켜면, 결정 집합이 족을 변이 하나로 줄일 때 규칙과 제약이 정한
+  나머지를 정의 표 위의 분석으로 찾아 채운다(completed). 선택지 표가 "남은 변이 1개"라고 하는 결정
+  집합이 만들어지지 않는 일이 없게 하기 위해서다.
 - 합칠 수 없는 구성요소(분해를 가진 정의가 둘 이상 합쳐졌는데 우선순위로 가를 수 없음)는 만들지
   않고 Contradiction 으로 멈춘다. 족 전체를 펼친 길에서는 그런 변이가 있되 핵 부적격(K1)이다.
 - 없음이 된 구성요소의 아래는 만들지 않는다. 거기에 대한 결정과 규칙은 평가하지 않는다.
@@ -29,7 +31,7 @@ from typing import Optional
 from . import model as m
 from .algebra import ASP, SPEC, AlgebraError, Tree, holds
 from .classic import _allowed, counts_of, decompositions
-from .decisions import DecisionSet, override_problems, owners, with_overrides
+from .decisions import Choice, DecisionSet, override_problems, owners, with_overrides
 from .extension import Layered
 from .loader import fits
 from .profile import Profile
@@ -64,11 +66,20 @@ class Built:
 def _check(doc: m.SesDocument, ds: DecisionSet) -> None:
     """정의 수준의 결정이 문서에 맞는지 본다. 족 전체를 펼친 나무에서의 판정(decisions.excluded)과 같다."""
     reach = {e.name for e in reachable(doc)}
+    root = doc.root.name
+
+    def rooted(where: str, path) -> None:
+        """구성요소 경로는 뿌리에서 시작한다. 그렇지 않은 경로는 어느 변이에도 없다."""
+        if path is not None and (not path or path[0] != root):
+            raise AlgebraError(f"{where}: 구성요소 경로는 뿌리의 이름 {root} 에서 시작한다. 적힌 것은 {list(path)} 다. "
+                               f"계획과 기록은 뿌리를 빼고 보이지만 결정에는 뿌리부터 적는다")
+
     for c in ds.choose:
         where = "/".join(map(str, c.key))
         bad = c.problems()
         if bad:
             raise AlgebraError(f"{where}: {'; '.join(bad)}")
+        rooted(where, c.path)
         if c.at is None:
             continue
         e = doc.entities.get(c.at)
@@ -94,6 +105,7 @@ def _check(doc: m.SesDocument, ds: DecisionSet) -> None:
         bad = o.problems()
         if bad:
             raise AlgebraError(f"{where}: {'; '.join(bad)}")
+        rooted(where, o.path)
         if o.at is None:
             continue
         e = doc.entities.get(o.at)
@@ -146,13 +158,67 @@ def _sigma(doc: m.SesDocument, ds: DecisionSet, use_defaults: bool) -> dict:
     return sigma
 
 
+INFER_ASSIGNMENTS = 200000         # 정해진 것을 찾아 줄 때 돌아보는 변수 값의 조합의 한도
+
+
+def completed(doc: m.SesDocument, ds: Optional[DecisionSet] = None, functions=None) -> Optional[DecisionSet]:
+    """결정 집합이 족을 변이 하나로 줄이면, 그 변이에서 정해진 것을 결정으로 더한 결정 집합. 아니면 None.
+
+    남은 변이가 정확히 하나이면 변수 값과, 정의마다 남은 선택지가 하나인 선택 지점은 그 변이가 정한 것이다.
+    선택 규칙이나 제약이 정한 것을 사람이 다시 적지 않아도 되게 한다. 족은 정의 표 위에서 센다(theory.md 7절).
+    펼친 나무의 노드를 가리킨 결정이 있거나, 돌아볼 변수 값의 조합이 한도를 넘거나, 결정이 문서에 맞지 않으면 None.
+    """
+    from . import folded
+    ds = ds or DecisionSet()
+    if any(c.node is not None for c in ds.choose):
+        return None
+    try:
+        fam = folded.analyze(doc, functions, ds, max_assignments=INFER_ASSIGNMENTS)
+    except (folded.TooManyAssignments, AlgebraError, AttributeError, TypeError):
+        return None
+    if fam.variants != 1:
+        return None
+    have = {c.key for c in ds.choose}
+    for owner, kind, group, options in folded.choice_rows(doc, fam):
+        left = [o for o, alive in options if alive]
+        if len(left) != 1:
+            continue                                             # 자리마다 다르게 정해졌다. 정의의 결정으로 적을 수 없다
+        if kind == "variable":
+            if ds.variables.get(owner) != (left[0],):
+                ds = ds.assign(owner, left[0])
+            continue
+        c = (Choice(at=owner, specialization=group, alternative=(left[0],)) if kind == "alternative" else
+             Choice(at=owner, multi_aspect=group, count=(left[0],)) if kind == "count" else
+             Choice(at=owner, aspect=(left[0],)))
+        if c.key not in have:
+            ds = ds.decide(c)
+    return ds
+
+
 def build(doc: m.SesDocument, ds: Optional[DecisionSet] = None, profile: Profile = None, functions=None,
-          use_defaults: bool = False) -> Built:
+          use_defaults: bool = False, infer: bool = False) -> Built:
     """변수 값과 결정 집합이 정하는 변이 하나를 만든다.
 
     선택지가 둘 이상 남는 선택 지점이 있으면 Undecided, 만들 수 있는 변이가 없으면 Contradiction 을 낸다.
     use_defaults 이면 정해지지 않은 변수와 specialization 에 문서가 적어 둔 기본값(default)을 쓴다.
+
+    infer 이면, 적힌 결정만으로는 선택 지점이 남아도 결정 집합이 족을 변이 하나로 줄일 때 그 변이를 만든다.
+    남은 변이가 하나라는 것은 족 전체를 세어야 알 수 있으므로 그때만 정의 표 위의 분석을 한 번 한다.
+    명령줄 도구와 묶음의 검사는 이것을 켠다. 그래서 선택지 표가 "남은 변이 1개"라고 한 결정 집합은 만들어진다.
     """
+    try:
+        return _build(doc, ds, profile, functions, use_defaults)
+    except Undecided:
+        more = completed(doc, ds, functions) if infer else None
+        if more is None:
+            raise
+    built = _build(doc, more, profile, functions, use_defaults)
+    mine = ({c.key for c in ds.choose} | {o.key for o in ds.set}) if ds is not None else set()
+    return Built(built.layered, built.variant, built.sigma, built.used,
+                 tuple(k for k in built.unused if k in mine))       # 찾아 준 결정이 쓰이지 않았다고 알리지 않는다
+
+
+def _build(doc: m.SesDocument, ds: Optional[DecisionSet], profile: Profile, functions, use_defaults: bool) -> Built:
     ds = ds or DecisionSet()
     _check(doc, ds)
     sigma = _sigma(doc, ds, use_defaults)

@@ -35,11 +35,21 @@ VERSION = "1.0"
 EXECUTORS = ("devs", "pyevsim", "cevsim")
 KEYS = {"pack", "name", "title", "document", "profile", "model_base", "binding", "executors", "cases", "experiments"}
 MODEL_BASE_KEYS = {"file", "library", "functions", "native"}
-CASE_KEYS = {"name", "decisions", "defaults", "until", "doc"}
+CASE_KEYS = {"name", "decisions", "defaults", "until", "max_steps", "doc"}
+MAX_STEPS = 1000000                 # 사례를 돌릴 때의 걸음 수의 한도. 사례의 max_steps 로 바꾼다
+
+
+# 실행기 사이의 일치를 본 결과. 사람에게 보이는 글이다. 기계가 읽는 이름은 ops.py 가 붙인다
+REFERENCE, SAME, DIFFERENT, SKIPPED = "기준", "같다", "다르다", "건너뜀"
+SKIPPED_NATIVE, VIOLATES, STOPPED = "건너뜀(특정 엔진의 모듈이 들어 있다)", "규약 위반", "멈춤"
 
 
 class PackError(Exception):
-    """묶음의 선언을 읽을 수 없다."""
+    """묶음의 선언을 읽을 수 없거나 사례를 돌릴 수 없다. code 는 검사의 부호(P0 에서 P7)다."""
+
+    def __init__(self, message: str, code: str = "P0") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -48,6 +58,7 @@ class Case:
     decisions: Optional[str] = None     # 결정 집합의 파일. 없으면 문서의 기본값으로 정해져야 한다
     defaults: bool = False              # 정해지지 않은 곳에 문서의 기본값을 쓰는가
     until: Optional[float] = None       # 이 시각까지 돌린다. 없으면 계획까지만 만든다
+    max_steps: int = MAX_STEPS          # 걸음 수의 한도. 끝나지 않는 모델을 멈추기 위한 것이다
 
 
 @dataclass(frozen=True)
@@ -164,8 +175,11 @@ def load(root: str) -> Pack:
             raise PackError(f"cases[{i}].until: 돌릴 시각은 0 이상의 수여야 한다")
         if until is not None and not library:
             raise PackError(f"cases[{i}].until: 돌리려면 모델 베이스와 바인딩이 있어야 한다")
+        steps = c.get("max_steps", MAX_STEPS)
+        if isinstance(steps, bool) or not isinstance(steps, int) or steps < 1:
+            raise PackError(f"cases[{i}].max_steps: 걸음 수의 한도는 1 이상의 정수여야 한다")
         cases.append(Case(c["name"], _inside(root, c["decisions"], f"cases[{i}].decisions") if c.get("decisions") else None,
-                          bool(c.get("defaults", False)), None if until is None else float(until)))
+                          bool(c.get("defaults", False)), None if until is None else float(until), steps))
     names = [c.name for c in cases]
     if len(set(names)) != len(names):
         raise PackError("cases: 사례의 이름은 서로 달라야 한다")
@@ -175,17 +189,30 @@ def load(root: str) -> Pack:
 
 
 def module(pack: Pack):
-    """묶음의 모델 베이스 파일을 싣는다. 묶음마다 다른 이름으로 실으므로 묶음끼리 섞이지 않는다."""
+    """묶음의 모델 베이스 파일을 싣는다. 부를 때마다 파일을 다시 읽는다.
+
+    묶음마다 다른 이름으로 싣고, 싣는 동안 불러온 묶음 안의 보조 파일은 끝나면 모듈 표에서 뺀다. 그래서 두 묶음이
+    같은 이름의 보조 파일을 가져도 섞이지 않고, 파일을 고친 뒤 다시 실으면 고친 것이 읽힌다. 싣는 동안에는
+    바이트코드 파일을 쓰지 않는다. 검사는 묶음의 디렉터리에 아무것도 남기지 않는다.
+    """
     path = pack.path(pack.model_file)
     name = "ses_pack_" + pack.name + "_" + hashlib.sha256(path.encode()).hexdigest()[:8]
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
+    before = set(sys.modules)
     sys.modules[name] = mod
     sys.path.insert(0, pack.root)                            # 묶음 안의 다른 파일을 불러 쓸 수 있게
+    quiet, sys.dont_write_bytecode = sys.dont_write_bytecode, True
     try:
         spec.loader.exec_module(mod)
     finally:
+        sys.dont_write_bytecode = quiet
         sys.path.remove(pack.root)
+        inside = os.path.join(os.path.realpath(pack.root), "")
+        for other in set(sys.modules) - before - {name}:
+            file = getattr(sys.modules[other], "__file__", None)
+            if file and os.path.realpath(file).startswith(inside):
+                del sys.modules[other]
     return mod
 
 
@@ -213,11 +240,23 @@ def read_records(pack: Pack) -> dict:
         return yaml.safe_load(f) or {}
 
 
+def structure_digest(built) -> str:
+    """만든 변이의 구조의 지문. 구성요소, 포트, 결합, 속성의 값, 변수의 값을 담는다."""
+    from .extension import interpret
+    whole = {"variables": dict(built.sigma), "structure": interpret(built.layered, built.variant)}
+    text = json.dumps(whole, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def write_records(pack: Pack, records: dict) -> None:
-    lines = ["# 사례를 참조 시뮬레이터로 돌린 기록의 요약. ses pack check --record 가 적는다. 손으로 고치지 않는다.",
+    lines = ["# 사례의 기록의 요약. ses pack check --record 가 적는다. 손으로 고치지 않는다.",
+             "# 돌린 사례는 참조 시뮬레이터의 사건 기록의 지문을, 돌리지 않는 사례는 만든 구조의 지문을 적는다.",
              "# 모델 베이스나 문서를 고쳐 기록이 달라지면 검사가 알린다. 뜻한 변화이면 다시 적는다."]
     for name in sorted(records):
         r = records[name]
+        if "structure" in r:
+            lines.append(f"{name}: {{structure: \"{r['structure']}\"}}")
+            continue
         lines.append(f"{name}: {{until: {r['until']}, events: {r['events']}, "
                      f"last: {'null' if r['last'] is None else r['last']}, digest: \"{r['digest']}\"}}")
     with open(pack.path(RECORDS), "w", encoding="utf-8") as f:
@@ -231,7 +270,7 @@ def write_records(pack: Pack, records: dict) -> None:
 def _interface(name: str, mod, unit: Optional[float], say) -> None:
     """모듈 하나가 공통 모델 기반의 계약을 지키는가. 인터페이스의 선언과 처음 상태만 본다."""
     from .devs import INF, Atomic
-    from .executor import _TYPES, OffGrid, ticks
+    from .executor import _TYPES
     body = mod.body
     if not (isinstance(body, type) and issubclass(body, Atomic)):
         say("error", "P2", name, "공통 모델 기반(ses_core.devs.Atomic 의 하위 클래스)이 아니다. 특정 엔진의 모델이면 "
@@ -260,12 +299,7 @@ def _interface(name: str, mod, unit: Optional[float], say) -> None:
         ta = atom.ta()
         if isinstance(ta, bool) or not isinstance(ta, (int, float)) or ta != ta or ta < 0:
             say("error", "P2", name, f"처음 상태의 ta() 가 0 이상의 수나 INF 가 아니다: {ta!r}")
-        elif ta != INF:
-            if unit is not None:
-                try:
-                    ticks(name, ta, unit)
-                except OffGrid:
-                    say("error", "P2", name, f"기본값에서 처음 상태의 시간 전진 {ta!r} 이 시간 단위 {unit} 의 정수배가 아니다")
+        elif ta != INF:                                      # 시간 단위의 정수배인지는 실제 값으로 본다(P5 의 B5, P6)
             out = atom.output()
             if not isinstance(out, dict):
                 say("error", "P2", name, f"output() 은 포트 이름에서 값의 목록으로 가는 사전을 내야 한다: {out!r}")
@@ -301,6 +335,151 @@ def _first_difference(a: list, b: list) -> str:
     return f"사건의 수가 다르다. 참조 {len(a)}개, 이 실행기 {len(b)}개"
 
 
+FAILED = object()                       # 읽거나 만들지 못했다는 표지. 까닭은 say 로 적었다
+
+
+def model_base(pack: Pack, say) -> tuple:
+    """묶음의 모델 베이스에서 (모듈 라이브러리, 함수 사전). 없거나 읽지 못한 것은 None 이고 까닭을 P2 로 적는다."""
+    from . import executor as X
+    library, functions = None, None
+    if not pack.model_file:
+        return library, functions
+    try:
+        mod = module(pack)
+    except (Exception, SystemExit) as e:                     # noqa: BLE001  묶음의 코드가 낸 것은 무엇이든 알린다
+        say("error", "P2", pack.model_file, f"모델 베이스를 실을 수 없다: {type(e).__name__}: {e}")
+        return library, functions
+    if pack.functions:
+        functions = getattr(mod, pack.functions, None)
+        if not isinstance(functions, Mapping) or not all(callable(f) for f in functions.values()):
+            say("error", "P2", pack.model_file, f"{pack.functions} 는 이름에서 함수로 가는 사전이어야 한다")
+            functions = None
+    if pack.library:
+        library = getattr(mod, pack.library, None)
+        if not isinstance(library, Mapping) or not all(isinstance(m, X.Module) for m in library.values()):
+            say("error", "P2", pack.model_file, f"{pack.library} 는 모듈의 이름에서 모듈로 가는 사전이어야 한다. "
+                                               "ses_core.devs.module_of(클래스) 로 만든다")
+            library = None
+    return library, functions
+
+
+def document(pack: Pack, say) -> tuple:
+    """묶음의 (문서, 프로파일). 읽지 못한 것은 None 이고 까닭을 P1 로 적는다."""
+    from .loader import LoadError, load_ses
+    from .profile import load_profile
+    doc = profile = None
+    try:
+        profile = load_profile(pack.path(pack.profile)) if pack.profile else None
+    except Exception as e:                                   # noqa: BLE001
+        say("error", "P1", pack.profile, f"프로파일을 읽을 수 없다: {type(e).__name__}: {e}")
+    try:
+        doc = load_ses(pack.path(pack.document))
+    except LoadError as e:
+        say("error", "P1", pack.document, f"문서를 적재할 수 없다. {e}")
+    except Exception as e:                                   # noqa: BLE001
+        say("error", "P1", pack.document, f"문서를 읽을 수 없다: {type(e).__name__}: {e}")
+    return doc, profile
+
+
+def decisions_of(pack: Pack, relative: Optional[str], where: str, doc, say):
+    """묶음 안의 결정 집합 하나. relative 가 없으면 None, 읽지 못했거나 다른 문서의 것이면 FAILED (P4)."""
+    from .decisions import DecisionError, load_decisions
+    if not relative:
+        return None
+    try:
+        ds = load_decisions(pack.path(relative))
+    except DecisionError as e:
+        say("error", "P4", where, f"결정 집합의 모양이 틀렸다. {e}")
+        return FAILED
+    except Exception as e:                                   # noqa: BLE001
+        say("error", "P4", where, f"결정 집합을 읽을 수 없다: {type(e).__name__}: {str(e).splitlines()[0]}")
+        return FAILED
+    if ds.target is not None and ds.target != doc.name:
+        say("error", "P4", where, f"결정 집합의 target 이 {ds.target} 인데 문서의 이름은 {doc.name} 이다")
+        return FAILED
+    return ds
+
+
+def build_variant(doc, ds, profile, functions, defaults: bool, where: str, say):
+    """결정 집합이 정하는 변이 하나를 만든다. 만들지 못하면 FAILED 이고 까닭을 P4 로 적는다."""
+    from . import direct
+    from .algebra import AlgebraError
+    try:
+        built = direct.build(doc, ds, profile=profile, functions=functions, use_defaults=defaults, infer=True)
+    except direct.Undecided as e:
+        say("error", "P4", where, f"결정이 모자라다. {e}")
+        return FAILED
+    except direct.Contradiction as e:
+        say("error", "P4", where, f"만들 수 없다. {e}")
+        return FAILED
+    except AlgebraError as e:
+        say("error", "P4", where, f"결정 집합이 문서에 맞지 않다. {e}")
+        return FAILED
+    for key in built.unused:
+        say("warning", "P4", where, "쓰이지 않은 결정: " + "/".join(str(k) for k in key))
+    return built
+
+
+def shown(built, found: list) -> list:
+    """위반들을 사람이 읽는 줄로. 나무의 경로 대신 구성요소 경로로 적는다."""
+    from .algebra import ENT
+    from .skeleton import component_path
+    T = built.layered.ses.tree
+    out = []
+    for layer, code, path, msg in found:
+        where = component_path(T, path) if T.kinds.get(path) == ENT else path
+        out.append(f"{layer} {code} {'/'.join(map(str, where))}: {msg}")
+    return out
+
+
+def _longer(e: BaseException) -> str:
+    """걸음 수의 한도에 걸렸을 때 덧붙이는 말."""
+    return ". 더 길게 돌리려면 pack.yaml 의 그 사례에 max_steps 를 적는다" if "정해진 걸음 수" in str(e) else ""
+
+
+def components_of(built) -> int:
+    """만든 변이의 구성요소의 수."""
+    from .skeleton import skeleton
+    sk = skeleton(built.layered.ses.tree, built.layered.void, built.variant)
+
+    def count(c) -> int:
+        return 1 + sum(count(x) for x in c.parts.values())
+
+    return count(sk) if sk is not None else 0
+
+
+def few(lines: list, limit: int = 8) -> list:
+    """줄이 많으면 앞의 몇 줄과 나머지의 수만 낸다. 복제본마다 같은 잘못이 되풀이될 때를 위해서다."""
+    if len(lines) <= limit:
+        return lines
+    return lines[:limit - 1] + [f"같은 종류의 줄이 {len(lines) - limit + 1}건 더 있다. 앞의 것을 고치고 다시 본다"]
+
+
+def unconsumed(doc, binding, library: Mapping, plan: dict, atoms: list, told: set) -> list:
+    """모델에 전해지지 않는 속성들. 묶인 원자 구성요소의 정의가 가진 속성 가운데 모듈의 매개변수가 아닌 것이다.
+
+    속성의 이름을 잘못 적으면 모델은 아무 말 없이 기본값으로 돈다. 그것을 알리려는 것이다. 문서의 식은 속성을
+    읽지 않으므로 모델에 가지 않는 속성은 설명으로만 남는다. 뜻한 것이면 경고를 그대로 둔다.
+    """
+    from . import structure as st
+    out = []
+    for p in atoms:
+        node = st.subtree(plan, p)
+        mod = library.get(node.get("module"))
+        if mod is None:
+            continue
+        labels = [x for x in node.get("labels", ()) if x in doc.entities]
+        renamed = {a for x in labels if x in binding.map for a in binding.map[x].params.values()}
+        for label in labels:
+            for attr in doc.entities[label].attributes:
+                if attr in mod.params or attr in renamed or (label, attr) in told:
+                    continue
+                told.add((label, attr))
+                out.append(f"정의 {label} 의 속성 {attr} 은 모듈 {mod.name} 의 매개변수가 아니다. 모델에 전해지지 않는다. "
+                           f"모듈의 매개변수는 {sorted(mod.params)} 다")
+    return out
+
+
 def check(root: str, record: bool = False, executors: Optional[tuple] = None) -> Report:
     """묶음을 검사한다. record 이면 사례의 기록을 records.yaml 에 적는다.
 
@@ -316,50 +495,18 @@ def check(root: str, record: bool = False, executors: Optional[tuple] = None) ->
     def say(severity: str, code: str, where: str, message: str) -> None:
         report.findings.append(Finding(severity, code, where, message))
 
-    from . import direct, edit
+    from . import edit
     from . import executor as X
     from . import structure as st
-    from .algebra import ENT, AlgebraError
-    from .decisions import load_decisions
     from .devs import DevsExecutor, simulate
     from .diagnose import analyze
     from .extension import violations
-    from .loader import LoadError, load_ses
-    from .profile import load_profile
-    from .skeleton import component_path
 
     # P2 모델 베이스 (문서의 식이 부르는 함수가 여기 있으므로 문서보다 먼저 싣는다) -------------
-    library, functions = None, None
-    if pack.model_file:
-        try:
-            mod = module(pack)
-        except Exception as e:                               # noqa: BLE001
-            say("error", "P2", pack.model_file, f"모델 베이스를 실을 수 없다: {type(e).__name__}: {e}")
-            mod = None
-        if mod is not None and pack.functions:
-            functions = getattr(mod, pack.functions, None)
-            if not isinstance(functions, Mapping) or not all(callable(f) for f in functions.values()):
-                say("error", "P2", pack.model_file, f"{pack.functions} 는 이름에서 함수로 가는 사전이어야 한다")
-                functions = None
-        if mod is not None and pack.library:
-            library = getattr(mod, pack.library, None)
-            if not isinstance(library, Mapping) or not all(isinstance(m, X.Module) for m in library.values()):
-                say("error", "P2", pack.model_file, f"{pack.library} 는 모듈의 이름에서 모듈로 가는 사전이어야 한다. "
-                                                   "ses_core.devs.module_of(클래스) 로 만든다")
-                library = None
+    library, functions = model_base(pack, say)
 
     # P1 문서 ---------------------------------------------------------------------------------
-    doc = profile = None
-    try:
-        profile = load_profile(pack.path(pack.profile)) if pack.profile else None
-    except Exception as e:                                   # noqa: BLE001
-        say("error", "P1", pack.profile, f"프로파일을 읽을 수 없다: {type(e).__name__}: {e}")
-    try:
-        doc = load_ses(pack.path(pack.document))
-    except LoadError as e:
-        say("error", "P1", pack.document, f"문서를 적재할 수 없다. {e}")
-    except Exception as e:                                   # noqa: BLE001
-        say("error", "P1", pack.document, f"문서를 읽을 수 없다: {type(e).__name__}: {e}")
+    doc, profile = document(pack, say)
     if doc is not None:
         a = analyze(edit.load(pack.path(pack.document)), profile, functions=functions)
         broken = False
@@ -410,50 +557,56 @@ def check(root: str, record: bool = False, executors: Optional[tuple] = None) ->
     records = read_records(pack)
     new_records = dict(records)
     skipped: set = set()
+    if doc is not None and library is not None and any(c.until is not None for c in pack.cases):
+        for name in pack.executors:                          # 이 컴퓨터에 없는 실행기는 사례를 보기 전에 한 번 알린다
+            if name != "devs" and (executors is None or name in executors):
+                engine, why = _engine(name)
+                if engine is None:
+                    skipped.add(name)
+                    say("info", "P7", name, f"이 실행기에서는 돌리지 않았다. {why}")
+    told: set = set()                                        # 이미 알린 (정의, 속성). 사례마다 되풀이하지 않는다
     can_run = doc is not None and not report.of("P2") and not [f for f in report.of("P3") if f.severity == "error"]
     for case in pack.cases if doc is not None else ():
         info: dict = {}
         report.cases[case.name] = info
-        try:
-            ds = load_decisions(pack.path(case.decisions)) if case.decisions else None
-        except Exception as e:                               # noqa: BLE001
-            say("error", "P4", case.name, f"결정 집합을 읽을 수 없다: {type(e).__name__}: {str(e).splitlines()[0]}")
+        ds = decisions_of(pack, case.decisions, case.name, doc, say)
+        if ds is FAILED:
             continue
-        if ds is not None and ds.target is not None and ds.target != doc.name:
-            say("error", "P4", case.name, f"결정 집합의 target 이 {ds.target} 인데 문서의 이름은 {doc.name} 이다")
+        built = build_variant(doc, ds, profile, functions, case.defaults, case.name, say)
+        if built is FAILED:
             continue
-        try:
-            built = direct.build(doc, ds, profile=profile, functions=functions, use_defaults=case.defaults)
-        except direct.Undecided as e:
-            say("error", "P4", case.name, f"결정이 모자라다. {e}")
-            continue
-        except direct.Contradiction as e:
-            say("error", "P4", case.name, f"만들 수 없다. {e}")
-            continue
-        except AlgebraError as e:
-            say("error", "P4", case.name, f"결정 집합이 문서에 맞지 않다. {e}")
-            continue
-        for key in built.unused:
-            say("warning", "P4", case.name, "쓰이지 않은 결정: " + "/".join(str(k) for k in key))
-        T, V = built.layered.ses.tree, built.variant
+        V = built.variant
         info["variables"] = dict(built.sigma)
 
-        def shown(found: list) -> list:
-            out = []
-            for layer, code, path, msg in found:
-                where = component_path(T, path) if T.kinds.get(path) == ENT else path
-                out.append(f"{layer} {code} {'/'.join(map(str, where))}: {msg}")
-            return out
+        info["components"] = components_of(built)
+
+        def keep_structure() -> None:
+            """돌리지 않는 사례. 만든 구조의 지문을 적어 둔 것과 견준다."""
+            mine = {"structure": structure_digest(built)}
+            info["structure"] = mine["structure"]
+            old = records.get(case.name)
+            if record:
+                new_records[case.name] = mine
+            elif old is None:
+                say("warning", "P6", case.name, "적어 둔 기록이 없다. ses pack check --record 로 적는다")
+            elif old != mine:
+                say("error", "P6", case.name, f"구조가 적어 둔 것과 다르다. 적어 둔 지문은 {old.get('structure') or old.get('digest')}, "
+                                              f"지금은 {mine['structure']} 이다. 뜻한 변화이면 --record 로 다시 적는다")
 
         found = violations(built.layered, V)
-        for line in shown(found):
+        for line in few(shown(built, found)):
             say("error", "P5", case.name, "이 변이는 조립되지 않는다. " + line)
-        if found or library is None or binding is None or not can_run:
+        if found:
             continue
+        if not pack.library:                                 # 구조만 가진 묶음. 모델 베이스를 선언하지 않았다
+            keep_structure()
+            continue
+        if library is None or binding is None or not can_run:
+            continue                                         # 모델 베이스나 바인딩에 오류가 있다. 위에서 알렸다
         dx = DevsExecutor()
         L, ext = X.attach(built.layered, dx, binding, library)
         found = violations(X.alone(L, ext), V)
-        for line in shown(found):
+        for line in few(shown(built, found)):
             say("error", "P5", case.name, "이 변이는 실행 가능하지 않다. " + line)
         if found:
             continue
@@ -461,62 +614,91 @@ def check(root: str, record: bool = False, executors: Optional[tuple] = None) ->
         atoms = X.frontier(plan)
         info["atoms"], info["links"] = len(atoms), sum(st.flatten(plan).values())
         portable = all(st.subtree(plan, p).get("module") not in pack.native for p in atoms)
+        extra: dict = {}                                     # 모델에만 있는 포트: (모듈, 포트)에서 자리들로
+        for p in atoms:
+            node = st.subtree(plan, p)
+            mod = library.get(node.get("module"))
+            for port in sorted(set(mod.ports) - set(node["ports"])) if mod is not None else ():
+                extra.setdefault((mod.name, port), []).append("/".join(p))
+        for (mod_name, port), places in extra.items():
+            say("error", "P5", case.name, f"{places[0]}" + (f" 등 {len(places)}곳" if len(places) > 1 else "")
+                + f": 모듈 {mod_name} 의 포트 {port} 가 문서의 그 정의에 없다. 모델의 PORTS 에 적은 포트는 문서의 ports 에도 적는다")
+        for line in unconsumed(doc, binding, library, plan, atoms, told):
+            say("warning", "P5", case.name, line)
+        if extra:
+            continue
         if case.until is None:
+            keep_structure()
             continue
 
         # P6 실행과 기록 ----------------------------------------------------------------------
-        def run_reference() -> list:
-            return simulate(X.realize(L, ext, dx, V), case.until)
+        def run_reference(probe: Optional[list] = None) -> list:
+            return simulate(X.realize(L, ext, dx, V), case.until, max_steps=case.max_steps, probe=probe)
 
+        touched: list = []
         try:
             log = run_reference()
-            again = run_reference()
+            again = run_reference(touched)                   # 받는 모델마다 값을 베껴서 넘기며 한 번 더
         except Exception as e:                               # noqa: BLE001
-            say("error", "P6", case.name, f"참조 시뮬레이터에서 돌다가 멈췄다: {type(e).__name__}: {e}")
+            say("error", "P6", case.name, f"참조 시뮬레이터에서 돌다가 멈췄다: {type(e).__name__}: {e}" + _longer(e))
             continue
         outs = {p: {port for port, decl in st.subtree(plan, p)["ports"].items() if decl[1] == "out"} for p in atoms}
         strays = sorted({("/".join(p), port) for _, p, port, _ in log if port not in outs.get(tuple(p), ())})
         for where, port in strays:
-            say("error", "P6", case.name, f"{where} 가 선언하지 않은 출력 포트 {port} 로 냈다")
+            say("error", "P6", case.name, f"{where} 가 선언하지 않은 출력 포트 {port} 로 냈다. "
+                                          "모델의 PORTS 와 문서의 ports 에 그 포트를 적는다")
         mine = summary(log, case.until)
         info.update(events=mine["events"], last=mine["last"], digest=mine["digest"])
-        if digest(again) != mine["digest"]:
-            say("error", "P6", case.name, "같은 사례를 두 번 돌린 기록이 다르다. 재현되지 않는다. 난수는 씨앗을 "
-                                          "매개변수로 받아 모델 안에서 만들고, 시각은 self.now 만 쓴다")
+        mutated = sorted({(who, function, port) for who, function, port, _ in touched})
+        for who, function, port in mutated[:5]:
+            say("error", "P6", case.name, f"{who} 의 {function}() 이 포트 {port} 에서 받은 값을 고쳤다. 받은 값은 고치지 않는다. "
+                                          "고쳐야 하면 복사해서 고친다. 엔진마다 값을 넘기는 방식이 달라 기록이 달라진다")
+        if digest(again) != mine["digest"] and not mutated:
+            try:
+                third = run_reference()
+            except Exception:                                # noqa: BLE001
+                third = None
+            if third is None or digest(third) != mine["digest"]:
+                say("error", "P6", case.name, "같은 사례를 두 번 돌린 기록이 다르다. 재현되지 않는다. 난수는 씨앗을 "
+                                              "매개변수로 받아 모델 안에서 만들고, 시각은 self.now 만 쓴다")
+            else:
+                say("error", "P6", case.name, "받는 모델마다 값을 베껴서 넘기면 기록이 달라진다. 낸 값을 낸 뒤에 고치는 모델이 "
+                                              "있다. 낸 값은 다시 고치지 않는다. 엔진마다 값을 넘기는 방식이 달라 기록이 달라진다")
+        if strays or mutated or digest(again) != mine["digest"]:
             continue
         old = records.get(case.name)
         if record:
             new_records[case.name] = mine
         elif old is None:
-            say("info", "P6", case.name, "적어 둔 기록이 없다. ses pack check --record 로 적는다")
+            say("warning", "P6", case.name, "적어 둔 기록이 없다. ses pack check --record 로 적는다")
         elif (old.get("digest"), old.get("until")) != (mine["digest"], mine["until"]):
             say("error", "P6", case.name, f"기록이 적어 둔 것과 다르다. 적어 둔 것은 사건 {old.get('events')}개 "
                                           f"(지문 {old.get('digest')}), 지금은 {mine['events']}개 (지문 {mine['digest']}). "
                                           "뜻한 변화이면 --record 로 다시 적는다")
 
         # P7 실행기 사이의 일치 ----------------------------------------------------------------
-        info["executors"] = {"devs": "기준"}
+        info["executors"] = {"devs": REFERENCE}
         for name in pack.executors:
             if name == "devs" or (executors is not None and name not in executors):
                 continue
             if not portable:
-                info["executors"][name] = "건너뜀(특정 엔진의 모듈이 들어 있다)"
+                info["executors"][name] = SKIPPED_NATIVE
+                continue
+            if name in skipped:
+                info["executors"][name] = SKIPPED
                 continue
             engine, why = _engine(name)
             if engine is None:
-                info["executors"][name] = "건너뜀"
-                if name not in skipped:                      # 실행기마다 한 번만 알린다
-                    skipped.add(name)
-                    say("info", "P7", name, f"이 실행기에서는 돌리지 않았다. {why}")
+                info["executors"][name] = SKIPPED
                 continue
             try:
                 L2, ext2 = X.attach(built.layered, engine, X.Binding(name, binding.map, binding.target, binding.time_unit),
                                     library)
                 found = violations(X.alone(L2, ext2), V)
                 if found:
-                    for line in shown(found):
+                    for line in shown(built, found):
                         say("error", "P7", case.name, f"{name} 의 규약을 어긴다. " + line)
-                    info["executors"][name] = "규약 위반"
+                    info["executors"][name] = VIOLATES
                     continue
                 sim = X.realize(L2, ext2, engine, V)
                 try:
@@ -525,17 +707,22 @@ def check(root: str, record: bool = False, executors: Optional[tuple] = None) ->
                     sim.close()
             except Exception as e:                           # noqa: BLE001
                 say("error", "P7", case.name, f"{name} 에서 돌다가 멈췄다: {type(e).__name__}: {e}")
-                info["executors"][name] = "멈춤"
+                info["executors"][name] = STOPPED
                 continue
             if theirs == log:
-                info["executors"][name] = "같다"
+                info["executors"][name] = SAME
             else:
-                info["executors"][name] = "다르다"
+                info["executors"][name] = DIFFERENT
                 say("error", "P7", case.name, f"{name} 의 기록이 참조 시뮬레이터와 다르다. " + _first_difference(log, theirs))
-    if record and new_records != records:
-        write_records(pack, new_records)
-    for name in sorted(set(records) - {c.name for c in pack.cases}):
-        say("warning", "P6", name, f"{RECORDS} 에 사례 {name} 의 기록이 있는데 그런 사례가 없다")
+    stale = sorted(set(records) - {c.name for c in pack.cases})
+    if record:                                               # 없어진 사례의 기록은 지운다
+        new_records = {name: r for name, r in new_records.items() if name not in stale}
+        if new_records != records:
+            write_records(pack, new_records)
+    else:
+        for name in stale:
+            say("warning", "P6", name, f"{RECORDS} 에 사례 {name} 의 기록이 있는데 그런 사례가 없다. "
+                                       "ses pack check --record 가 지운다")
     return report
 
 
@@ -543,15 +730,11 @@ def run(root: str, case_name: str, until: Optional[float] = None) -> tuple:
     """묶음의 사례 하나를 참조 시뮬레이터로 돌린다. (사건 기록, 변수 값, 원자 구성요소의 수)를 돌려준다.
 
     until 을 주지 않으면 선언에 적힌 시각까지 돌린다. 만들 수 없거나 돌릴 수 없으면 PackError 를 낸다.
+    그 code 는 막힌 곳의 부호다(P0 선언, P1 문서, P2 모델 베이스, P3 바인딩, P4 결정, P5 실행 가능성, P6 실행).
     """
-    from . import direct
     from . import executor as X
-    from .algebra import AlgebraError
-    from .decisions import load_decisions
     from .devs import DevsExecutor, simulate
     from .extension import violations
-    from .loader import LoadError, load_ses
-    from .profile import load_profile
     pack = load(root)
     case = next((c for c in pack.cases if c.name == case_name), None)
     if case is None:
@@ -561,26 +744,43 @@ def run(root: str, case_name: str, until: Optional[float] = None) -> tuple:
     until = case.until if until is None else until
     if until is None:
         raise PackError(f"사례 {case_name} 에 돌릴 시각이 없다. --until 로 준다")
+    said: list = []
+
+    def say(severity: str, code: str, where: str, message: str) -> None:
+        if severity == "error":
+            said.append((code, message))
+
+    def stop() -> None:
+        if said:
+            raise PackError(f"사례 {case_name} 를 돌릴 수 없다. {said[0][1]}", said[0][0])
+
+    library, functions = model_base(pack, say)
+    stop()
+    doc, profile = document(pack, say)
+    stop()
+    ds = decisions_of(pack, case.decisions, case_name, doc, say)
+    stop()
+    built = build_variant(doc, ds, profile, functions, case.defaults, case_name, say)
+    stop()
     try:
-        mod = module(pack)
-        library = getattr(mod, pack.library)
-        functions = getattr(mod, pack.functions) if pack.functions else None
-        doc = load_ses(pack.path(pack.document))
-        profile = load_profile(pack.path(pack.profile)) if pack.profile else None
-        ds = load_decisions(pack.path(case.decisions)) if case.decisions else None
-        built = direct.build(doc, ds, profile=profile, functions=functions, use_defaults=case.defaults)
         binding = X.load_binding(pack.path(pack.binding))
-        dx = DevsExecutor()
+    except Exception as e:                                   # noqa: BLE001
+        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. 바인딩을 읽을 수 없다: {type(e).__name__}: {e}", "P3")
+    dx = DevsExecutor()
+    try:
         L, ext = X.attach(built.layered, dx, binding, library)
-        found = violations(X.alone(L, ext), built.variant) or violations(built.layered, built.variant)
-        if found:
-            raise PackError(f"이 변이는 실행 가능하지 않다. 위반 {len(found)}건. ses pack check 가 무엇인지 알린다")
-        log = simulate(X.realize(L, ext, dx, built.variant), until)
-        return log, dict(built.sigma), len(X.frontier(X.plan(L, ext, built.variant)))
-    except PackError:
-        raise
-    except (LoadError, AlgebraError, OSError, RuntimeError, ValueError, AttributeError, KeyError, TypeError) as e:
-        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. {type(e).__name__}: {e}")
+        found = violations(built.layered, built.variant) or violations(X.alone(L, ext), built.variant)
+    except Exception as e:                                   # noqa: BLE001
+        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. {type(e).__name__}: {e}", "P5")
+    if found:
+        raise PackError(f"이 변이는 실행 가능하지 않다. 위반 {len(found)}건. 첫째: {shown(built, found)[0]}. "
+                        "ses pack check 가 모두 알린다", "P5")
+    try:
+        log = simulate(X.realize(L, ext, dx, built.variant), until, max_steps=case.max_steps)
+        atoms = len(X.frontier(X.plan(L, ext, built.variant)))
+    except (Exception, SystemExit) as e:                     # noqa: BLE001  모델의 코드가 낸 것은 무엇이든 알린다
+        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. 참조 시뮬레이터에서 멈췄다: {type(e).__name__}: {e}" + _longer(e), "P6")
+    return log, dict(built.sigma), atoms
 
 
 # ---------------------------------------------------------------------------
@@ -659,13 +859,17 @@ entities:
   REQUIRED   구동되어야 하는 입력 포트
   PARAMS     매개변수 이름에서 (타입, 기본값)으로. 문서의 같은 이름의 속성이 값을 준다.
              시간 전진으로 쓰는 값은 타입을 time 으로 적는다. 바인딩의 시간 단위의 정수배여야 한다
+             타입은 bool, int, float, str, time 가운데 하나다
   init       처음 상태
   ta         다음 내부 사건까지 남은 시간. 쉬고 있으면 INF
   output     내부 사건 직전의 출력. 포트 이름에서 값의 목록으로
   internal   내부 전이
-  external   입력을 받았을 때의 전이. bag 은 포트 이름에서 값의 목록으로
+  external   입력을 받았을 때의 전이. elapsed 는 이 모델의 마지막 전이에서 흐른 시간, bag 은 포트 이름에서 값의 목록으로
+  confluent  내부 사건과 입력이 같은 시각에 겹쳤을 때. 적지 않으면 internal() 뒤에 external(0.0, bag) 이다
+self.now 는 지금 처리하는 사건의 시각이다.
 이 계약을 지킨 모델은 참조 시뮬레이터, pyevsim, cevsim 에서 같은 기록을 낸다.
 난수가 필요하면 씨앗을 매개변수로 받아 random.Random(씨앗)을 모델 안에 둔다. 그래야 기록이 재현된다.
+받은 값과 낸 값은 고치지 않는다. 고쳐야 하면 복사해서 고친다.
 """
 
 from ses_core.devs import INF, Atomic, module_of

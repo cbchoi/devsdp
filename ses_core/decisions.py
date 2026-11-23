@@ -288,10 +288,56 @@ class DecisionSet:
                            tuple(Override.from_dict(o) for o in d.get("set") or ()))
 
 
+class DecisionError(ValueError):
+    """결정 집합의 파일이 형식에 맞지 않다. 어디가 틀렸는지를 적는다."""
+
+
+_FILE_KEYS = {"decisions", "name", "target", "variables", "choose", "set"}
+_CHOICE_KEYS = {"at", "path", "node", "aspect", "specialization", "alternative", "multi_aspect", "count"}
+_SET_KEYS = {"at", "path", "attribute", "value"}
+_MEANT = {"variable": "variables", "vars": "variables", "chose": "choose", "choice": "choose", "choices": "choose",
+          "sets": "set", "override": "set", "overrides": "set", "alternatives": "alternative", "spec": "specialization",
+          "multi-aspect": "multi_aspect", "multiaspect": "multi_aspect", "attr": "attribute", "val": "value"}
+
+
+def check_file(d) -> None:
+    """파일에서 읽은 결정 집합의 모양을 본다. 틀리면 DecisionError 를 낸다.
+
+    모르는 항목을 조용히 넘기지 않는다. variables 를 variable 로 적으면 결정이 없는 것처럼 읽혀서,
+    틀린 곳과 먼 곳에서 "결정이 모자라다"고 나온다. 스키마(schema/decisions.schema.json)의 항목과 같다.
+    """
+    def known(x, keys, where) -> None:
+        if not isinstance(x, dict):
+            raise DecisionError(f"{where}: 이름과 값의 표로 적어야 한다. 적힌 것은 {x!r} 다")
+        for key in sorted(map(str, set(x) - keys)):
+            meant = _MEANT.get(key)
+            raise DecisionError(f"{where}: 모르는 항목 {key} 가 있다. " + (f"{meant} 를 뜻했는가. " if meant else "")
+                                + f"쓸 수 있는 것은 {sorted(keys)} 다")
+
+    if d is None:
+        raise DecisionError('파일이 비어 있다. decisions: "1.0" 으로 시작하고 target 에 문서의 이름을 적는다')
+    known(d, _FILE_KEYS, "결정 집합")
+    if d.get("variables") is not None and not isinstance(d["variables"], dict):
+        raise DecisionError("variables: 변수 이름에서 값으로 가는 표로 적는다. 예: variables: {n: 3}")
+    for key, keys in (("choose", _CHOICE_KEYS), ("set", _SET_KEYS)):
+        items = d.get(key)
+        if items is None:
+            continue
+        if not isinstance(items, list):
+            raise DecisionError(f"{key}: 목록으로 적는다. 항목마다 - 로 시작한다")
+        for i, item in enumerate(items):
+            known(item, keys, f"{key}[{i}]")
+            for where in ("path", "node"):
+                if item.get(where) is not None and not isinstance(item[where], list):
+                    raise DecisionError(f"{key}[{i}].{where}: 이름의 목록으로 적는다. 예: [뿌리, 부분]")
+
+
 def load_decisions(path: str) -> DecisionSet:
     import yaml
     with open(path, encoding="utf-8") as f:
-        return DecisionSet.from_dict(yaml.safe_load(f))
+        d = yaml.safe_load(f)
+    check_file(d)
+    return DecisionSet.from_dict(d)
 
 
 # ---------------------------------------------------------------------------

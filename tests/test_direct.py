@@ -151,6 +151,26 @@ def rand_decisions(rng: random.Random, doc, L: Layered) -> DecisionSet:
     return ds
 
 
+def inferred(doc, functions, L, ds) -> None:
+    """적힌 결정만으로는 모자랄 때. 결정 집합이 족을 변이 하나로 줄이면 infer 가 그 변이를 만든다."""
+    R = apply(L.ses, ds)
+    left = sem(R) if R is not None else []
+    more = direct.completed(doc, ds, functions)
+    assert (more is not None) == (len(left) == 1)                # 남은 변이가 하나일 때, 그때만 채운다
+    try:
+        b = direct.build(doc, ds, functions=functions, infer=True)
+    except Undecided:
+        STATS["infer_still_undecided"] += len(left) == 1         # 자리마다 다르게 정해져 정의의 결정으로 적을 수 없는 경우
+        return
+    except Contradiction:
+        assert len(left) == 1 and not mergeable(L, left[0])      # 하나 남은 변이가 합칠 수 없는 것이다
+        STATS["infer_contradiction"] += 1
+        return
+    assert left == [b.variant]                                   # 만든 것이 그 하나 남은 변이다
+    assert set(b.unused) <= {c.key for c in ds.choose} | {o.key for o in ds.set}
+    STATS["infer_built"] += 1
+
+
 @pytest.mark.parametrize("kind", KINDS)
 @pytest.mark.parametrize("seed", range(150))
 def test_direct_build_agrees_with_the_family_under_random_decisions(kind, seed):
@@ -168,6 +188,7 @@ def test_direct_build_agrees_with_the_family_under_random_decisions(kind, seed):
             b = direct.build(doc, ds, functions=functions)
         except Undecided:
             STATS["random_undecided"] += 1
+            inferred(doc, functions, L, ds)
             continue
         except Contradiction:
             R = apply(L.ses, ds)                                 # 만들 수 없다고 했으면 족에도 합칠 수 있는 변이가 없다
@@ -524,3 +545,43 @@ def test_direct_samples_are_not_vacuous():
     assert STATS["plans_executable"] >= 100, STATS
     assert STATS["random_built"] >= 500 and STATS["random_contradiction"] >= 500, STATS
     assert STATS["random_undecided"] >= 500 and STATS["random_unused"] >= 100, STATS
+    assert STATS["infer_built"] >= 40 and STATS["infer_contradiction"] >= 5, STATS
+    assert STATS["infer_still_undecided"] <= 5, STATS
+
+
+FLAGGED = {"ses": "1.0", "name": "Sys",
+           "variables": {"flag": {"type": "int", "range": [0, 1]}},
+           "entities": {
+               "Sys": {"root": True, "aspects": {
+                   "with": {"parts": ["A", "Opt"], "rule": {"var": "flag", "eq": 1}},
+                   "without": {"parts": ["A", "Opt"], "rule": {"var": "flag", "eq": 0}}}},
+               "A": {},
+               "Opt": {"specializations": {"presence": {
+                   "alternatives": ["Absent", "Present"],
+                   "select": {"when": {"var": "flag", "eq": 0}, "then": "Absent", "else": "Present"}}}},
+               "Absent": {"extends": "Opt", "stereotype": "void"},
+               "Present": {"extends": "Opt"}}}
+
+
+def test_what_the_rules_already_fix_need_not_be_written_again():
+    """대안만 고르면 선택 규칙이 변수 값을 정한다. 남은 변이는 하나다. infer 가 그것을 만든다.
+
+    처음 온 연구자의 역할을 맡은 검증에서 나왔다. 선택지 표는 "남은 변이 1개"라고 하는데 조립은
+    "변수가 정해지지 않았다"고 했다."""
+    doc = load_ses_dict(FLAGGED)
+    absent = DecisionSet().decide(Choice(at="Opt", specialization="presence", alternative=("Absent",)))
+    with pytest.raises(Undecided, match="변수 flag"):
+        direct.build(doc, absent)                                # 적힌 것만 보는 길은 그대로다
+    more = direct.completed(doc, absent)
+    assert more.variables == {"flag": (0,)}
+    assert Choice(at="Sys", aspect=("without",)).key in {c.key for c in more.choose}
+    b = direct.build(doc, absent, infer=True)
+    assert b.sigma == {"flag": 0} and b.unused == ()
+    assert b.variant == direct.build(doc, absent.assign("flag", 0)).variant      # 사람이 다 적은 것과 같다
+    assert direct.completed(doc, DecisionSet()) is None          # 변이가 둘 남으면 채우지 않는다
+    with pytest.raises(Undecided, match="변수 flag"):
+        direct.build(doc, DecisionSet(), infer=True)
+    clash = absent.assign("flag", 1)                             # 서로 어긋나는 결정. 남은 변이가 없다
+    assert direct.completed(doc, clash) is None
+    with pytest.raises(Contradiction):
+        direct.build(doc, clash, infer=True)

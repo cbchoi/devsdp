@@ -339,7 +339,9 @@ class Domain(Extension):
                         (r.max is not None and total > r.max) or \
                         (r.equals is not None and total != r.equals)
                     if bad:
-                        out.append(("R2", s.path, f"{r.name}: 값이 {total} 이다"))
+                        want = ", ".join(f"{word} {x}" for word, x in (("최소", r.min), ("최대", r.max), ("정확히", r.equals))
+                                         if x is not None)
+                        out.append(("R2", s.path, f"{r.name}: 값이 {total} 이다. 규칙은 {want} 이다"))
         return out
 
     def _measure(self, r: Rule, scope: View):

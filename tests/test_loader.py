@@ -321,3 +321,72 @@ def test_valid_replica_names_and_priorities_are_accepted():
                    "entities": {"R": {"root": True, "multi_aspects": {
                        "m": {"part": "P", "cardinality": 2, "naming": "unit{i}_of_{n}", "priority": -3},
                        "k": {"part": "P", "cardinality": 1, "priority": 0}}}, "P": {}}})
+
+
+def test_a_document_of_the_wrong_shape_is_refused_with_a_load_error():
+    """모양이 틀린 문서. 어디를 어떻게 틀려도 적재기는 LoadError 로만 알린다. 다른 예외가 새어 나가지 않는다.
+
+    처음 온 연구자의 역할을 맡은 검증에서 나왔다. cardinality 의 열쇠를 잘못 적자 KeyError 가 그대로 나왔다."""
+    import copy
+    import glob
+    import random
+
+    import yaml
+
+    here = os.path.dirname(__file__)
+    paths = sorted(glob.glob(os.path.join(here, "..", "packs", "*", "*.ses.yaml"))
+                   + glob.glob(os.path.join(here, "..", "docs", "ses-platform", "examples", "*.ses.yaml")))
+    assert len(paths) >= 4
+    junk = [None, 3, -1, 2.5, True, "x", "", [], ["x"], [1, 2], {}, {"x": 1}, {"var": 3}, {"min": "a"}, [{}], [[1]]]
+    rng = random.Random(11)
+    stats = {"loaded": 0, "refused": 0}
+
+    def places(x, at=()):
+        """문서 안의 모든 자리."""
+        yield at
+        if isinstance(x, dict):
+            for k, v in x.items():
+                yield from places(v, at + (k,))
+        elif isinstance(x, list):
+            for i, v in enumerate(x):
+                yield from places(v, at + (i,))
+
+    for path in paths:
+        with open(path, encoding="utf-8") as f:
+            original = yaml.safe_load(f)
+        spots = [p for p in places(original) if p]
+        for _ in range(400):
+            d = copy.deepcopy(original)
+            spot = rng.choice(spots)
+            target = d
+            for key in spot[:-1]:
+                target = target[key]
+            if rng.random() < 0.2 and isinstance(target, dict):
+                target[str(spot[-1]) + "x"] = target.pop(spot[-1])      # 열쇠의 이름을 틀린다
+            else:
+                target[spot[-1]] = rng.choice(junk)                     # 값을 틀린 모양으로 바꾼다
+            try:
+                load_ses_dict(d)
+                stats["loaded"] += 1
+            except LoadError as e:
+                assert str(e)
+                stats["refused"] += 1
+    assert stats["refused"] > 1000 and stats["loaded"] > 100, stats     # 설명 같은 자리는 바꿔도 적재된다
+
+    d = {"ses": "1.0", "name": "S", "variables": {"n": {"type": "int", "range": [1, 3]}},
+         "entities": {"S": {"root": True, "multi_aspects": {"many": {"part": "P", "cardinality": {"variable": "n"}}}},
+                      "P": {}}}
+    with pytest.raises(LoadError, match=r"S: cardinality: 개수는 정수, \{var: 변수\}, \{min: 수, max: 수\} 가운데 하나다"):
+        load_ses_dict(d)
+
+
+def test_a_replicated_part_written_by_its_definition_gets_a_hint():
+    d = {"ses": "1.0", "name": "S", "port_types": {"T": {"fields": {}}},
+         "entities": {"S": {"root": True, "ports": {"out": {"type": "T", "direction": "out"}},
+                            "multi_aspects": {"many": {"part": "P", "cardinality": 2, "couplings": {
+                                "pattern": "fan_out_fan_in", "fan_in": [{"from": "P.o", "to": "out"}]}}}},
+                      "P": {"ports": {"o": {"type": "T", "direction": "out"}}}}}
+    with pytest.raises(LoadError, match="부분 P 가 없다. 복제된 부분은 결합에서 {part} 로 적는다"):
+        load_ses_dict(d)
+    d["entities"]["S"]["multi_aspects"]["many"]["couplings"]["fan_in"] = [{"from": "{part}.o", "to": "out"}]
+    load_ses_dict(d)

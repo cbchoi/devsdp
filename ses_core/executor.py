@@ -282,6 +282,12 @@ class Bound(Extension):
             return "unbound"                                 # 묶이지 않은 잎. 부분이 모두 빠진 구성요소도 잎이다
         return "composite" if len(v.comp.aspects) == 1 else "broken"
 
+    @staticmethod
+    def _which(v: View) -> str:
+        """묶을 정의의 이름. 복제본은 이름이 번호로 끝나므로 구성요소의 이름만으로는 무엇을 묶을지 알 수 없다."""
+        labels = [x for x in v.comp.labels if x != v.name]
+        return f". 바인딩의 map 에 정의 {' 또는 '.join(labels)} 를 적는다" if labels else ""
+
     def _leaf(self, v: View, found: Optional[list] = None) -> dict:
         """전선의 구성요소(또는 더 내려갈 수 없는 구성요소)를 원자로 적는다."""
         m: _Merged = v.ann
@@ -293,7 +299,7 @@ class Bound(Extension):
         for p in m.port_conflicts:
             say("C0", f"포트 {p} 의 선언이 충돌한다")
         if kind == "unbound" and v.comp.is_atomic:
-            say("B1", f"원자 구성요소 {v.name} 에 묶인 모듈이 없다")
+            say("B1", f"원자 구성요소 {v.name} 에 묶인 모듈이 없다" + self._which(v))
         elif kind == "unbound":
             say("B1", f"구성요소 {v.name} 의 부분이 모두 빠졌고 묶인 모듈도 없다")
         elif kind == "bound" and m.bind is None:

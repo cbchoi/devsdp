@@ -33,6 +33,10 @@ from mutants import FAST, FULL, MUTANTS  # noqa: E402
 def check(root: str) -> int:
     """바꿀 글이 원본에 정확히 한 번씩 있는가. 어긋난 변이의 수."""
     bad = 0
+    labels = [name.split()[0] for name, *_ in MUTANTS]
+    for label in sorted({x for x in labels if labels.count(x) > 1}):
+        print(f"{label}: 같은 이름의 변이가 {labels.count(label)}개 있다. 이름으로 골라 돌릴 수 없다")
+        bad += 1
     for name, file, old, new, _ in MUTANTS:
         text = open(os.path.join(root, file), encoding="utf-8").read()
         if text.count(old) != 1 or old == new:

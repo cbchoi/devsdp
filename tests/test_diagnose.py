@@ -3,6 +3,7 @@
 """
 
 import collections
+import copy
 import json
 import os
 import random
@@ -17,7 +18,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from docgen import rand_document  # noqa: E402
 from test_edit import CURRICULUM, DOCS, PLAIN, PROCESSING, damage, ident, rand_command, raw  # noqa: E402
 
-from ses_core import load_ses_dict  # noqa: E402
+from ses_core import LoadError, load_ses_dict  # noqa: E402
 from ses_core import edit as E  # noqa: E402
 from ses_core.algebra import reduce, sem  # noqa: E402
 from ses_core.decisions import DecisionSet, apply, choice_table, family, split_count  # noqa: E402
@@ -78,7 +79,7 @@ def test_curriculum_diagnostics_name_elements_extent_and_cause():
     a = analyze(m, profile)
     assert (a.variants, a.wellformed) == (12, 4)
     lack = "성취기준은 다뤄지고 평가된다: 들어오는 관계 달성 이 0개다"
-    assert [d.message for d in a.errors] == [lack, "총시수: 값이 48 이다"]
+    assert [d.message for d in a.errors] == [lack, "총시수: 값이 48 이다. 규칙은 최소 30, 최대 45 이다"]
     assert summary(a) == [
         ("R1", "entities/LO4", (6, 12),
          {"choose": [at("심화알고리즘", specialization="개설여부", alternative="심화미개설")]}, 6),
@@ -759,12 +760,64 @@ def test_coupling_check_sees_inherited_ports():
     with ed.history.transaction("대안을 직접 부분으로"):       # Buffer 자리에 그 대안을 같은 이름으로 둔다
         ed.relink(part, "def", ent(m, "FifoBuffer"))
         ed.set_alias(part, "Buffer")
-    assert check_document(m, unused=False) == []            # 포트는 Buffer에서 물려받은 것이다
-    load_ses_dict(E.to_dict(m))
+    found = check_document(m, unused=False)                 # 포트는 Buffer에서 물려받은 것이다. 오류가 아니다
+    assert not [d for d in found if d.severity == "error"]
+    # 다만 경고한다. 족의 검사는 부분으로 직접 놓인 정의에 extends 의 포트를 주지 않는다. 문서의 검사와 족의 검사가
+    # 여기서 어긋나 있고, 어느 쪽으로 맞출지는 정해지지 않았다(ROADMAP 의 정해야 할 것 5)
+    assert {(d.severity, d.code, d.data["port"]) for d in found} == {("warning", "COUP", p) for p in ("in", "out", "ack")}
+    assert all("extends 로 가리키는 정의에만 있다" in d.message for d in found)
+    doc = load_ses_dict(E.to_dict(m))
+    L = unfold_layered(doc)
+    assert any(code == "C1" for V in sem(L.ses)[:3] for _, code, _, _ in violations(L, V))      # 족의 검사는 포트가 없다고 한다
     ports = m.get(ent(m, "Buffer")).props["ports"]
     ed.set(ent(m, "Buffer"), "ports", {k: v for k, v in ports.items() if k != "ack"})
-    found = [(d.code, d.path, d.data) for d in check_document(m, unused=False)]
+    found = [(d.code, d.path, d.data) for d in check_document(m, unused=False) if d.severity == "error"]
     assert found == [("COUP", ("couplings", 3, "to"), {"part": "Buffer", "port": "ack"})]
+
+
+def test_a_port_that_only_an_alternative_has_can_be_coupled():
+    """대안만 적은 포트로 가는 결합. 구성요소의 인터페이스는 구성원들의 선언을 합친 것이다(theory.md 정의 12).
+
+    그 대안이 골라진 변이에서는 포트가 있고, 다른 변이에서 결합이 살아 있으면 족의 검사가 C1 로 알린다.
+    처음 온 연구자의 역할을 맡은 검증에서 나왔다. 적재기가 이런 문서를 통째로 거부했다."""
+    d = {"ses": "1.0", "name": "Top", "variables": {"mode": {"type": "enum", "values": ["a", "b"]}},
+         "port_types": {"Msg": {"fields": {"id": "int"}}},
+         "entities": {
+             "Top": {"root": True, "aspects": {"main": {"parts": ["Src", "Ctl"],
+                                                         "couplings": [{"from": "Src.out", "to": "Ctl.extra"}]}}},
+             "Src": {"ports": {"out": {"type": "Msg", "direction": "out"}},
+                     "specializations": {"presence": {"alternatives": ["NoSrc", "RealSrc"],
+                                                      "select": {"when": {"var": "mode", "eq": "a"}, "then": "NoSrc", "else": "RealSrc"}}}},
+             "NoSrc": {"extends": "Src", "stereotype": "void"},
+             "RealSrc": {"extends": "Src"},
+             "Ctl": {"specializations": {"kind": {"alternatives": ["A", "B"],
+                                                  "select": {"when": {"var": "mode", "eq": "a"}, "then": "A", "else": "B"}}}},
+             "A": {"extends": "Ctl"},
+             "B": {"extends": "Ctl", "ports": {"extra": {"type": "Msg", "direction": "in", "required": True}}}}}
+    doc = load_ses_dict(d)                                   # 받는다
+    L = unfold_layered(doc)
+    assert [violations(L, V) for V in sem(L.ses)] == [[], []]            # 두 변이 모두 적격이다
+    a = analyze(E.from_dict(d))
+    assert (a.variants, a.wellformed) == (2, 2) and not a.errors
+
+    free = copy.deepcopy(d)                                  # 규칙을 빼면 대안 A 와 살아 있는 결합이 만나는 변이가 생긴다
+    del free["entities"]["Src"]["specializations"]["presence"]["select"]
+    del free["entities"]["Ctl"]["specializations"]["kind"]["select"]
+    a = analyze(E.from_dict(free))
+    # 변이 여덟 가운데 넷이 부적격이다. 원천이 있는데 포트가 없는 둘(C1)과, 원천이 없는데 필수 입력이 있는 둘(C4)이다
+    assert (a.variants, a.wellformed) == (8, 4)
+    assert sorted(x.code for x in a.diagnostics if x.severity == "error") == ["C1", "C4"]
+
+    typo = copy.deepcopy(d)                                  # 어느 대안에도 없는 포트는 여전히 거부한다
+    typo["entities"]["Top"]["aspects"]["main"]["couplings"] = [{"from": "Src.out", "to": "Ctl.extr"}]
+    with pytest.raises(LoadError, match=r"Ctl\(Ctl\) 에 포트 extr 가 없다"):
+        load_ses_dict(typo)
+    assert [x.code for x in check_document(E.from_dict(typo), unused=False) if x.severity == "error"] == ["COUP"]
+
+    wrong = copy.deepcopy(d)                                 # 방향이 틀린 것도 여전히 거부한다
+    wrong["entities"]["B"]["ports"]["extra"]["direction"] = "out"
+    with pytest.raises(LoadError, match="방향이 맞지 않다"):
+        load_ses_dict(wrong)
 
 
 def test_shared_definitions_do_not_blow_up_the_hierarchy_check():

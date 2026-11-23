@@ -69,7 +69,7 @@ def test_choices_and_variants_follow_the_decisions(tmp_path):
     assert code == 0 and out.startswith("남은 변이 15개\n") and out.count("열림") == 4
     code, out = ses("variants", PROCESSING, "--limit", 3)
     lines = out.splitlines()
-    assert code == 0 and lines[0] == "변이 15개" and len(lines) == 4
+    assert code == 0 and lines[0] == "변이 15개. 앞의 3개만 보인다. --limit 로 늘린다" and len(lines) == 4
     for line in lines[1:]:                                   # 줄마다 그 변이를 재현하는 결정 집합이다
         d = dict(json.loads(line), decisions="1.0")
         f = tmp_path / "one.yaml"
@@ -181,7 +181,7 @@ def test_variants_uses_the_exact_count_for_its_limit():
     """variants 의 한도는 남은 변이의 정확한 수에 건다. 전에는 구조상의 수(256)에 걸려 15개를 내지 못했다."""
     assert ses("variants", PROCESSING, "--max-variants", 14) == (1, "변이가 15개로 한도 14개를 넘어 열거하지 않는다\n")
     code, out = ses("variants", PROCESSING, "--max-variants", 15, "--limit", 1)
-    assert code == 0 and out.startswith("변이 15개\n")
+    assert code == 0 and out.startswith("변이 15개. 앞의 1개만 보인다. --limit 로 늘린다\n")
 
 
 def test_build_names_what_is_missing_or_contradictory(tmp_path):

@@ -17,12 +17,73 @@ SES에 DEVS 실행기를 붙이면 SES/MB가 된다는 것을 실제로 돌려 �
 
 from __future__ import annotations
 
+import copy
+import os
 from typing import Mapping, Optional
 
 from . import structure as st
 from .executor import Executor, last_tick, same_unit, ticks, time_unit
 
 INF = float("inf")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ATOMS = (int, float, str, bytes, type(None))               # 바뀔 수 없는 값. bool 은 int 다
+
+
+class ModelError(RuntimeError):
+    """원자 모델의 코드가 예외를 냈다. 어느 구성요소의 어느 함수가 언제 냈는지를 적는다."""
+
+    def __init__(self, who: str, function: str, time: float, cause: BaseException) -> None:
+        self.who, self.function, self.time, self.cause = who, function, time, cause
+        frames = []
+        tb = cause.__traceback__
+        while tb is not None:
+            frames.append((tb.tb_frame.f_code.co_filename, tb.tb_lineno))
+            tb = tb.tb_next
+        outside = [f for f in frames if os.path.dirname(os.path.abspath(f[0])) != _HERE]
+        where = ""
+        if outside:                                          # 모델의 파일에서 가장 깊은 곳
+            file = outside[0][0]
+            line = [n for f, n in outside if f == file][-1]
+            where = f" ({os.path.basename(file)} {line}번째 줄)"
+        super().__init__(f"{who} 의 {function}() 이 시각 {time} 에서 예외를 냈다: {type(cause).__name__}: {cause}{where}")
+
+
+def _call(who: str, function: str, time: float, f, *args):
+    """모델의 함수 하나를 부른다. 예외가 나면 어디서 났는지를 붙여 다시 낸다."""
+    try:
+        return f(*args)
+    except ModelError:
+        raise
+    except Exception as e:                                   # noqa: BLE001  모델의 코드가 낸 것은 무엇이든
+        raise ModelError(who, function, time, e) from e
+
+
+def _kept(v):
+    """기록에 남길 값. 받은 쪽이 나중에 고쳐도 기록이 바뀌지 않게 베낀다. 베낄 수 없는 값은 그대로 둔다."""
+    if isinstance(v, _ATOMS):
+        return v
+    try:
+        return copy.deepcopy(v)
+    except Exception:                                        # noqa: BLE001
+        return v
+
+
+def _same(a, b) -> bool:
+    """두 값이 같은 내용인가. 베낀 값과 원래 값을 견줄 때 쓴다. 같음을 정의하지 않은 객체는 속성으로 견준다."""
+    try:
+        if type(a) is not type(b):
+            return False
+        if isinstance(a, dict):
+            return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+        if isinstance(a, (list, tuple)):
+            return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+        if isinstance(a, float):
+            return a == b or (a != a and b != b)
+        if type(a).__eq__ is object.__eq__ and hasattr(a, "__dict__"):
+            return _same(vars(a), vars(b))
+        return bool(a == b)
+    except RecursionError:
+        return True
 
 
 class Atomic:
@@ -89,32 +150,57 @@ def _bag(inbox: dict) -> dict:
     return {port: [v for _, v in sorted(items, key=lambda x: x[0])] for port, items in sorted(inbox.items())}
 
 
-def _fire(atom: Atomic, n: int, unit: float, last: dict, path: tuple, imminent: bool, inbox: dict) -> None:
-    """눈금 n에서의 전이. 모델에 주는 시각과 흐른 시간은 눈금의 수에 시간 단위를 곱한 값이다."""
+def _fire(atom: Atomic, n: int, unit: float, last: dict, path: tuple, imminent: bool, inbox: dict,
+          who: str = "", probe: Optional[list] = None) -> None:
+    """눈금 n에서의 전이. 모델에 주는 시각과 흐른 시간은 눈금의 수에 시간 단위를 곱한 값이다.
+
+    probe 를 주면 받은 값을 베껴서 넘기고, 전이 뒤에 그 값이 고쳐졌는지를 본다. 고쳐졌으면 probe 에
+    (구성요소, 함수, 포트, 시각)을 적는다.
+    """
     atom.now = n * unit
-    if imminent and inbox:
-        atom.confluent(_bag(inbox))
-    elif imminent:
-        atom.internal()
-    elif inbox:
-        atom.external((n - last[path]) * unit, _bag(inbox))
-    else:
+    if not (imminent or inbox):
         return
+    bag = _bag(inbox) if inbox else None
+    pairs = []
+    if probe is not None and bag is not None:
+        given = {}
+        for port, values in bag.items():
+            given[port] = [_kept(v) for v in values]
+            pairs += [(port, mine, v) for mine, v in zip(given[port], values)]
+        bag = given
+    function = "confluent" if imminent and inbox else "internal" if imminent else "external"
+    if function == "confluent":
+        _call(who, function, atom.now, atom.confluent, bag)
+    elif function == "internal":
+        _call(who, function, atom.now, atom.internal)
+    else:
+        _call(who, function, atom.now, atom.external, (n - last[path]) * unit, bag)
+    for port in sorted({port for port, mine, v in pairs if not _same(mine, v)}):
+        probe.append((who, function, port, atom.now))
     last[path] = n
 
 
-def simulate(model, until: float, flat: bool = False, max_steps: int = 100000, unit: Optional[float] = None) -> list:
+def simulate(model, until: float, flat: bool = False, max_steps: int = 100000, unit: Optional[float] = None,
+             probe: Optional[list] = None) -> list:
     """시뮬레이션을 돌리고 원자 모델의 출력 사건을 (시각, 원자의 경로, 포트, 값)의 목록으로 돌려준다.
 
     unit은 시간 단위다. 주지 않으면 모델에 적힌 것(DevsExecutor가 적는다)을 쓰고, 그것도 없으면 1이다.
     둘 다 있으면 같아야 한다. 시각 until까지 돌린다. 그 시각의 사건도 처리한다. until이 INF이면 사건이 없어질
     때까지 돌린다.
+
+    기록의 값은 낸 때의 값이다. 바뀔 수 있는 값은 베껴서 적으므로 받은 모델이 나중에 고쳐도 기록은 그대로다.
+    모델의 함수가 예외를 내면 어느 구성요소의 어느 함수가 언제 냈는지를 적은 ModelError 로 바꿔 낸다.
+
+    probe 에 목록을 주면 낸 값을 낸 때에 베껴 두고 받는 모델마다 다시 베껴서 넘긴다. 값을 복사해서 넘기는
+    엔진과 같은 방식이다. 그리고 모델이 받은 값을 고쳤으면 probe 에 (구성요소, 함수, 포트, 시각)을 적는다.
+    이렇게 돌린 기록이 그냥 돌린 기록과 다르면, 그 모델 베이스는 값을 넘기는 방식에 따라 다르게 움직인다.
     """
     u = same_unit(unit, getattr(model, "_time_unit", None))
     leaves = _leaves(model)
     who = {p: "/".join(p) or getattr(a, "name", "") for p, a in leaves.items()}
     last = {p: 0 for p in leaves}                         # 마지막으로 전이한 눈금
-    due = {p: ticks(who[p], a.ta(), u) for p, a in leaves.items()}      # 다음 내부 사건의 눈금. 쉬고 있으면 None
+    due = {p: ticks(who[p], _call(who[p], "ta", 0.0, a.ta), u)          # 다음 내부 사건의 눈금. 쉬고 있으면 None
+           for p, a in leaves.items()}
     end = INF if until == INF else last_tick(until, u)
     routes: dict = {}
     if flat:                                              # 평탄화된 연결: (출발 자리)에서 도착 자리들로
@@ -130,10 +216,14 @@ def simulate(model, until: float, flat: bool = False, max_steps: int = 100000, u
         emitted: dict = {}                                # (경로, 포트)에서 값의 목록으로
         for p in imminent:
             leaves[p].now = t
-            for port, values in sorted(leaves[p].output().items()):
+            out = _call(who[p], "output", t, leaves[p].output)
+            if not isinstance(out, dict):
+                raise ModelError(who[p], "output", t, TypeError(f"포트 이름에서 값의 목록으로 가는 사전을 내야 한다. 낸 것은 {out!r} 다"))
+            for port, values in sorted(out.items()):
                 if values:                                # 값이 없는 출력은 보내지 않은 것이다. 받는 쪽에 사건이 없다
-                    emitted[(p, port)] = list(values)
-                    log.extend((t, p, port, v) for v in values)
+                    # 살필 때는 낸 때의 값을 베껴 둔다. 낸 모델이 뒤에 고쳐도 받는 쪽은 낸 때의 값을 본다
+                    emitted[(p, port)] = [_kept(v) for v in values] if probe is not None else list(values)
+                    log.extend((t, p, port, _kept(v)) for v in values)
         inbox: dict = {p: {} for p in leaves}
         if flat:
             for src, values in emitted.items():
@@ -145,10 +235,11 @@ def simulate(model, until: float, flat: bool = False, max_steps: int = 100000, u
             _route(model, (), emitted, inbox)
         for p in leaves:
             if due[p] == n or inbox[p]:
-                _fire(leaves[p], n, u, last, p, due[p] == n, inbox[p])
-                k = ticks(who[p], leaves[p].ta(), u)
+                _fire(leaves[p], n, u, last, p, due[p] == n, inbox[p], who[p], probe)
+                k = ticks(who[p], _call(who[p], "ta", t, leaves[p].ta), u)
                 due[p] = None if k is None else n + k
-    raise RuntimeError("시뮬레이션이 정해진 걸음 수 안에 끝나지 않았다")
+    raise RuntimeError(f"시뮬레이션이 정해진 걸음 수 안에 끝나지 않았다. 걸음 {max_steps}개를 돌았고 시각은 {t} 다. "
+                       "시간 전진이 0 인 고리가 있거나 돌릴 시각이 길다")
 
 
 def _route(model, path: tuple, emitted: dict, inbox: dict) -> dict:

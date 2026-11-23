@@ -142,6 +142,20 @@ def _ports_of(m: Model, entity_id: str) -> dict:
     return merged
 
 
+def _reach_ports_of(m: Model, entity_id: str, seen: frozenset = frozenset()) -> set:
+    """엔티티가 놓인 구성요소가 가질 수 있는 포트의 이름: 자신이 적은 것과 대안들이 적은 것 (loader.reach_ports)."""
+    if entity_id in seen or entity_id not in m.elements:
+        return set()
+    ports = m.elements[entity_id].props.get("ports")
+    out = set(ports) if isinstance(ports, dict) else set()
+    for sp in m.kids(entity_id, "specializations"):
+        for alt in m.kids(sp.id, "alternatives"):
+            target = m.resolved(alt.props.get("def"))
+            if target is not None:
+                out |= _reach_ports_of(m, target.id, seen | {entity_id})
+    return out
+
+
 def _uses(m: Model, entity_id: str) -> list:
     """(쓰는 자리의 요소, 쓰이는 엔티티)의 목록: 부분, 복제 대상, 대안."""
     out = []
@@ -211,7 +225,7 @@ def check_document(m: Model, profile: Optional[Profile] = None, unused: bool = T
         """
         if not isinstance(couplings, list):
             return
-        own = _ports_of(m, owner.id)
+        own = set(_ports_of(m, owner.id)) | _reach_ports_of(m, owner.id)
         for i, c in enumerate(couplings):
             for end in ("from", "to"):
                 text = c.get(end) if isinstance(c, dict) else None
@@ -227,9 +241,15 @@ def check_document(m: Model, profile: Optional[Profile] = None, unused: bool = T
                 elif part not in parts:
                     add("error", "COUP", holder.id, f"결합이 가리키는 부분 {part} 가 없다", where,
                         data={"part": part, "port": port})
-                elif parts[part] is not None and port not in _ports_of(m, parts[part].id):
-                    add("error", "COUP", holder.id, f"부분 {part} 에 포트 {port} 가 없다", where,
-                        [parts[part].id], data={"part": part, "port": port})
+                elif parts[part] is not None and port not in _reach_ports_of(m, parts[part].id):
+                    if port in _ports_of(m, parts[part].id):     # extends 로 가리킨 정의에만 있다
+                        add("warning", "COUP", holder.id,
+                            f"부분 {part} 의 포트 {port} 는 그 정의가 extends 로 가리키는 정의에만 있다. 지금의 뜻에서는 부분으로 "
+                            "직접 놓인 정의가 그 포트를 물려받지 않아 족의 검사가 C1 로 알린다. 포트를 그 정의에 적는다",
+                            where, [parts[part].id], data={"part": part, "port": port})
+                    else:
+                        add("error", "COUP", holder.id, f"부분 {part} 에 포트 {port} 가 없다", where,
+                            [parts[part].id], data={"part": part, "port": port})
 
     for v in variables:
         spec = v.props.get("spec")

@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import re
 from typing import Any, Optional
 
@@ -146,7 +148,9 @@ def _scalar(t: str) -> m.ScalarType:
     try:
         return m.ScalarType(t)
     except ValueError:
-        raise LoadError(f"알 수 없는 스칼라 타입: {t}")
+        allowed = sorted(x.value for x in m.ScalarType)
+        hint = ". 시간 값은 문서에 float 로 적고 모델의 PARAMS 에서 time 으로 적는다" if t == "time" else ""
+        raise LoadError(f"알 수 없는 타입 {t!r}. 쓸 수 있는 것은 {allowed} 다{hint}")
 
 
 def _variable(name: str, d: dict) -> m.Variable:
@@ -176,8 +180,12 @@ def _attribute(name: str, d: dict) -> m.Attribute:
         raise LoadError(f"속성 {name}: expr 과 each 를 함께 쓸 수 없다")
     if "each" in d and not isinstance(d["each"], list):
         raise LoadError(f"속성 {name}: each 는 복제본마다의 값을 적은 목록이어야 한다")
+    try:
+        kind = _scalar(d["type"])
+    except LoadError as e:
+        raise LoadError(f"속성 {name}: {e}") from None
     return m.Attribute(
-        name, _scalar(d["type"]), d.get("default"), d.get("unit"),
+        name, kind, d.get("default"), d.get("unit"),
         parse_expr(d["expr"]) if "expr" in d else None,
         tuple(d["values"]) if "values" in d else None, d.get("doc"),
         tuple(d["each"]) if "each" in d else None)
@@ -220,11 +228,13 @@ def _aspect(name: str, d: dict) -> m.Aspect:
 
 
 def _cardinality(x: Any) -> m.Cardinality:
-    if isinstance(x, int):
+    if isinstance(x, int) and not isinstance(x, bool):
         return m.Fixed(x)
-    if "var" in x:
+    if isinstance(x, dict) and set(x) == {"var"}:
         return m.VarCard(x["var"])
-    return m.RangeCard(x["min"], x.get("max"))
+    if isinstance(x, dict) and "min" in x and set(x) <= {"min", "max"}:
+        return m.RangeCard(x["min"], x.get("max"))
+    raise LoadError(f"cardinality: 개수는 정수, {{var: 변수}}, {{min: 수, max: 수}} 가운데 하나다. 적힌 것은 {x!r} 다")
 
 
 def _pattern(d: dict) -> m.CouplingPattern:
@@ -267,6 +277,8 @@ def _entity(name: str, d: dict) -> m.EntityDef:
         return _entity_body(name, d)
     except LoadError as e:
         raise LoadError(f"{name}: {e}") from None
+    except (LookupError, TypeError, AttributeError, ValueError) as e:   # 모양이 틀린 곳을 미리 다 막지는 못했다
+        raise LoadError(f"{name}: 모양이 틀렸다. {type(e).__name__}: {e}. ses check 가 틀린 자리를 알린다") from None
 
 
 def _entity_body(name: str, d: dict) -> m.EntityDef:
@@ -300,6 +312,16 @@ def _constraint(d: dict) -> m.Constraint:
 # ---------------------------------------------------------------------------
 
 def load_ses_dict(d: dict) -> m.SesDocument:
+    """사전으로 읽은 정준 문서를 자료구조로. 틀린 문서는 LoadError 로만 알린다."""
+    try:
+        return _load_ses_dict(d)
+    except LoadError:
+        raise
+    except (LookupError, TypeError, AttributeError, ValueError, RecursionError) as e:   # 모양이 틀린 곳을 미리 다 막지는 못했다
+        raise LoadError(f"모양이 틀렸다. {type(e).__name__}: {e}. ses check 가 틀린 자리를 알린다") from None
+
+
+def _load_ses_dict(d: dict) -> m.SesDocument:
     _known(d, "document", "문서", ("ses", "name", "entities"))
     for f in d.get("experimental_frames") or ():
         _known(f, "frame", "experimental_frames", ("ref",))
@@ -324,7 +346,13 @@ def load_ses_dict(d: dict) -> m.SesDocument:
 def load_ses(path: str) -> m.SesDocument:
     import yaml  # 지연 임포트. 코어 자료구조 자체는 yaml 에 의존하지 않는다
     with open(path, encoding="utf-8") as f:
-        return load_ses_dict(yaml.safe_load(f))
+        try:
+            d = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            mark = getattr(e, "problem_mark", None)
+            where = f"{mark.line + 1}번째 줄 {mark.column + 1}번째 칸: " if mark is not None else ""
+            raise LoadError(f"YAML 문법이 틀렸다. {where}{getattr(e, 'problem', None) or str(e).splitlines()[0]}") from None
+    return load_ses_dict(d)
 
 
 def check_integrity(doc: m.SesDocument) -> None:
@@ -600,12 +628,37 @@ def selected_problem(doc: m.SesDocument, e: m.Selected) -> Optional[str]:
     return why if kind is None else None
 
 
+def reach_ports(doc, def_name: str, seen: frozenset = frozenset()) -> dict:
+    """정의가 놓인 구성요소가 가질 수 있는 포트: 이름에서 선언들로. 그 정의가 적은 것이 앞에 온다.
+
+    구성요소의 인터페이스는 구성원들의 선언을 합친 것이다(theory.md 정의 12). 구성원은 그 정의와, 그 정의의
+    specialization 에서 고른 대안들이다. 그래서 대안만 적은 포트도 그 대안이 골라진 변이에서는 인터페이스에 든다.
+    extends 로 가리킨 정의의 포트는 여기 들지 않는다. 그것은 대안으로 골라져 합쳐질 때만 함께 있다. 부분으로
+    직접 놓인 정의가 그것을 물려받는가는 정해지지 않았다(ROADMAP 의 정해야 할 것 5).
+    """
+    e = doc.entities.get(def_name)
+    if e is None or def_name in seen:
+        return {}
+    out = {n: [p] for n, p in e.ports.items()}
+    for sp in e.specializations.values():
+        for a in sp.alternatives:
+            for n, found in reach_ports(doc, a, seen | {def_name}).items():
+                out.setdefault(n, []).extend(found)
+    return out
+
+
 def _check_couplings(doc, ent, parts, couplings, where, errors) -> None:
+    """결합의 끝이 가리키는 부분과 포트가 있을 수 있는가. 어느 변이에도 없는 포트만 여기서 거부한다.
+
+    어떤 대안에만 있는 포트는 받는다. 그 대안이 골라지지 않은 변이에서 결합이 살아 있으면 족의 검사(C1)가 알린다.
+    """
     ents = doc.entities
     try:
-        own_ports = doc.all_ports(ent.name)
+        own_ports = doc.all_ports(ent.name)       # 대안으로 골라져 합쳐질 때는 바탕의 포트도 자신의 포트다
     except (KeyError, ValueError):
         own_ports = dict(ent.ports)   # extends 오류는 별도로 보고된다
+    for n, found in reach_ports(doc, ent.name).items():
+        own_ports.setdefault(n, found[0])
     part_defs = {p.part_name: p.def_name for p in parts}
 
     def resolve(ref: m.PortRef, end: str):
@@ -620,12 +673,24 @@ def _check_couplings(doc, ent, parts, couplings, where, errors) -> None:
             return port
         d = part_defs.get(ref.part)
         if d is None or d not in ents:
-            errors.append(f"{where}: 부분 {ref.part} 가 없다")
+            hint = ""
+            if ref.part in set(part_defs.values()):          # 부분을 정의의 이름으로 적었다
+                names = sorted(n for n, x in part_defs.items() if x == ref.part)
+                hint = (". 복제된 부분은 결합에서 {part} 로 적는다" if names == ["{part}"] else
+                        f". 정의 {ref.part} 는 여기서 {names} 라는 이름의 부분이다")
+            errors.append(f"{where}: 부분 {ref.part} 가 없다{hint}")
             return None
-        port = doc.all_ports(d).get(ref.port)
-        if port is None:
+        found = list(reach_ports(doc, d).get(ref.port, ()))
+        with contextlib.suppress(KeyError, ValueError):
+            inherited = doc.all_ports(d).get(ref.port)       # extends 로 가리킨 정의의 포트. 지금까지 받아 온 대로 받는다
+            if inherited is not None and not found:
+                found = [inherited]
+        if not found:
             errors.append(f"{where}: {ref.part}({d}) 에 포트 {ref.port} 가 없다")
             return None
+        if len({(p.type, p.direction) for p in found}) > 1:
+            return None                                      # 대안마다 선언이 다르다. 변이마다의 검사(C2, C3)가 본다
+        port = found[0]
         want = m.Direction.OUT if end == "src" else m.Direction.IN
         if port.direction != want:
             errors.append(f"{where}: {ref} 의 방향이 맞지 않다")

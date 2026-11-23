@@ -10,6 +10,8 @@
     ses pack check 디렉터리 [--record] [--executors devs,pyevsim,cevsim]
     ses pack show  디렉터리
     ses pack run   디렉터리 사례 [--until 시각] [--log N]
+    ses ops        [--tools]
+    ses call       연산 [--args JSON | --args-file 파일] [--root 디렉터리] [--pretty]
 
 check 는 문서와 변이 공간 전체를 진단한다(편집기의 진단과 같다). choices 와 variants 는 결정 집합을
 적용한 족에서 남은 선택지와 변이를 보인다.
@@ -30,6 +32,10 @@ pack 은 분야 묶음을 다룬다(ses_core/pack.py, docs/ses-platform/20_packs
 사례를 한 디렉터리에 담은 것이다. new 는 돌아가는 가장 작은 묶음을 만들고, check 는 묶음이 플랫폼의 계약을
 지키는지 본다.
 
+ops 와 call 은 에이전트가 부르는 연산이다(ses_core/ops.py, docs/ses-platform/21_agent_operations.md). ops 는 연산의
+목록을 JSON 으로 내고, call 은 연산 하나를 불러 결과의 봉투를 표준 출력의 마지막 줄에 JSON 한 줄로 낸다.
+call 의 종료 코드는 봉투의 ok 가 참이면 0, 거짓이면 1 이다.
+
 모듈:이름 은 파이썬 모듈 안의 사전을 가리킨다. 문서의 식이 부르는 함수들(--functions)과 실행기의 모듈
 라이브러리(--library)다. 모듈은 지금 디렉터리에서도 찾는다.
 
@@ -39,6 +45,7 @@ pack 은 분야 묶음을 다룬다(ses_core/pack.py, docs/ses-platform/20_packs
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import json
 import os
@@ -85,14 +92,27 @@ def _document(path: str):
         raise Stop(FAILED, f"문서를 읽을 수 없다: {e}")
 
 
+def _short(options) -> str:
+    """선택지의 목록을 적는다. 이어진 정수가 길게 늘어서면 처음과 끝과 개수만 적는다."""
+    xs = list(options)
+    ints = all(isinstance(x, int) and not isinstance(x, bool) for x in xs)
+    if len(xs) > 12 and ints and xs == list(range(xs[0], xs[0] + len(xs))):
+        return f"[{xs[0]} ... {xs[-1]}] ({len(xs)}개)"
+    if len(xs) > 40:
+        return "[" + ", ".join(repr(x) for x in xs[:20]) + f", ... ] ({len(xs)}개)"
+    return str(xs)
+
+
 def _decisions(path: Optional[str]):
-    from .decisions import DecisionSet, load_decisions
+    from .decisions import DecisionError, DecisionSet, load_decisions
     if path is None:
         return DecisionSet()
     try:
         return load_decisions(path)
     except OSError as e:
         raise Stop(FAILED, f"결정 집합을 읽을 수 없다: {e}")
+    except DecisionError as e:
+        raise Stop(FAILED, f"결정 집합의 모양이 틀렸다. {e}")
     except (AttributeError, KeyError, TypeError, ValueError) as e:
         raise Stop(FAILED, f"결정 집합의 모양이 틀렸다: {type(e).__name__}: {e}")
     except Exception as e:                                   # noqa: BLE001  YAML 의 문법 오류 등
@@ -104,11 +124,16 @@ def _decisions(path: Optional[str]):
 def _build(args, out):
     from . import direct
     from .algebra import AlgebraError
+    from .profile import load_profile
     doc = _document(args.document)
     ds = _decisions(args.decisions)
     functions = _resolve(args.functions, "--functions")
     try:
-        built = direct.build(doc, ds, functions=functions, use_defaults=args.defaults)
+        profile = load_profile(args.profile) if getattr(args, "profile", None) else None
+    except Exception as e:                                   # noqa: BLE001
+        raise Stop(FAILED, f"프로파일을 읽을 수 없다: {type(e).__name__}: {e}")
+    try:
+        built = direct.build(doc, ds, profile=profile, functions=functions, use_defaults=args.defaults, infer=True)
     except direct.Undecided as e:
         raise Stop(UNDECIDED, f"결정이 모자라다. {e}")
     except direct.Contradiction as e:
@@ -136,6 +161,12 @@ def cmd_check(args, out) -> int:
         m = edit.load(args.document)
     except OSError as e:
         raise Stop(FAILED, f"문서를 읽을 수 없다: {e}")
+    except Exception as e:                                   # noqa: BLE001  YAML 의 문법 오류
+        if type(e).__module__.split(".")[0] != "yaml":
+            raise
+        mark = getattr(e, "problem_mark", None)
+        where = f"{mark.line + 1}번째 줄 {mark.column + 1}번째 칸: " if mark is not None else ""
+        raise Stop(FAILED, f"문서를 읽을 수 없다. YAML 문법이 틀렸다. {where}{getattr(e, 'problem', None) or str(e).splitlines()[0]}")
     profile = load_profile(args.profile) if args.profile else None
     a = analyze(m, profile, max_variants=args.max_variants, functions=_resolve(args.functions, "--functions"))
     for d in a.diagnostics:
@@ -202,7 +233,7 @@ def _print_table(points, out) -> None:
         everything = [o for o, _ in p.options]
         where = f"{p.owner} {p.kind}" + (f" {p.group}" if p.group else "")
         state = "정해짐" if p.decided else ("남은 것 없음" if not p.active else "열림")
-        print(f"{where}: {state}. 남은 선택지 {list(p.remaining)} / 전체 {everything}", file=out)
+        print(f"{where}: {state}. 남은 선택지 {_short(p.remaining)} / 전체 {_short(everything)}", file=out)
 
 
 def cmd_choices(args, out) -> int:
@@ -246,7 +277,8 @@ def cmd_variants(args, out) -> int:
     if fam is None and n > args.max_variants:                # 정확한 수를 모를 때만 구조상의 수로 멈춘다
         raise Stop(FAILED, f"구조상 변이가 {n}개로 한도 {args.max_variants}개를 넘어 열거하지 않는다")
     variants = sem(pruned)
-    print(f"변이 {len(variants)}개", file=out)
+    print(f"변이 {len(variants)}개" + (f". 앞의 {args.limit}개만 보인다. --limit 로 늘린다" if len(variants) > args.limit else ""),
+          file=out)
     for V in variants[:args.limit]:
         ds = witness(S.tree, V, domains).to_dict()      # 그 변이를 정확히 재현하는 결정 집합
         ds.pop("decisions", None)
@@ -266,18 +298,25 @@ def cmd_build(args, out) -> int:
     if sk is None:
         raise Stop(FAILED, "뿌리가 없음 대안을 골랐다. 만들 구조가 없다 (K0)")
     counts = {"components": 0}
+    values = None
+    if args.attributes:                                      # 속성의 값. 식과 결정 집합의 재정의를 거친 것이다
+        from .extension import interpret
+        values = (interpret(L, built.variant) or {}).get("attr")
 
-    def show(c, depth: int) -> None:
+    def show(c, depth: int, attr) -> None:
         counts["components"] += 1
         if args.depth is None or depth <= args.depth:
             labels = ", ".join(c.labels)
-            print("  " * depth + (c.name if labels == c.name else f"{c.name}: {labels}"), file=out)
+            given = ""
+            if attr is not None and attr.get("params"):
+                given = " " + json.dumps(attr["params"], ensure_ascii=False, default=str)
+            print("  " * depth + (c.name if labels == c.name else f"{c.name}: {labels}") + given, file=out)
             for name in c.absent:
                 print("  " * (depth + 1) + f"{name}: 없음", file=out)
-        for child in c.parts.values():
-            show(child, depth + 1)
+        for name, child in c.parts.items():
+            show(child, depth + 1, (attr or {}).get("children", {}).get(name) if attr is not None else None)
 
-    show(sk, 0)
+    show(sk, 0, values)
     print(f"변수 값 {built.sigma}. 구성요소 {counts['components']}개, 노드 {len(built.variant)}개", file=out)
     return OK
 
@@ -351,8 +390,9 @@ def cmd_run(args, out) -> int:
     model = X.realize(L, ext, executor, built.variant)
     try:
         log = simulate(model, args.until, max_steps=args.max_steps)
-    except RuntimeError as e:
-        raise Stop(FAILED, f"시뮬레이션이 멈췄다: {e}")
+    except Exception as e:                                   # noqa: BLE001  모델의 코드가 낸 것은 무엇이든 한 줄로 알린다
+        raise Stop(FAILED, f"시뮬레이션이 멈췄다: {e}" if isinstance(e, RuntimeError) else
+                           f"시뮬레이션이 멈췄다: {type(e).__name__}: {e}")
     for t, path, port, value in log[:args.log]:
         print(f"{t} {'/'.join(path)}.{port} {json.dumps(value, ensure_ascii=False, default=str)}", file=out)
     print(f"출력 사건 {len(log)}개" + (f", 마지막 시각 {log[-1][0]}" if log else ""), file=out)
@@ -375,6 +415,10 @@ def _report(report, out) -> None:
         parts = []
         if "atoms" in info:
             parts.append(f"원자 구성요소 {info['atoms']}개, 연결 {info['links']}개")
+        elif "components" in info:                           # 모델 베이스가 없는 묶음. 구조까지 만든다
+            parts.append(f"구성요소 {info['components']}개")
+        if "structure" in info:
+            parts.append(f"구조의 지문 {info['structure']}")
         if "events" in info:
             parts.append(f"사건 {info['events']}개, 지문 {info['digest']}")
         if "executors" in info:
@@ -391,6 +435,7 @@ def cmd_pack_new(args, out) -> int:
     for path in written:
         print(f"만들었다: {os.path.relpath(path)}", file=out)
     report = P.check(args.directory, record=True)
+    print(f"검사하고 기록을 적었다: {os.path.relpath(os.path.join(args.directory, P.RECORDS))}", file=out)
     _report(report, out)
     print(f"다음: {os.path.join(args.directory, 'pack.yaml')} 의 설명을 읽고, 문서와 모델 베이스를 자기 분야의 것으로 바꾼다. "
           f"바꿀 때마다 ses pack check {args.directory} 로 본다", file=out)
@@ -404,7 +449,7 @@ def cmd_pack_check(args, out) -> int:
     _report(report, out)
     errors = len(report.errors)
     warnings = sum(f.severity == "warning" for f in report.findings)
-    print(f"묶음 {report.pack.name if report.pack else args.directory}: "
+    print(f"묶음 {report.pack.name if report.pack else os.path.basename(os.path.abspath(args.directory))}: "
           + ("통과" if not errors else f"오류 {errors}건") + (f", 경고 {warnings}건" if warnings else ""), file=out)
     return OK if not errors else FAILED
 
@@ -434,9 +479,9 @@ def cmd_pack_show(args, out) -> int:
     for c in pack.cases:
         if c.decisions:
             print(f"  ses choices {pack.document}{fn} --decisions {c.decisions}", file=out)
-            print(f"  ses build {pack.document}{fn} --decisions {c.decisions}", file=out)
+            print(f"  ses build {pack.document}{fn}{prof} --decisions {c.decisions} --attributes", file=out)
             if pack.binding:
-                print(f"  ses plan {pack.document}{fn} --decisions {c.decisions} --binding {pack.binding} "
+                print(f"  ses plan {pack.document}{fn}{prof} --decisions {c.decisions} --binding {pack.binding} "
                       f"--library {stem}:{pack.library}", file=out)
     return OK
 
@@ -455,9 +500,40 @@ def cmd_pack_run(args, out) -> int:
 
 
 # ---------------------------------------------------------------------------
+# 에이전트가 부르는 연산
+# ---------------------------------------------------------------------------
+
+def cmd_ops(args, out) -> int:
+    from . import ops
+    json.dump(ops.tools() if args.tools else ops.manifest(), out, ensure_ascii=False, indent=1)
+    print(file=out)
+    return OK
+
+
+def cmd_call(args, out) -> int:
+    from . import ops
+    if args.args is not None and args.args_file is not None:
+        raise Stop(USAGE, "--args 와 --args-file 가운데 하나만 준다")
+    text = args.args
+    if args.args_file is not None:
+        try:
+            text = sys.stdin.read() if args.args_file == "-" else open(args.args_file, encoding="utf-8").read()
+        except OSError as e:
+            raise Stop(USAGE, f"입력 파일을 읽을 수 없다: {e}")
+    try:
+        given = json.loads(text) if text is not None and text.strip() else {}
+    except ValueError as e:
+        env = {"op": args.operation, "version": ops.VERSION, "ok": False, "result": None, "output": "",
+               "findings": [{"severity": "error", "code": "A0", "where": args.operation,
+                             "message": f"입력이 JSON 이 아니다: {e}"}]}
+    else:
+        env = ops.call(args.operation, given, root=args.root)
+    print(json.dumps(env, ensure_ascii=False, indent=1 if args.pretty else None, allow_nan=False), file=out)
+    return OK if env["ok"] else FAILED
+
 
 def parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="ses", description="SES 문서를 검사하고, 변이를 고르고, 만들고, 돌린다")
+    ap = argparse.ArgumentParser(prog="ses", description="SES 문서와 분야 묶음을 검사하고, 변이를 고르고, 만들고, 돌린다")
     sub = ap.add_subparsers(dest="command", required=True)
 
     def common(p, decisions_required=False):
@@ -487,6 +563,17 @@ def parser() -> argparse.ArgumentParser:
     c.add_argument("--log", type=int, default=20, help="보일 사건의 수")
     c.set_defaults(run=cmd_pack_run)
 
+    c = sub.add_parser("ops", help="에이전트가 부르는 연산의 목록을 JSON 으로 낸다")
+    c.add_argument("--tools", action="store_true", help="도구 정의(name, description, input_schema)의 목록만 낸다")
+    c.set_defaults(run=cmd_ops)
+    c = sub.add_parser("call", help="연산 하나를 부르고 결과의 봉투를 JSON 한 줄로 낸다")
+    c.add_argument("operation", help="연산의 이름. ses ops 가 알려 준다")
+    c.add_argument("--args", help="입력. JSON 객체의 글")
+    c.add_argument("--args-file", help="입력이 든 JSON 파일. - 이면 표준 입력")
+    c.add_argument("--root", help="작업 자리. 연산은 이 안의 디렉터리만 다룬다. 주지 않으면 지금 디렉터리")
+    c.add_argument("--pretty", action="store_true", help="여러 줄로 보기 좋게 낸다")
+    c.set_defaults(run=cmd_call)
+
     c = sub.add_parser("check", help="문서와 변이 공간 전체를 진단한다")
     c.add_argument("document")
     c.add_argument("--functions")
@@ -513,8 +600,10 @@ def parser() -> argparse.ArgumentParser:
                              ("run", "변이 하나를 만들고 참조 시뮬레이터로 돌린다", cmd_run)):
         c = common(sub.add_parser(name, help=help_), decisions_required=True)
         c.add_argument("--defaults", action="store_true", help="정해지지 않은 변수와 대안에 문서의 기본값을 쓴다")
+        c.add_argument("--profile", help="도메인 프로파일(YAML). 문서가 프로파일을 따르면 함께 준다")
         if name == "build":
             c.add_argument("--depth", type=int, help="이 깊이까지만 보인다")
+            c.add_argument("--attributes", action="store_true", help="구성요소마다 속성의 값을 함께 보인다")
         else:
             c.add_argument("--binding", required=True, help="바인딩(YAML)")
             c.add_argument("--library", required=True, help="모듈 라이브러리의 사전. 모듈:이름")
@@ -532,10 +621,16 @@ def main(argv=None, out=None) -> int:
     out = out or sys.stdout
     args = parser().parse_args(argv)
     try:
-        return args.run(args, out)
+        code = args.run(args, out)
+        out.flush()
+        return code
     except Stop as e:
         print(str(e), file=out)
         return e.code
+    except BrokenPipeError:                                  # 출력을 받던 쪽이 먼저 닫았다(| head). 조용히 끝낸다
+        with contextlib.suppress(Exception):
+            sys.stdout = open(os.devnull, "w")
+        return OK
 
 
 if __name__ == "__main__":

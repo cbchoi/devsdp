@@ -19,7 +19,7 @@ from docgen import rand_system_document  # noqa: E402
 from test_parity import decorated, prioritized  # noqa: E402
 
 from ses_core import edit as E  # noqa: E402
-from ses_core import load_ses, load_ses_dict, local  # noqa: E402
+from ses_core import LoadError, load_ses, load_ses_dict, local  # noqa: E402
 from ses_core.diagnose import analyze  # noqa: E402
 
 STATS: collections.Counter = collections.Counter()
@@ -51,6 +51,48 @@ def test_local_check_finds_exactly_the_violations_of_enumeration(seed):
     STATS["docs"] += 1
     STATS["violations"] += len(mine)
     STATS["docs_with_violations"] += bool(mine)
+
+
+def ports_to_alternatives(d: dict, rng: random.Random) -> int:
+    """정의가 적은 포트를 그 정의의 대안들 가운데 몇에게로 옮긴다. 옮긴 포트의 수를 돌려준다.
+
+    그러면 그 포트는 어떤 대안이 골라진 변이에만 있다. 인터페이스가 구성원들의 선언을 합친 것(theory.md 정의 12)이라는
+    것을 변이마다 다른 인터페이스로 시험한다."""
+    moved = 0
+    ents = d["entities"]
+    for name in sorted(ents):
+        e = ents[name]
+        alts = sorted(a for sp in (e.get("specializations") or {}).values() for a in sp["alternatives"]
+                      if ents[a].get("stereotype") != "void")
+        if not alts or not e.get("ports"):
+            continue
+        for port in sorted(e["ports"]):
+            if rng.random() < 0.5:
+                decl = e["ports"].pop(port)
+                for a in rng.sample(alts, rng.randint(1, len(alts))):
+                    ents[a].setdefault("ports", {})[port] = dict(decl)
+                moved += 1
+    return moved
+
+
+@pytest.mark.parametrize("seed", range(300))
+def test_local_check_agrees_when_only_some_alternatives_have_a_port(seed):
+    """대안만 가진 포트로 결합이 갈 때도 국소 검사와 열거가 같은 위반을 낸다."""
+    rng = random.Random(seed)
+    d = rand_system_document(rng)
+    moved = ports_to_alternatives(d, rng)
+    try:
+        doc = load_ses_dict(d)
+    except LoadError:
+        STATS["moved_refused"] += 1                          # 어느 대안에도 남지 않은 포트로 가는 결합 등
+        return
+    found, possible = local.check(doc, None)
+    assert not possible
+    mine = {(f.code, f.definition, f.message) for f in found}
+    assert mine == enumerated(d, None)
+    STATS["moved_docs"] += bool(moved)
+    STATS["moved_violations"] += bool(moved) and bool(mine)
+    STATS["moved_clean"] += bool(moved) and not mine
 
 
 @pytest.mark.parametrize("seed", range(120))
@@ -169,3 +211,4 @@ def test_local_samples_are_not_vacuous():
     assert STATS["docs"] == 300 and STATS["docs_with_violations"] >= 60 and STATS["violations"] >= 100, STATS
     assert STATS["pools"] == 200 and STATS["pools_with_violations"] >= 60, STATS
     assert STATS["limited_docs"] == 120 and STATS["limited_violations"] >= 20, STATS
+    assert STATS["moved_docs"] >= 120 and STATS["moved_violations"] >= 50 and STATS["moved_clean"] >= 50, STATS
