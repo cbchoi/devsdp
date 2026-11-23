@@ -1,4 +1,4 @@
-# 피드백 제어 사례에 DEVS 실행기를 붙인다. 모델베이스는 저장소 루트의 examples/feedback_control_mb.py다.
+# 피드백 제어 사례에 DEVS 실행기를 붙인다. 모델베이스는 이 묶음의 model_base.py다.
 # 문헌의 mb 속성(MB/Constant, MB/Feedback, MB/PID, MB/TransferFunction, MB/Add)에 해당한다.
 binding: "1.0"
 executor: devs

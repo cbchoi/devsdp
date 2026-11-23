@@ -180,6 +180,62 @@ def test_names_are_identifiers(bad):
     load_ses_dict(doc({"R": {"root": True, "aspects": {"분해_1": {"parts": [{"def": "A", "alias": "첫째"}]}}}, "A": {}}))
 
 
+def test_unknown_keys_are_refused_and_the_table_of_keys_is_the_schema():
+    """잘못 적은 항목을 조용히 넘기지 않는다. 속성의 값을 value 로 적으면 값이 없는 속성이 되기 때문이다.
+
+    적재기가 아는 항목의 표(loader.KEYS)는 스키마의 properties 와 같다. 스키마를 고치면 이 시험이 알린다.
+    """
+    import json
+    from ses_core import loader
+    with open(os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform", "schema", "ses.schema.json"),
+              encoding="utf-8") as f:
+        schema = json.load(f)
+    defs = schema["$defs"]
+    multi = defs["multiAspect"]["properties"]
+    of_schema = {
+        "document": schema, "variable": defs["variable"], "portType": defs["portType"], "port": defs["port"],
+        "attribute": defs["attribute"], "entity": defs["entity"], "aspect": defs["aspect"],
+        "multiAspect": defs["multiAspect"], "pattern": multi["couplings"], "specialization": defs["specialization"],
+        "selectRule": defs["selectRule"], "coupling": defs["coupling"], "constraint": defs["constraint"],
+        "frame": schema["properties"]["experimental_frames"]["items"],
+        "partRef": next(x for x in defs["partRef"]["oneOf"] if "properties" in x),
+    }
+    assert set(of_schema) == set(loader.KEYS)
+    for kind, part in of_schema.items():
+        assert set(part["properties"]) == loader.KEYS[kind], kind
+
+    def doc(**changes):
+        d = {"ses": "1.0", "name": "R", "variables": {"v": {"type": "int", "range": [1, 2]}},
+             "entities": {"R": {"root": True, "attributes": {"a": {"type": "int", "default": 1}},
+                                "aspects": {"x": {"parts": ["P"]}},
+                                "specializations": {"s": {"alternatives": ["A", "B"]}}},
+                          "A": {"extends": "R"}, "B": {"extends": "R"}, "P": {}}}
+        for path, value in changes.items():
+            at = d
+            keys = path.split("/")
+            for key in keys[:-1]:
+                at = at[key]
+            at[keys[-1]] = value
+        return d
+
+    load_ses_dict(doc())
+    for changes, message in [
+        ({"entities/R/attributes/a": {"type": "int", "value": 1}}, "R: 속성 a: 모르는 항목 value 가 있다. default 를 뜻했는가"),
+        ({"entities/R/aspects/x": {"part": ["P"]}}, "R: aspect x: 모르는 항목 part 가 있다. parts 를 뜻했는가"),
+        ({"entities/R/specializations/s": {"alternative": ["A", "B"]}}, "alternatives 를 뜻했는가"),
+        ({"entities/R/aspect": {}}, "R: 정의: 모르는 항목 aspect 가 있다. aspects 를 뜻했는가"),
+        ({"entities/R/colour": "red"}, "R: 정의: 모르는 항목 colour 가 있다. 쓸 수 있는 것은"),
+        ({"variables/v": {"type": "int", "range": [1, 2], "note": "x"}}, "variables.v: 모르는 항목 note"),
+        ({"entitys": {}}, "문서: 모르는 항목 entitys"),
+        ({"entities/P": None}, "P: 정의: 이름과 값의 표로 적어야 한다"),
+        ({"entities/R/attributes/a": 3}, "R: 속성 a: 이름과 값의 표로 적어야 한다"),
+        ({"entities/R/attributes/a": {"default": 1}}, "R: 속성 a: type 가 없다"),
+        ({"entities/R/aspects/x": {}}, "R: aspect x: parts 가 없다"),
+    ]:
+        with pytest.raises(LoadError, match=message):
+            load_ses_dict(doc(**changes))
+
+
 def test_values_of_a_variable_are_different_values():
     """글자는 달라도 같은 값으로 읽히는 두 값은 함께 둘 수 없다. 0 과 false, 1 과 true, 1 과 1.0 이 그렇다.
 

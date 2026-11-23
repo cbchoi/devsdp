@@ -1,0 +1,16 @@
+# 분야 묶음: 큰 무선 센서 네트워크. 문헌 사례(Nam, Kim (2021))의 재현이다. 18_classic_parity.md 6.3절.
+# 검사: ses pack check packs/wsn
+pack: "1.0"
+name: wsn
+title: 센서가 1,000개까지인 무선 센서 네트워크. 큰 족을 열거하지 않고 다루는 사례
+
+document: wsn.ses.yaml
+model_base:
+  file: model_base.py
+  library: LIBRARY
+  functions: FUNCTIONS             # 문서의 식이 부르는 함수. 센서의 위치를 복제본의 번호에서 정한다
+binding: binding.yaml
+
+cases:
+  - {name: field_9, decisions: cases/field_9.decisions.yaml, until: 30}        # 작은 센서장. 세 실행기에서 돌려 견준다
+  - {name: field_1000, decisions: cases/field_1000.decisions.yaml}             # 문헌의 가장 큰 크기. 계획까지만 만든다

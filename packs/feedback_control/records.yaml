@@ -1,0 +1,4 @@
+# 사례를 참조 시뮬레이터로 돌린 기록의 요약. ses pack check --record 가 적는다. 손으로 고치지 않는다.
+# 모델 베이스나 문서를 고쳐 기록이 달라지면 검사가 알린다. 뜻한 변화이면 다시 적는다.
+feedforward: {until: 60.0, events: 7696, last: 60.0, digest: "0918dab2a8140b73"}
+plain: {until: 60.0, events: 4810, last: 60.0, digest: "c67053fe85d2ea14"}

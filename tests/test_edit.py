@@ -25,8 +25,11 @@ from ses_core.profile import load_profile  # noqa: E402
 from ses_core.unfold import unfold_layered  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform")
+PACKS = os.path.join(os.path.dirname(__file__), "..", "packs")
+# 분야 묶음으로 옮긴 사례의 문서도 같이 본다. 옮겼다고 시험 대상에서 빠지지 않게 한다
 DOCS = sorted(glob.glob(os.path.join(ROOT, "examples", "*.ses.yaml"))
-              + glob.glob(os.path.join(ROOT, "domains", "*.ses.yaml")))
+              + glob.glob(os.path.join(ROOT, "domains", "*.ses.yaml"))
+              + glob.glob(os.path.join(PACKS, "*", "*.ses.yaml")))
 PROCESSING = os.path.join(ROOT, "examples", "processing_system.ses.yaml")
 
 

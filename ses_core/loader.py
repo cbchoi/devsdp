@@ -22,6 +22,53 @@ class LoadError(ValueError):
 
 
 # ---------------------------------------------------------------------------
+# 항목의 이름. 모르는 항목은 거부한다
+#
+# 잘못 적은 항목을 조용히 넘기면 문서의 뜻이 적은 사람의 뜻과 달라진다. 속성의 값을 default 가 아니라
+# value 로 적으면 값이 없는 속성이 된다. 스키마(ses.schema.json)는 그것을 막지만 스키마 검증은 따로 하는
+# 일이라 빠지기 쉽다. 그래서 적재기가 직접 본다. 아래의 표는 스키마의 properties 와 같아야 하고,
+# tests/test_loader.py 가 둘이 같은지 본다.
+# ---------------------------------------------------------------------------
+
+KEYS = {
+    "document": {"ses", "name", "version", "description", "variables", "port_types", "entities", "constraints",
+                 "experimental_frames", "metadata", "profile"},
+    "variable": {"type", "default", "range", "values", "doc"},
+    "portType": {"fields", "doc"},
+    "port": {"type", "direction", "required", "doc"},
+    "attribute": {"type", "default", "unit", "expr", "values", "each", "doc"},
+    "entity": {"root", "extends", "stereotype", "ports", "attributes", "aspects", "multi_aspects", "specializations",
+               "doc", "metadata", "kind", "fields", "links"},
+    "partRef": {"def", "alias"},
+    "aspect": {"parts", "couplings", "rule", "priority", "doc"},
+    "multiAspect": {"part", "cardinality", "naming", "couplings", "rule", "priority", "doc"},
+    "pattern": {"pattern", "fan_out", "fan_in", "between", "custom", "first", "last"},
+    "specialization": {"alternatives", "select", "default", "doc"},
+    "selectRule": {"when", "then", "else"},
+    "coupling": {"from", "to", "doc"},
+    "constraint": {"name", "when", "require", "forbid", "doc"},
+    "frame": {"ref", "attach_to"},
+}
+_MEANT = {("attribute", "value"): "default", ("variable", "value"): "default", ("aspect", "part"): "parts",
+          ("multiAspect", "parts"): "part", ("specialization", "alternative"): "alternatives",
+          ("entity", "aspect"): "aspects", ("entity", "specialization"): "specializations",
+          ("entity", "multi_aspect"): "multi_aspects", ("entity", "attribute"): "attributes", ("entity", "port"): "ports"}
+
+
+def _known(d: Any, kind: str, where: str, required: tuple = ()) -> None:
+    """d 가 그 종류의 항목만 가진 표인가. 아니면 어디가 틀렸는지를 적어 LoadError 를 낸다."""
+    if not isinstance(d, dict):
+        raise LoadError(f"{where}: 이름과 값의 표로 적어야 한다. 적힌 것은 {d!r} 다. 내용이 없으면 {{}} 를 적는다")
+    for key in sorted(map(str, set(d) - KEYS[kind])):
+        meant = _MEANT.get((kind, key))
+        raise LoadError(f"{where}: 모르는 항목 {key} 가 있다. " + (f"{meant} 를 뜻했는가. " if meant else "")
+                        + f"쓸 수 있는 것은 {sorted(KEYS[kind])} 다")
+    for key in required:
+        if key not in d:
+            raise LoadError(f"{where}: {key} 가 없다")
+
+
+# ---------------------------------------------------------------------------
 # 표현식: 저장 축약형을 AST 로 펼친다
 # ---------------------------------------------------------------------------
 
@@ -103,6 +150,7 @@ def _scalar(t: str) -> m.ScalarType:
 
 
 def _variable(name: str, d: dict) -> m.Variable:
+    _known(d, "variable", f"variables.{name}", ("type",))
     domain = None
     if "range" in d:
         domain = m.Range(d["range"][0], d["range"][1])
@@ -112,15 +160,18 @@ def _variable(name: str, d: dict) -> m.Variable:
 
 
 def _port_type(name: str, d: dict) -> m.PortType:
+    _known(d, "portType", f"port_types.{name}")
     return m.PortType(name, {k: _scalar(v) for k, v in (d.get("fields") or {}).items()}, d.get("doc"))
 
 
 def _port(name: str, d: dict) -> m.Port:
+    _known(d, "port", f"포트 {name}", ("type", "direction"))
     return m.Port(name, d["type"], m.Direction(d["direction"]), d.get("doc"),
                   bool(d.get("required", False)))
 
 
 def _attribute(name: str, d: dict) -> m.Attribute:
+    _known(d, "attribute", f"속성 {name}", ("type",))
     if "expr" in d and "each" in d:
         raise LoadError(f"속성 {name}: expr 과 each 를 함께 쓸 수 없다")
     if "each" in d and not isinstance(d["each"], list):
@@ -148,16 +199,19 @@ def fits(value: Any, type_: m.ScalarType) -> bool:
 
 
 def _coupling(d: dict) -> m.Coupling:
+    _known(d, "coupling", "결합", ("from", "to"))
     return m.Coupling(m.PortRef.parse(d["from"]), m.PortRef.parse(d["to"]), d.get("doc"))
 
 
 def _part_ref(x: Any) -> m.PartRef:
     if isinstance(x, str):
         return m.PartRef(x)
+    _known(x, "partRef", "부분", ("def",))
     return m.PartRef(x["def"], x.get("alias"))
 
 
 def _aspect(name: str, d: dict) -> m.Aspect:
+    _known(d, "aspect", f"aspect {name}", ("parts",))
     return m.Aspect(
         name, tuple(_part_ref(p) for p in d["parts"]),
         tuple(_coupling(c) for c in d.get("couplings", [])),
@@ -174,6 +228,7 @@ def _cardinality(x: Any) -> m.Cardinality:
 
 
 def _pattern(d: dict) -> m.CouplingPattern:
+    _known(d, "pattern", "결합의 틀")
     cp = lambda key: tuple(_coupling(c) for c in d.get(key, []))  # noqa: E731
     return m.CouplingPattern(m.PatternKind(d.get("pattern", "custom")),
                              cp("fan_out"), cp("fan_in"), cp("between"), cp("custom"),
@@ -181,6 +236,7 @@ def _pattern(d: dict) -> m.CouplingPattern:
 
 
 def _multi_aspect(name: str, d: dict) -> m.MultiAspect:
+    _known(d, "multiAspect", f"multi-aspect {name}", ("part", "cardinality"))
     return m.MultiAspect(
         name, _part_ref(d["part"]), _cardinality(d["cardinality"]),
         d.get("naming", "{part}_{i}"),
@@ -190,6 +246,7 @@ def _multi_aspect(name: str, d: dict) -> m.MultiAspect:
 
 
 def _select_rule(d: dict) -> m.SelectRule:
+    _known(d, "selectRule", "선택 규칙", ("when", "then"))
     other = d.get("else")
     if isinstance(other, dict):
         other = _select_rule(other)
@@ -197,6 +254,7 @@ def _select_rule(d: dict) -> m.SelectRule:
 
 
 def _specialization(name: str, d: dict) -> m.Specialization:
+    _known(d, "specialization", f"specialization {name}", ("alternatives",))
     return m.Specialization(
         name, tuple(d["alternatives"]),
         _select_rule(d["select"]) if "select" in d else None,
@@ -204,6 +262,15 @@ def _specialization(name: str, d: dict) -> m.Specialization:
 
 
 def _entity(name: str, d: dict) -> m.EntityDef:
+    """정의 하나. 그 안에서 난 오류에는 정의의 이름을 앞에 붙인다."""
+    try:
+        return _entity_body(name, d)
+    except LoadError as e:
+        raise LoadError(f"{name}: {e}") from None
+
+
+def _entity_body(name: str, d: dict) -> m.EntityDef:
+    _known(d, "entity", "정의")
     return m.EntityDef(
         name=name,
         root=bool(d.get("root", False)),
@@ -223,6 +290,7 @@ def _entity(name: str, d: dict) -> m.EntityDef:
 
 
 def _constraint(d: dict) -> m.Constraint:
+    _known(d, "constraint", "제약", ("name",))
     g = lambda k: parse_expr(d[k]) if k in d else None  # noqa: E731
     return m.Constraint(d["name"], g("when"), g("require"), g("forbid"), d.get("doc"))
 
@@ -232,6 +300,9 @@ def _constraint(d: dict) -> m.Constraint:
 # ---------------------------------------------------------------------------
 
 def load_ses_dict(d: dict) -> m.SesDocument:
+    _known(d, "document", "문서", ("ses", "name", "entities"))
+    for f in d.get("experimental_frames") or ():
+        _known(f, "frame", "experimental_frames", ("ref",))
     doc = m.SesDocument(
         format_version=str(d["ses"]),
         name=d["name"],

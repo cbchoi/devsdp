@@ -17,15 +17,17 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", ".."))           # 저장소 안에서 설치 없이 돌릴 때
 
-from examples import feedback_control_mb as mb  # noqa: E402
 from ses_core import direct, load_ses  # noqa: E402
+from ses_core import pack as P  # noqa: E402
 from ses_core import executor as X  # noqa: E402
 from ses_core.decisions import DecisionSet, Override  # noqa: E402
 from ses_core.devs import DevsExecutor, simulate  # noqa: E402
 
-HERE = os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform", "examples")
+PACK = P.load(HERE)
+mb = P.module(PACK)                          # 이 묶음의 모델 베이스
 K, TI = (1.0, 5.0), (1.0, 0.5)               # 문헌의 PARAMVARY1, PARAMVARY2
 SETTLE, OVERSHOOT = 15.0, 0.05               # 문헌의 목표
 UNTIL = 60.0
@@ -38,8 +40,8 @@ def configuration(feedforward: int, k: float, ti: float) -> DecisionSet:
 
 def run(feedforward: int, k: float, ti: float, doc=None, binding=None) -> dict:
     """설정 하나를 만들고 돌린다. 제어량의 응답과 목표에 닿았는지를 돌려준다."""
-    doc = doc or load_ses(os.path.join(HERE, "feedback_control.ses.yaml"))
-    binding = binding or X.load_binding(os.path.join(HERE, "feedback_control.binding.devs.yaml"))
+    doc = doc or load_ses(PACK.path(PACK.document))
+    binding = binding or X.load_binding(PACK.path(PACK.binding))
     built = direct.build(doc, configuration(feedforward, k, ti))
     L, ext = X.attach(built.layered, DevsExecutor(), binding, mb.LIBRARY)
     if not X.executable(L, ext, built.variant):
@@ -54,8 +56,8 @@ def run(feedforward: int, k: float, ti: float, doc=None, binding=None) -> dict:
 
 def study() -> tuple:
     """문헌의 실험 과정. (살핀 설정들의 결과, 목표에 닿은 설정들)을 돌려준다."""
-    doc = load_ses(os.path.join(HERE, "feedback_control.ses.yaml"))
-    binding = X.load_binding(os.path.join(HERE, "feedback_control.binding.devs.yaml"))
+    doc = load_ses(PACK.path(PACK.document))
+    binding = X.load_binding(PACK.path(PACK.binding))
     tried = []
     for feedforward in (0, 1):               # 피드포워드가 없는 구조부터
         results = [run(feedforward, k, ti, doc, binding) for k in K for ti in TI]

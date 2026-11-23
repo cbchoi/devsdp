@@ -6,6 +6,10 @@
     ses build    문서 --decisions 파일 [--defaults] [--depth N] [--functions 모듈:이름]
     ses plan     문서 --decisions 파일 --binding 파일 --library 모듈:이름 [--json] [...]
     ses run      문서 --decisions 파일 --binding 파일 --library 모듈:이름 --until 시각 [--log N] [...]
+    ses pack new   디렉터리 [--name 이름]
+    ses pack check 디렉터리 [--record] [--executors devs,pyevsim,cevsim]
+    ses pack show  디렉터리
+    ses pack run   디렉터리 사례 [--until 시각] [--log N]
 
 check 는 문서와 변이 공간 전체를 진단한다(편집기의 진단과 같다). choices 와 variants 는 결정 집합을
 적용한 족에서 남은 선택지와 변이를 보인다.
@@ -21,6 +25,10 @@ choices 는 선택의 핵만 본다. 속성의 식, 결합의 틀, 포트는 보
 
 build, plan, run 은 결정이 끝난 변이 하나를 위에서 아래로 만든다(ses_core/direct.py). 족을 펼치지
 않으므로 큰 모델에 쓴다. plan 은 실행기를 붙여 계획을 만들고, run 은 그 계획을 참조 시뮬레이터(devs)로 돌린다.
+
+pack 은 분야 묶음을 다룬다(ses_core/pack.py, docs/ses-platform/20_packs.md). 묶음은 문서, 모델 베이스, 바인딩,
+사례를 한 디렉터리에 담은 것이다. new 는 돌아가는 가장 작은 묶음을 만들고, check 는 묶음이 플랫폼의 계약을
+지키는지 본다.
 
 모듈:이름 은 파이썬 모듈 안의 사전을 가리킨다. 문서의 식이 부르는 함수들(--functions)과 실행기의 모듈
 라이브러리(--library)다. 모듈은 지금 디렉터리에서도 찾는다.
@@ -352,6 +360,101 @@ def cmd_run(args, out) -> int:
 
 
 # ---------------------------------------------------------------------------
+# 분야 묶음
+# ---------------------------------------------------------------------------
+
+def _report(report, out) -> None:
+    pack = report.pack
+    for f in report.findings:
+        print(f"{f.severity} {f.code} {f.where}: {f.message}", file=out)
+    if pack is None:
+        return
+    if report.family is not None:
+        print(f"문서 {pack.document}: 변이 {_count(report.family[0])}개, 그 가운데 적격 {_count(report.family[1])}개", file=out)
+    for name, info in report.cases.items():
+        parts = []
+        if "atoms" in info:
+            parts.append(f"원자 구성요소 {info['atoms']}개, 연결 {info['links']}개")
+        if "events" in info:
+            parts.append(f"사건 {info['events']}개, 지문 {info['digest']}")
+        if "executors" in info:
+            parts.append("실행기 " + ", ".join(f"{k} {v}" for k, v in info["executors"].items()))
+        print(f"사례 {name}: " + (". ".join(parts) if parts else "만들지 못했다"), file=out)
+
+
+def cmd_pack_new(args, out) -> int:
+    from . import pack as P
+    try:
+        written = P.scaffold(args.directory, args.name)
+    except P.PackError as e:
+        raise Stop(FAILED, str(e))
+    for path in written:
+        print(f"만들었다: {os.path.relpath(path)}", file=out)
+    report = P.check(args.directory, record=True)
+    _report(report, out)
+    print(f"다음: {os.path.join(args.directory, 'pack.yaml')} 의 설명을 읽고, 문서와 모델 베이스를 자기 분야의 것으로 바꾼다. "
+          f"바꿀 때마다 ses pack check {args.directory} 로 본다", file=out)
+    return OK if report.ok else FAILED
+
+
+def cmd_pack_check(args, out) -> int:
+    from . import pack as P
+    wanted = tuple(x for x in args.executors.split(",") if x) if args.executors else None
+    report = P.check(args.directory, record=args.record, executors=wanted)
+    _report(report, out)
+    errors = len(report.errors)
+    warnings = sum(f.severity == "warning" for f in report.findings)
+    print(f"묶음 {report.pack.name if report.pack else args.directory}: "
+          + ("통과" if not errors else f"오류 {errors}건") + (f", 경고 {warnings}건" if warnings else ""), file=out)
+    return OK if not errors else FAILED
+
+
+def cmd_pack_show(args, out) -> int:
+    from . import pack as P
+    try:
+        pack = P.load(args.directory)
+    except P.PackError as e:
+        raise Stop(FAILED, str(e))
+    print(f"묶음 {pack.name}" + (f": {pack.title}" if pack.title else ""), file=out)
+    print(f"문서 {pack.document}" + (f", 프로파일 {pack.profile}" if pack.profile else ""), file=out)
+    if pack.model_file:
+        print(f"모델 베이스 {pack.model_file}" + (f" (모듈 {pack.library})" if pack.library else "")
+              + (f" (함수 {pack.functions})" if pack.functions else ""), file=out)
+    if pack.binding:
+        print(f"바인딩 {pack.binding}. 실행기 {', '.join(pack.executors)}", file=out)
+    for c in pack.cases:
+        print(f"사례 {c.name}: " + (c.decisions or "결정 없음") + (f", 시각 {c.until} 까지" if c.until is not None else ""),
+              file=out)
+    stem = os.path.splitext(pack.model_file)[0].replace(os.sep, ".") if pack.model_file else None
+    fn = f" --functions {stem}:{pack.functions}" if pack.functions else ""
+    prof = f" --profile {pack.profile}" if pack.profile else ""
+    print("이 디렉터리 안에서 쓰는 명령:", file=out)
+    print(f"  ses check {pack.document}{fn}{prof}", file=out)
+    print(f"  ses choices {pack.document}{fn}", file=out)
+    for c in pack.cases:
+        if c.decisions:
+            print(f"  ses choices {pack.document}{fn} --decisions {c.decisions}", file=out)
+            print(f"  ses build {pack.document}{fn} --decisions {c.decisions}", file=out)
+            if pack.binding:
+                print(f"  ses plan {pack.document}{fn} --decisions {c.decisions} --binding {pack.binding} "
+                      f"--library {stem}:{pack.library}", file=out)
+    return OK
+
+
+def cmd_pack_run(args, out) -> int:
+    from . import pack as P
+    try:
+        log, sigma, atoms = P.run(args.directory, args.case, args.until)
+    except P.PackError as e:
+        raise Stop(FAILED, str(e))
+    for t, path, port, value in log[:args.log]:
+        print(f"{t} {'/'.join(path)}.{port} {json.dumps(value, ensure_ascii=False, default=str)}", file=out)
+    print(f"변수 값 {sigma}. 원자 구성요소 {atoms}개. 출력 사건 {len(log)}개"
+          + (f", 마지막 시각 {log[-1][0]}" if log else ""), file=out)
+    return OK
+
+
+# ---------------------------------------------------------------------------
 
 def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="ses", description="SES 문서를 검사하고, 변이를 고르고, 만들고, 돌린다")
@@ -362,6 +465,27 @@ def parser() -> argparse.ArgumentParser:
         p.add_argument("--functions", help="문서의 식이 부르는 함수들의 사전. 모듈:이름")
         p.add_argument("--decisions", required=decisions_required, help="결정 집합(YAML)")
         return p
+
+    pk = sub.add_parser("pack", help="분야 묶음: 만들고, 검사하고, 사례를 돌린다").add_subparsers(dest="pack_command",
+                                                                                             required=True)
+    c = pk.add_parser("new", help="돌아가는 가장 작은 묶음을 새 디렉터리에 만든다")
+    c.add_argument("directory")
+    c.add_argument("--name", help="묶음의 이름. 주지 않으면 디렉터리의 이름")
+    c.set_defaults(run=cmd_pack_new)
+    c = pk.add_parser("check", help="묶음이 플랫폼의 계약을 지키는지 본다")
+    c.add_argument("directory")
+    c.add_argument("--record", action="store_true", help="사례의 기록을 records.yaml 에 적는다")
+    c.add_argument("--executors", help="실행기 사이의 일치를 볼 실행기들. 쉼표로 가른다. 주지 않으면 쓸 수 있는 것 전부")
+    c.set_defaults(run=cmd_pack_check)
+    c = pk.add_parser("show", help="묶음에 든 것과, 그 안에서 쓰는 명령을 보인다")
+    c.add_argument("directory")
+    c.set_defaults(run=cmd_pack_show)
+    c = pk.add_parser("run", help="사례 하나를 참조 시뮬레이터로 돌려 출력 사건을 보인다")
+    c.add_argument("directory")
+    c.add_argument("case")
+    c.add_argument("--until", type=float, help="돌릴 시각. 주지 않으면 선언에 적힌 시각")
+    c.add_argument("--log", type=int, default=20, help="보일 사건의 수")
+    c.set_defaults(run=cmd_pack_run)
 
     c = sub.add_parser("check", help="문서와 변이 공간 전체를 진단한다")
     c.add_argument("document")

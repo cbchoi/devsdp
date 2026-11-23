@@ -1,0 +1,7 @@
+# 피드포워드 제어가 없는 구조.
+decisions: "1.0"
+name: plain
+target: ctrlSys
+
+variables:
+  feedforward: 0

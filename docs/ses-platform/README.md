@@ -25,6 +25,8 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | 17_time_unit.md | 시간 단위: 바인딩에 적는 시간 단위와 눈금으로 세는 시각의 계약, 눈금을 엔진의 시각에 맞추는 방법, 시간 값의 정적 검사(B5), 세 실행기의 기록 대조, 한계와 결정이 필요한 것 |
 | 18_classic_parity.md | 전통적인 SES와의 간격 메우기: 선택에 대한 제약(selected), 이름으로 등록한 함수(call), 우선순위, 사례마다 다른 매개변수(속성의 식, 복제본마다의 값, 결정 집합의 속성 재정의), 규모(결정이 끝난 변이를 직접 만드는 길), 도구와 사례(패키지, 명령줄 도구 ses, 문헌 사례 둘의 재현), 빠진 구성요소가 분해를 고르지 않게 한 수정, 작업 중에 찾은 결함, 검증 상태 |
 | 19_literature_check.md | 문헌 확인: 07, 08, 11, 14, 10 문서와 theory.md의 주장마다 선행 연구와의 관계. 일곱 분야의 보고와 강한 주장 46건의 재확인. 제품 라인, 반환 파싱, 구성요소 모델 분야에 이미 있는 것과 SES에 고유한 것. 원문 접근의 한계(읽은 것은 19%)와 읽지 못한 문헌. 우리 문서의 잘못과 고칠 말. 문헌의 도구와의 차이 |
+| 20_packs.md | 분야 묶음: 연구자가 자기 분야를 올리는 단위. 공통인 것과 연구자의 것의 경계, 모델의 계약(공통 모델 기반으로 정함), 묶음의 선언(pack.yaml), 적합성 검사의 부호 P0에서 P7, 명령 ses pack, 저장소의 묶음 둘, 한계 |
+| GUIDE.md | 처음 오는 연구자를 위한 안내서. 설치, 첫 묶음, 문서에 묻기, 돌리기, 검사, 자기 분야로 바꾸기(대안 더하기, 일부러 틀려 보기, 원자 모델 더하기), 다른 엔진, 모델을 쓸 때 지킬 것. 적힌 명령과 출력은 tests/test_guide.py가 실제 도구와 견준다 |
 | patches/cevsim_a9886a6_schedule_and_messages.patch | cevsim a9886a6의 두 결함(일정 목록과 메시지 묶음에서 열쇠로 지우기)을 고치는 제안. 그 커밋의 사본에서 확인했다. cevsim의 main(45e7fa9)은 같은 문제를 다른 방법으로 고쳤으므로 main에는 맞지 않는다. 기록으로 둔다 |
 | patches/cevsim_45e7fa9_gxx_linux_issue.md | cevsim에 알릴 글(영어). cevsim의 main(45e7fa9)의 자체 시험이 g++ 13.3과 리눅스에서 컴파일되지 않거나 실패하는 곳, 원인 셋, 사본에서 확인한 고치는 길 셋, long double의 폭에 따라 결과가 달라지는 예. cevsim 저장소에는 올리지 않았다 |
 | patches/cevsim_45e7fa9_gxx_linux_tests.patch | 위의 글에 딸린 수정 제안. 시험 코드만 고친다(파일 7개, 17줄). 45e7fa9의 사본에서 등록된 시험 24개가 모두 통과하는 것을 확인했다 |
@@ -45,8 +47,8 @@ System Entity Structure(SES, 시스템 엔티티 구조)를 연구와 개발에�
 | examples/processing_system.binding.devs.yaml | 처리 시스템에 DEVS 실행기를 붙이는 바인딩. 모델베이스는 저장소 루트의 examples/processing_mb.py |
 | examples/sensor_node.ses.yaml | 센서 노드 예시 SES. 실행기 둘을 붙인다 |
 | examples/sensor_node.binding.devs.yaml, sensor_node.binding.hw.yaml, sensor_node.hwlib.yaml | 센서 노드의 DEVS 바인딩, 하드웨어 바인딩, 하드웨어 모듈 라이브러리 |
-| examples/wsn.ses.yaml, wsn.binding.devs.yaml, wsn.decisions.yaml | 문헌 사례: 큰 무선 센서 네트워크(Nam, Kim (2021)). 결정 파일은 센서 1,000개를 정한다. 모델베이스는 저장소 루트의 examples/wsn_mb.py |
-| examples/feedback_control.ses.yaml, feedback_control.binding.devs.yaml | 문헌 사례: 피드포워드를 켜고 끄는 피드백 제어(Folkerts et al. (2019)). 모델베이스와 실험 제어는 저장소 루트의 examples/feedback_control_mb.py, feedback_control_experiment.py |
+| 저장소 루트의 packs/wsn | 분야 묶음. 문헌 사례: 큰 무선 센서 네트워크(Nam, Kim (2021)). 문서, 모델베이스, 바인딩, 사례 둘(센서 9개, 센서 1,000개). 20 문서 |
+| 저장소 루트의 packs/feedback_control | 분야 묶음. 문헌 사례: 피드포워드를 켜고 끄는 피드백 제어(Folkerts et al. (2019)). 문서, 모델베이스, 바인딩, 사례 둘, 실험 제어(experiment.py) |
 
 예시 SES는 스키마로 검증했다. 검증 방법:
 

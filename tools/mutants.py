@@ -5,13 +5,17 @@
 
 대상은 의미의 핵이다. 정의 표 위의 의미(folded.py), 그 표현인 펼침의 규칙(unfold.py), 뼈대(skeleton.py),
 문서의 조건(loader.py). docs/ses-platform/theory.md 의 정의와 정리마다 그것을 틀리게 하는 변이를 둔다.
+
+분야 묶음의 적합성 검사(pack.py, docs/ses-platform/20_packs.md)도 대상이다. 검사 부호 P0 에서 P7 마다
+그 검사를 끄는 변이를 둔다. 묶음을 받는 연구자에게는 이 검사가 계약이기 때문이다.
 """
 
 FO, UN, SK, LO = "ses_core/folded.py", "ses_core/unfold.py", "ses_core/skeleton.py", "ses_core/loader.py"
+PA = "ses_core/pack.py"
 
 # 빠른 묶음: 의미의 핵을 직접 보는 시험. 여기서 살아남으면 전체를 돌린다
 FAST = ["tests/test_folded.py", "tests/test_loader.py", "tests/test_parity.py", "tests/test_local.py",
-        "tests/test_diagnose.py", "tests/test_decide.py"]
+        "tests/test_diagnose.py", "tests/test_decide.py", "tests/test_pack.py"]
 FULL = ["tests"]
 
 
@@ -243,4 +247,43 @@ MUTANTS = [
     m("L3 (W5) 글자로 적으면 같은 값을 받음", LO,
       "            twice = sorted({w for w in written if written.count(w) > 1})\n            if twice:",
       "            twice = sorted({w for w in written if written.count(w) > 1})\n            if False:"),
+    # 문서의 열쇠 ------------------------------------------------------------
+    m("L10 모르는 항목을 조용히 버림", LO, "    for key in sorted(map(str, set(d) - KEYS[kind])):", "    for key in ():"),
+    m("L11 있어야 하는 항목이 없어도 알리지 않음", LO,
+      "        if key not in d:\n            raise LoadError(f\"{where}: {key} 가 없다\")",
+      "        if False:\n            raise LoadError(f\"{where}: {key} 가 없다\")"),
+    # 분야 묶음의 적합성 검사 (20 문서) ----------------------------------------
+    m("K1 (P0) 묶음 밖을 가리키는 경로를 받음", PA,
+      "    if os.path.isabs(relative) or \"..\" in relative.replace(\"\\\\\", \"/\").split(\"/\"):", "    if False:"),
+    m("K2 (P0) 선언의 모르는 항목을 받음", PA, "    if unknown:\n        raise PackError", "    if False:\n        raise PackError"),
+    m("K3 (P1) 적격인 변이가 하나도 없어도 통과", PA,
+      "        if report.family is not None and not broken and report.family[1] == 0:", "        if False:"),
+    m("K4 (P1) 족의 어떤 변이가 규칙을 어기면 묶음을 막음", PA,
+      "            if d.severity == \"error\" and d.scope == \"family\":", "            if False:"),
+    m("K5 (P2) 공통 모델 기반이 아닌 모듈을 받음", PA,
+      "    if not (isinstance(body, type) and issubclass(body, Atomic)):", "    if False:"),
+    m("K6 (P2) 입력이 아닌 포트를 REQUIRED 에 둬도 받음", PA, "        if port not in ins:", "        if False:"),
+    m("K7 (P2) 처음 상태가 선언하지 않은 포트로 내도 받음", PA,
+      "                    if port not in outs:\n                        say(\"error\", \"P2\"",
+      "                    if False:\n                        say(\"error\", \"P2\""),
+    m("K8 (P3) 문서에 없는 정의를 묶어도 받음", PA, "            if name not in doc.entities:", "            if False:"),
+    m("K9 (P3) 라이브러리에 없는 모듈을 묶어도 받음", PA,
+      "            if library is not None and bind.module not in library:", "            if False:"),
+    m("K10 (P4) 다른 문서의 결정 집합을 받음", PA,
+      "        if ds is not None and ds.target is not None and ds.target != doc.name:", "        if False:"),
+    m("K11 (P5) 조립되지 않는 변이를 알리지 않음", PA,
+      "        found = violations(built.layered, V)\n        for line in shown(found):",
+      "        found = violations(built.layered, V)\n        for line in ():"),
+    m("K12 (P5) 실행 가능하지 않은 변이를 알리지 않고 넘어감", PA,
+      "        found = violations(X.alone(L, ext), V)\n        for line in shown(found):",
+      "        found = []\n        for line in shown(found):"),
+    m("K13 (P6) 선언하지 않은 포트로 낸 사건을 알리지 않음", PA, "        for where, port in strays:", "        for where, port in ():"),
+    m("K14 (P6) 두 번 돌린 기록이 달라도 받음", PA, "        if digest(again) != mine[\"digest\"]:", "        if False:"),
+    m("K15 (P6) 적어 둔 기록과 달라도 받음", PA,
+      "        elif (old.get(\"digest\"), old.get(\"until\")) != (mine[\"digest\"], mine[\"until\"]):", "        elif False:"),
+    m("K16 (P6) 지문이 값을 보지 않음", PA,
+      "    rows = [[t, \"/\".join(map(str, path)), port, value] for t, path, port, value in log]",
+      "    rows = [[t, \"/\".join(map(str, path)), port] for t, path, port, value in log]"),
+    m("K17 (P7) 실행기의 기록이 달라도 같다고 함", PA, "            if theirs == log:", "            if True:"),
+    m("K18 (P7) 특정 엔진의 모듈이 든 사례를 다른 실행기에서 돌림", PA, "            if not portable:", "            if False:"),
 ]

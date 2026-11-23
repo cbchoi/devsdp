@@ -327,8 +327,8 @@ plan = X.plan(L, ext, b.variant)
 |---|---|---|
 | 패키지 | pyproject.toml | pip install . 로 설치한다. 의존은 PyYAML 하나다. 시험까지 하려면 ".[test]". cevsim 다리의 C++ 소스도 함께 설치된다 |
 | 명령줄 도구 | ses_core/cli.py. 설치하면 ses, 아니면 python -m ses_core | 아래 표 |
-| 사례 1 | examples/wsn.ses.yaml, wsn.binding.devs.yaml, wsn.decisions.yaml, 저장소 루트의 examples/wsn_mb.py | 큰 무선 센서 네트워크. 6.3절 |
-| 사례 2 | examples/feedback_control.ses.yaml, feedback_control.binding.devs.yaml, 저장소 루트의 examples/feedback_control_mb.py, feedback_control_experiment.py | 피드백 제어와 그 실험 제어. 6.4절 |
+| 사례 1 | 저장소 루트의 packs/wsn (2026-11-23에 분야 묶음으로 옮겼다. 20 문서). wsn.ses.yaml, binding.yaml, cases/field_1000.decisions.yaml, model_base.py | 큰 무선 센서 네트워크. 6.3절 |
+| 사례 2 | 저장소 루트의 packs/feedback_control (2026-11-23에 분야 묶음으로 옮겼다). feedback_control.ses.yaml, binding.yaml, model_base.py, experiment.py | 피드백 제어와 그 실험 제어. 6.4절 |
 
 | 명령 | 하는 일 | 길 |
 |---|---|---|
@@ -343,7 +343,7 @@ plan = X.plan(L, ext, b.variant)
 
 ```bash
 ses check docs/ses-platform/examples/processing_system.ses.yaml
-ses run docs/ses-platform/examples/wsn.ses.yaml --decisions docs/ses-platform/examples/wsn.decisions.yaml --binding docs/ses-platform/examples/wsn.binding.devs.yaml --library examples.wsn_mb:LIBRARY --functions examples.wsn_mb:FUNCTIONS --until 200
+ses run packs/wsn/wsn.ses.yaml --decisions packs/wsn/cases/field_1000.decisions.yaml --binding packs/wsn/binding.yaml --library packs.wsn.model_base:LIBRARY --functions packs.wsn.model_base:FUNCTIONS --until 200
 ```
 
 ### 6.3 사례 1: 큰 무선 센서 네트워크
@@ -368,9 +368,9 @@ ses run docs/ses-platform/examples/wsn.ses.yaml --decisions docs/ses-platform/ex
 
 구조는 Folkerts et al. (2019)의 그림 4를 따랐다. PT1 공정 1/(20s+1)을 PID 제어기로 제어하고, 계단 외란은 1/(10s+1)을 거쳐 공정의 출력에 더해진다. 피드포워드 제어기 (20s+1)/(10s+1)은 외란에서 계산한 값을 조작량에서 뺀다. 피드포워드 제어기는 NONE 대안을 가진 specialization이고 변수 feedforward의 선택 규칙으로 고른다. 문헌 그대로다. 구조 변이는 둘이다.
 
-PID의 k와 Ti는 문헌처럼 SES에 기본값을 두고 실험 제어가 덮어쓴다. 여기서는 결정 집합의 재정의로 한다(4절). 실험 제어(examples/feedback_control_experiment.py)는 문헌의 2.4절 과정이다. 피드포워드가 없는 구조에서 PID 설정 넷(k는 1과 5, Ti는 1과 0.5)을 살피고, 목표(외란 뒤 정착 15초 미만, 최대 벗어남 5% 미만)에 닿지 못하면 피드포워드가 있는 구조로 다시 살핀다. 설정마다 변이 하나를 직접 만들고, 실행기를 붙이고, 돌린다.
+PID의 k와 Ti는 문헌처럼 SES에 기본값을 두고 실험 제어가 덮어쓴다. 여기서는 결정 집합의 재정의로 한다(4절). 실험 제어(packs/feedback_control/experiment.py)는 문헌의 2.4절 과정이다. 피드포워드가 없는 구조에서 PID 설정 넷(k는 1과 5, Ti는 1과 0.5)을 살피고, 목표(외란 뒤 정착 15초 미만, 최대 벗어남 5% 미만)에 닿지 못하면 피드포워드가 있는 구조로 다시 살핀다. 설정마다 변이 하나를 직접 만들고, 실행기를 붙이고, 돌린다.
 
-모델베이스(examples/feedback_control_mb.py)는 연속 시간 블록을 간격 0.125초로 이산화(전진 오일러)해 사건으로 옮긴 것이다.
+모델베이스(packs/feedback_control/model_base.py)는 연속 시간 블록을 간격 0.125초로 이산화(전진 오일러)해 사건으로 옮긴 것이다.
 
 | 피드포워드 | k | Ti | 최대 벗어남 | 정착 시간 | 목표 |
 |---|---|---|---|---|---|

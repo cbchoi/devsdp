@@ -1,4 +1,4 @@
-"""센서 네트워크 사례(docs/ses-platform/examples/wsn.ses.yaml)의 DEVS 모델베이스.
+"""센서 네트워크 사례(wsn.ses.yaml)의 DEVS 모델베이스.
 
 구조는 Nam, Kim (2021)의 WSN-SES/MB를 따랐지만 원자 모델의 행위는 문헌의 상태도를 옮긴 것이
 아니다. 같은 역할을 하는 작은 모델이다. 사건 생성기가 센서장의 한 점에서 사건을 내고, 그 점에서

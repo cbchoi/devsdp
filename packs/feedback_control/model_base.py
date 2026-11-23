@@ -1,4 +1,4 @@
-"""피드백 제어 사례(docs/ses-platform/examples/feedback_control.ses.yaml)의 DEVS 모델베이스.
+"""피드백 제어 사례(feedback_control.ses.yaml)의 DEVS 모델베이스.
 
 Folkerts et al. (2019)의 기본 모델(Constant, Step, Feedback, PID, TransferFunction, Add)은
 OpenModelica 의 연속 시간 모델이다. 여기서는 고정 간격 h(바인딩의 시간 단위)로 이산화했다.

@@ -1,0 +1,18 @@
+# 분야 묶음: 피드포워드 제어를 켜고 끌 수 있는 피드백 제어. 문헌 사례(Folkerts et al. (2019))의 재현이다.
+# 18_classic_parity.md 6.4절. 검사: ses pack check packs/feedback_control
+pack: "1.0"
+name: feedback_control
+title: PT1 공정의 피드백 제어. 구조 변이 둘과, 제어기의 설정을 살피는 실험 제어
+
+document: feedback_control.ses.yaml
+model_base:
+  file: model_base.py
+  library: LIBRARY
+binding: binding.yaml
+
+cases:
+  - {name: plain, decisions: cases/plain.decisions.yaml, until: 60}
+  - {name: feedforward, decisions: cases/feedforward.decisions.yaml, until: 60}
+
+experiments:
+  - experiment.py                  # 문헌의 실험 제어. python packs/feedback_control/experiment.py

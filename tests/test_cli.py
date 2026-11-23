@@ -39,12 +39,16 @@ def path(name: str) -> str:
 
 
 PROCESSING = path("processing_system.ses.yaml")
-WSN = ("--functions", "examples.wsn_mb:FUNCTIONS")
+WSN = ("--functions", "packs.wsn.model_base:FUNCTIONS")
+PACKS = os.path.join(ROOT, "packs")
+WSN_DOC = os.path.join(PACKS, "wsn", "wsn.ses.yaml")
+WSN_DECISIONS = os.path.join(PACKS, "wsn", "cases", "field_1000.decisions.yaml")
+WSN_BINDING = os.path.join(PACKS, "wsn", "binding.yaml")
 
 
 def test_check_reports_the_family_and_the_limit():
     assert ses("check", PROCESSING) == (0, "변이 15개, 그 가운데 적격 15개\n")
-    code, out = ses("check", path("wsn.ses.yaml"), *WSN)
+    code, out = ses("check", WSN_DOC, *WSN)
     assert code == 0 and "info LIMIT" in out
     assert "변이 9000개, 그 가운데 핵 적격 9000개 (열거하지 않고 정의 표 위에서 셌다. 확장은 결합의 국소 검사만 했다)" in out
 
@@ -214,20 +218,20 @@ def test_build_reports_a_removed_root_instead_of_crashing(tmp_path):
 
 
 def test_plan_matches_the_library_and_reports_violations(tmp_path):
-    args = ("plan", path("wsn.ses.yaml"), "--decisions", path("wsn.decisions.yaml"),
-            "--binding", path("wsn.binding.devs.yaml"), "--library", "examples.wsn_mb:LIBRARY", *WSN)
+    args = ("plan", WSN_DOC, "--decisions", WSN_DECISIONS,
+            "--binding", WSN_BINDING, "--library", "packs.wsn.model_base:LIBRARY", *WSN)
     code, out = ses(*args)
     assert code == 0 and out.endswith("원자 구성요소 1003개, 원자 사이의 연결 2001개\n")
     code, out = ses(*args, "--json")
     plan = json.loads(out)
     sys.path.insert(0, ROOT)
-    from examples import wsn_mb
-    b = direct.build(load_ses(path("wsn.ses.yaml")), load_decisions(path("wsn.decisions.yaml")),
+    from packs.wsn import model_base as wsn_mb
+    b = direct.build(load_ses(WSN_DOC), load_decisions(WSN_DECISIONS),
                      functions=wsn_mb.FUNCTIONS)
-    L, ext = X.attach(b.layered, DevsExecutor(), X.load_binding(path("wsn.binding.devs.yaml")), wsn_mb.LIBRARY)
+    L, ext = X.attach(b.layered, DevsExecutor(), X.load_binding(WSN_BINDING), wsn_mb.LIBRARY)
     assert plan == json.loads(json.dumps(X.plan(L, ext, b.variant), default=str))
     lib = tmp_path / "shortlib.py"                           # 센서 모듈이 빠진 라이브러리
-    lib.write_text("from examples.wsn_mb import LIBRARY as ALL\nLIBRARY = {k: v for k, v in ALL.items() if k != 'Sensor'}\n",
+    lib.write_text("from packs.wsn.model_base import LIBRARY as ALL\nLIBRARY = {k: v for k, v in ALL.items() if k != 'Sensor'}\n",
                    encoding="utf-8")
     sys.path.insert(0, str(tmp_path))
     try:
@@ -256,9 +260,9 @@ def test_run_equals_running_the_library_directly():
 
 
 @pytest.mark.parametrize("spec,why", [("nowhere", "'모듈:이름' 꼴"), ("examples.nowhere:LIB", "를 찾을 수 없다"),
-                                      ("examples.wsn_mb:NOTHING", "를 찾을 수 없다")])
+                                      ("packs.wsn.model_base:NOTHING", "를 찾을 수 없다")])
 def test_bad_module_references_are_reported(spec, why):
-    code, out = ses("build", path("wsn.ses.yaml"), "--decisions", path("wsn.decisions.yaml"), "--functions", spec)
+    code, out = ses("build", WSN_DOC, "--decisions", WSN_DECISIONS, "--functions", spec)
     assert code == 1 and why in out
 
 
@@ -273,8 +277,8 @@ def test_modules_are_found_in_the_current_directory_like_an_installed_command():
     script = ("import os, sys; sys.path.insert(0, os.getcwd()); from ses_core import cli; "
               "here = os.getcwd(); sys.path[:] = [p for p in sys.path if p not in ('', '.', here)]; "
               "raise SystemExit(cli.main(sys.argv[1:]))")
-    args = ["plan", path("wsn.ses.yaml"), "--decisions", path("wsn.decisions.yaml"), "--binding",
-            path("wsn.binding.devs.yaml"), "--library", "examples.wsn_mb:LIBRARY", *WSN]
+    args = ["plan", WSN_DOC, "--decisions", WSN_DECISIONS, "--binding",
+            WSN_BINDING, "--library", "packs.wsn.model_base:LIBRARY", *WSN]
     r = subprocess.run([sys.executable, "-c", script, *args], cwd=ROOT, capture_output=True, text=True, timeout=120)
     assert r.returncode == 0 and r.stdout.endswith("원자 구성요소 1003개, 원자 사이의 연결 2001개\n"), r.stdout + r.stderr
 

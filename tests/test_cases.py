@@ -23,9 +23,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from test_direct import facts  # noqa: E402
 
-from examples import feedback_control_experiment as experiment  # noqa: E402
-from examples import feedback_control_mb as fb  # noqa: E402
-from examples import wsn_mb  # noqa: E402
+from packs.feedback_control import experiment  # noqa: E402
+from packs.wsn import model_base as wsn_mb  # noqa: E402
 from ses_core import direct, load_ses, load_ses_dict  # noqa: E402
 from ses_core import edit as E  # noqa: E402
 from ses_core import executor as X  # noqa: E402
@@ -37,11 +36,14 @@ from ses_core.extension import Layered  # noqa: E402
 from ses_core.skeleton import assignment, skeleton  # noqa: E402
 from ses_core.unfold import unfold_layered, variable_domains  # noqa: E402
 
-EXAMPLES = os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform", "examples")
+PACKS = os.path.join(os.path.dirname(__file__), "..", "packs")
+WSN = os.path.join(PACKS, "wsn")
+FEEDBACK = os.path.join(PACKS, "feedback_control")
+fb = experiment.mb                           # 실험 제어가 실은, 그 묶음의 모델 베이스
 
 
 def raw(name: str) -> dict:
-    with open(os.path.join(EXAMPLES, name), encoding="utf-8") as f:
+    with open(os.path.join(WSN if name.startswith("wsn") else FEEDBACK, name), encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -93,7 +95,7 @@ def test_the_editor_handles_the_wsn_case_with_its_functions():
 
 def test_the_family_analysis_of_a_thousand_sensors_stops_at_its_limit():
     """족 수준의 분석은 개수 1부터 1,000까지를 모두 펼쳐야 한다. 한도에서 멈추고 그렇다고 알린다."""
-    m = E.load(os.path.join(EXAMPLES, "wsn.ses.yaml"))
+    m = E.load(os.path.join(WSN, "wsn.ses.yaml"))
     assert unfolded_size(m) > 500000                         # 복제본만 500,500개다
     a = analyze(m, functions=wsn_mb.FUNCTIONS)
     assert [d.code for d in a.diagnostics if d.scope == "document" and d.severity != "info"] == []
@@ -102,11 +104,11 @@ def test_the_family_analysis_of_a_thousand_sensors_stops_at_its_limit():
 
 
 def test_a_thousand_sensors_are_built_run_and_detect_what_they_can_reach():
-    doc = load_ses(os.path.join(EXAMPLES, "wsn.ses.yaml"))
-    ds = load_decisions(os.path.join(EXAMPLES, "wsn.decisions.yaml"))
+    doc = load_ses(os.path.join(WSN, "wsn.ses.yaml"))
+    ds = load_decisions(os.path.join(WSN, "cases", "field_1000.decisions.yaml"))
     started = time.perf_counter()
     b = direct.build(doc, ds, functions=wsn_mb.FUNCTIONS)
-    L, ext = X.attach(b.layered, DevsExecutor(), X.load_binding(os.path.join(EXAMPLES, "wsn.binding.devs.yaml")),
+    L, ext = X.attach(b.layered, DevsExecutor(), X.load_binding(os.path.join(WSN, "binding.yaml")),
                       wsn_mb.LIBRARY)
     assert X.executable(L, ext, b.variant) and b.unused == ()
     plan = X.plan(L, ext, b.variant)
@@ -143,8 +145,8 @@ def test_a_thousand_sensors_are_built_run_and_detect_what_they_can_reach():
 # ---------------------------------------------------------------------------
 
 def feedback() -> tuple:
-    doc = load_ses(os.path.join(EXAMPLES, "feedback_control.ses.yaml"))
-    binding = X.load_binding(os.path.join(EXAMPLES, "feedback_control.binding.devs.yaml"))
+    doc = load_ses(os.path.join(FEEDBACK, "feedback_control.ses.yaml"))
+    binding = X.load_binding(os.path.join(FEEDBACK, "binding.yaml"))
     return doc, binding
 
 

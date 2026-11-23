@@ -156,8 +156,8 @@ def test_constraints_on_selections_make_the_result_an_upper_bound():
 def test_the_sensor_network_is_checked_without_enumeration():
     """문헌 사례. 센서가 1,000개까지인 족의 결합을 몇 초 안에 본다."""
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-    from examples import wsn_mb
-    doc = load_ses(os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform", "examples", "wsn.ses.yaml"))
+    from packs.wsn import model_base as wsn_mb
+    doc = load_ses(os.path.join(os.path.dirname(__file__), "..", "packs", "wsn", "wsn.ses.yaml"))
     started = time.time()
     assert local.check(doc, wsn_mb.FUNCTIONS) == ([], False)
     assert time.time() - started < 30

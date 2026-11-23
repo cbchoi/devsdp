@@ -195,6 +195,8 @@ def observe(model) -> dict:
 def module_of(cls, name: str = None):
     """원자 모델 클래스에서 모듈 선언을 만든다."""
     from .executor import Module
+    if not (isinstance(cls, type) and issubclass(cls, Atomic)):
+        raise TypeError(f"{getattr(cls, '__name__', cls)} 는 공통 모델 기반(ses_core.devs.Atomic 의 하위 클래스)이 아니다")
     return Module(name or cls.__name__, dict(cls.PORTS), tuple(cls.REQUIRED), dict(cls.PARAMS), cls)
 
 
