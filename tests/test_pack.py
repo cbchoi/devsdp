@@ -587,3 +587,38 @@ def test_a_document_without_a_wellformed_variant_is_an_error(line):
     assert report.family == (2, 0) and "P1" in codes(report)
     assert "변이 2개 가운데 적격인 것이 하나도 없다" in said(report, "P1")
     assert any(f.severity == "warning" and "적격이 아닌 변이가 있다" in f.message for f in report.of("P1"))
+    # 사례로 고른 변이가 조립되지 않는 것은 사례마다 따로 알린다
+    assert {f.where for f in report.of("P5")} == {"fast", "slow"}
+    assert "이 변이는 조립되지 않는다" in said(report, "P5") and "C4" in said(report, "P5")
+    assert all("events" not in c for c in report.cases.values())     # 조립되지 않는 변이는 돌리지 않는다
+
+
+def test_the_interface_of_every_module_is_checked(line):
+    """모듈의 선언. REQUIRED 는 입력 포트여야 하고, 손으로 만든 모듈도 본체가 공통 모델 기반이어야 한다."""
+    edit(line, "model_base.py", '    PORTS = {"in": ("Job", "in")}\n    REQUIRED = ("in",)', '    PORTS = {"in": ("Job", "in")}\n    REQUIRED = ("out",)')
+    report = P.check(line)
+    assert "P2" in codes(report) and "REQUIRED 의 out 는 입력 포트가 아니다" in said(report, "P2")
+    edit(line, "model_base.py", '    PORTS = {"in": ("Job", "in")}\n    REQUIRED = ("out",)', '    PORTS = {"in": ("Job", "in")}\n    REQUIRED = ("in",)')
+    # module_of 를 거치지 않고 만든 모듈. 본체가 공통 모델 기반이 아니면 다른 엔진에서 돌지 않는다
+    edit(line, "model_base.py", "LIBRARY = {m.name: m for m in (module_of(c) for c in (Source, Worker, Sink))}",
+         "from ses_core.executor import Module\n\n\nclass Foreign:\n    pass\n\n\n"
+         "LIBRARY = {m.name: m for m in (module_of(c) for c in (Source, Worker))}\n"
+         'LIBRARY["Sink"] = Module("Sink", {"in": ("Job", "in")}, ("in",), {}, Foreign)')
+    report = P.check(line)
+    assert codes(report) == {"P2"} and {f.where for f in report.errors} == {"Sink"}
+    assert "공통 모델 기반(ses_core.devs.Atomic 의 하위 클래스)이 아니다" in said(report, "P2")
+    assert "model_base.native 에 이름을 적는다" in said(report, "P2")
+
+
+def test_a_case_with_an_engine_specific_module_is_not_compared_across_engines(line):
+    """선언의 native 에 적은 모듈. 그 모듈이 든 사례는 다른 실행기에서 돌리지 않는다. 계약 밖이라는 표시다."""
+    edit(line, "pack.yaml", "  library: LIBRARY\n", "  library: LIBRARY\n  native: [Sink]\n")
+    report = P.check(line)
+    assert report.ok
+    for case in report.cases.values():
+        assert case["executors"]["devs"] == P.REFERENCE
+        assert case["executors"]["pyevsim"] == case["executors"]["cevsim"] == P.SKIPPED_NATIVE
+    code, out = ses("pack", "check", line)
+    assert code == 0 and "pyevsim 건너뜀(특정 엔진의 모듈이 들어 있다)" in out
+    edit(line, "pack.yaml", "  native: [Sink]\n", "  native: [Drain]\n")
+    assert "model_base.native 에 적힌 모듈이 라이브러리에 없다" in said(P.check(line), "P2")

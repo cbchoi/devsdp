@@ -382,8 +382,9 @@ def test_a_fault_of_the_tool_is_a_finding_too(lab, monkeypatch):
     assert codes(env) == {"A9"} and "ZeroDivisionError: 안에서 난 일" in said(env) and env["result"] is None
 
 
-def test_a_helper_file_of_a_pack_is_read_again_and_does_not_leak(lab):
+def test_a_helper_file_of_a_pack_is_read_again_and_does_not_leak(lab, monkeypatch):
     """묶음 안의 보조 파일. 고치면 고친 것이 읽히고, 다른 묶음의 같은 이름의 파일과 섞이지 않는다."""
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)   # 바이트코드를 쓰는 환경에서도 묶음에 남기지 않는다는 것을 본다
     call("pack_new", {"dir": "second"}, root=lab)
     for name, base in (("lab", 100), ("second", 200)):
         with open(os.path.join(lab, name, "helper.py"), "w", encoding="utf-8") as f:
