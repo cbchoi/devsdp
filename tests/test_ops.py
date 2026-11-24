@@ -509,8 +509,8 @@ def test_a_line_says_what_kind_it_is_and_what_to_do_next(lab):
 
     edit(os.path.join(root, "cases/fast.decisions.yaml"), "  - {at: Worker, specialization: speed, alternative: Fast}\n", "")
     found = kinds(call("pack_build", {"dir": "lab", "case": "fast"}, root=lab))
-    assert found["undecided"]["data"] == {"at": ["Line", "Worker"], "choice": "alternative", "group": "speed",
-                                          "options": ["Fast", "Slow"]}
+    assert found["undecided"]["data"] == {"path": ["Line", "Worker"], "choice": "alternative", "group": "speed",
+                                          "options": ["Fast", "Slow"], "options_count": 2}
     assert found["undecided"]["code"] == "P4" and "결정 집합에 결정을 더한다" in found["undecided"]["next"]
     shutil.rmtree(root)
     call("pack_new", {"dir": "lab"}, root=lab)
@@ -724,7 +724,7 @@ def test_the_size_of_the_answer_is_bounded(lab):
         f"  - {{path: [Line, Nowhere{i}], attribute: x, value: 1}}\n" for i in range(300)) + "choose:")
     env = call("pack_build", {"dir": "lab", "case": "fast"}, root=lab)
     assert env["ok"] and len(env["findings"]) == ops.FINDINGS_LIMIT
-    assert env["findings"][-1]["kind"] == "limit" and env["findings"][-1]["data"] == {"more": 101}
+    assert env["findings"][-1]["kind"] == "more_findings" and env["findings"][-1]["data"] == {"more": 101}
     shutil.rmtree(root)
     call("pack_new", {"dir": "lab"}, root=lab)
 
@@ -779,6 +779,11 @@ def test_the_call_command_writes_one_ascii_line(lab, tmp_path):
 
 def errors(env) -> list:
     return [f for f in env["findings"] if f["severity"] == "error"]
+
+
+def doc_text(path: str) -> str:
+    with open(path, encoding="utf-8") as f:
+        return f.read()
 
 
 def test_binding_params_that_point_at_nothing_are_errors(lab):
@@ -913,7 +918,8 @@ def test_the_formats_say_what_shape_the_values_have():
     """뼈대가 보여 주지 않는 것(자리로 적는 결정, 기본값, 바인딩의 params, 실험)의 값의 모양을 formats 가 낸다."""
     r = call("formats", {})["result"]
     known = {"pack": set(r["pack"]["keys"]), "document": set(r["document"]), "decisions": set(r["decisions"]["keys"]),
-             "binding": set(r["binding"]["keys"]), "model": set(r["model"]["fill"])}
+             "binding": set(r["binding"]["keys"]), "model": set(r["model"]["fill"]), "profile": set(r["profile"])}
+    assert r["profile"]["profile"] == ["description", "kinds", "links", "name", "profile", "rules"]
     for name in r["shapes"]:
         file, key = name.split(".", 1)
         assert key in known[file], name                      # 문서 쪽은 formats 가 document 아래에 내는 종류의 이름이다
@@ -922,6 +928,165 @@ def test_the_formats_say_what_shape_the_values_have():
                        ("pack.cases", "defaults: true"), ("binding.map", "params: {모듈의 매개변수: 문서의 속성}"),
                        ("document.portType", "모델이 내는 값과 견주지 않는다"), ("pack.experiments", "파일이 있는지만 본다")):
         assert word in r["shapes"][name], name
+
+
+def test_what_the_second_breaker_found(lab, tmp_path):
+    """고친 표면을 깨뜨려 본 검토에서 나온 것들. 묶음의 파일의 내용은 도구의 결함(A9)이 되지 않고, 결과의 크기는 한도 안이다."""
+    root = os.path.join(lab, "lab")
+    doc = os.path.join(root, "lab.ses.yaml")
+    edit(doc, "entities:\n", "variables:\n  n: {type: int, range: [1, 3], default: 1}\n\nentities:\n")
+    for old, new, word in (("range: [1, 3]", "range: [low, max]", "정수 둘을 적는다"), ("range: [1, 3]", "range: [0, .inf]", "정수 둘을 적는다"),
+                           ("range: [1, 3]", "range: [.nan, 1]", "정수 둘을 적는다"), ("range: [1, 3]", "range: [1, 3, 99]", "정수 둘을 적는다"),
+                           ("range: [1, 3]", "range: [1, 2.5]", "정수 둘을 적는다"),
+                           ("default: 1}", 'default: 1}\n  tag: {type: str, values: ["a", "x\\ud800"]}', "짝 없는 대리 문자")):
+        edit(doc, old, new)
+        for op, args in (("pack_check", {}), ("pack_choices", {}), ("pack_build", {"case": "fast"}), ("pack_run", {"case": "fast"})):
+            found = errors(call(op, {"dir": "lab", **args}, root=lab))
+            assert found and found[0]["code"] == "P1" and word in found[0]["message"], (new, op, found)
+        edit(doc, new, old)
+    # 복제본의 수. 한 수가 연산을 끝나지 않게 하던 것이다
+    edit(doc, "        parts: [Source, Worker, Sink]", "        parts: [Source, Worker, Sink, Pool]")
+    for card in ("1000000000000000000000000000000", "{min: 1, max: 3000000}", "{var: big}"):
+        text = doc_text(doc)
+        with open(doc, "w", encoding="utf-8") as f:
+            f.write(text.replace("  n: {type: int", "  big: {type: int, range: [1, 20000]}\n  n: {type: int") if "big" in card else text)
+            f.write(f"\n  Pool:\n    multi_aspects:\n      many:\n        part: Item\n        cardinality: {card}\n\n  Item: {{}}\n")
+        for op, args in (("pack_check", {}), ("pack_choices", {}), ("pack_build", {"case": "fast"}), ("pack_run", {"case": "fast"})):
+            found = errors(call(op, {"dir": "lab", **args}, root=lab))
+            assert [(f["code"], f["kind"]) for f in found] == [("P1", "too_many_replicas")], (card, op, found)
+            assert found[0]["data"]["limit"] == P.REPLICA_LIMIT == 10000 and "Pool/many" in found[0]["message"]
+        with open(doc, "w", encoding="utf-8") as f:
+            f.write(text)
+    shutil.rmtree(root)
+    call("pack_new", {"dir": "lab"}, root=lab)
+
+    # 모델이 낸 값: 짝 없는 대리 문자, 수천 자리의 정수, 글이 아닌 열쇠. 지문을 내고, 프로세스마다 같은 봉투를 낸다
+    edit(os.path.join(root, "model_base.py"), 'return {"out": [{"id": self.count}]}',
+         'return {"out": [{"id": self.count, "big": 10 ** 5000, "s": "\\ud800", "k": {1: "a", "1": "b", frozenset({"x", "y"}): 2}}]}')
+    env = call("pack_check", {"dir": "lab", "record": True}, root=lab)
+    assert env["ok"] and env["result"]["recorded"] == ["fast", "slow"]
+    value = call("pack_run", {"dir": "lab", "case": "fast", "limit": 1}, root=lab)["result"]["log"][0]["value"]
+    assert set(value["k"]) == {"1", "1 (다른 타입의 같은 열쇠)", '["x", "y"]'} and value["big"].startswith("약 1.00000e+5000")
+    edit(os.path.join(root, "model_base.py"), '"big": 10 ** 5000', '"big": "x" * 300000')
+    long = call("pack_run", {"dir": "lab", "case": "fast", "limit": 2}, root=lab)
+    text = long["result"]["log"][0]["value"]["big"]
+    assert len(text) < ops.STRING_LIMIT + 40 and text.endswith("(뒤는 잘렸다. 전체 300000자)")
+    assert len(json.dumps(long)) < 3 * ops.STRING_LIMIT      # 값 둘이 30만 자씩이었다
+
+    # 줄의 자료도 한도 안이다. 선택지가 많은 선택 지점은 앞의 것만 싣고 수를 적는다
+    full = str(tmp_path)
+    assert call("pack_new", {"dir": "mylab", "template": "full"}, root=full)["ok"]
+    edit(os.path.join(full, "mylab", "mylab.ses.yaml"), "  workers: {type: int, range: [1, 3], doc: 처리기의 수}",
+         "  workers: {type: int, range: [1, 3]}\n  big: {type: int, range: [1, 3000]}")
+    env = call("pack_check", {"dir": "mylab"}, root=full)
+    found = [f for f in env["findings"] if f.get("kind") == "undecided"]
+    assert len(found) == 6 and all(len(f["data"]["options"]) == 200 and f["data"]["options_count"] == 3000 for f in found)
+    assert len(json.dumps(env)) < 100000 and all(len(f["message"]) <= ops.MESSAGE_LIMIT for f in env["findings"])
+
+    # 입력: 정수인 실수, 작업 자리
+    assert call("pack_run", {"dir": "lab", "case": "slow", "limit": 2.0, "offset": 1.0}, root=lab)["result"]["offset"] == 1
+    assert codes(ops.call("pack_run", {"dir": "lab", "case": "slow", "limit": 2.5}, root=lab)) == {"A0"}
+    for bad in ("a\x00b", "\ud800", 3, b"x", ""):
+        env = ops.call("pack_show", {"dir": "lab"}, root=bad)
+        ENVELOPE.validate(env)
+        assert codes(env) == {"A0"} and env["findings"][0]["where"] == "root", bad
+
+
+def test_records_survive_odd_names_and_failed_writes(lab):
+    """기록 파일은 적은 것을 다시 읽을 수 있어야 하고, 적다가 실패해도 옛 기록이 남아야 한다."""
+    root = os.path.join(lab, "lab")
+    path = os.path.join(root, "records.yaml")
+    edit(os.path.join(root, "pack.yaml"), "{name: fast,", '{name: "a\\x7fb",')
+    edit(os.path.join(root, "pack.yaml"), "{name: slow,", '{name: "줄\\u2028바꿈",')
+    env = call("pack_check", {"dir": "lab", "record": True}, root=lab)
+    assert env["ok"] and env["result"]["recorded"] == sorted(["a\x7fb", "줄 바꿈"])
+    assert call("pack_check", {"dir": "lab"}, root=lab)["ok"]              # 다시 읽어도 그 사례들의 기록이다
+    before = doc_text(path)
+    # 깨진 기록 파일은 적을 사례가 하나도 없어도 새로 적는다
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("- not\n- a table\n")
+    edit(os.path.join(root, "model_base.py"), "self.received += [", "self.gone += [")          # 모든 사례가 실패한다
+    env = call("pack_check", {"dir": "lab", "record": True}, root=lab)
+    assert not env["ok"] and "records_file" not in {f.get("kind") for f in env["findings"]}
+    assert "not" not in doc_text(path) and env["result"]["recorded"] == []
+    edit(os.path.join(root, "model_base.py"), "self.gone += [", "self.received += [")
+    assert call("pack_check", {"dir": "lab", "record": True}, root=lab)["ok"] and doc_text(path) == before
+    # 그 자리에 디렉터리가 있으면: 비었으면 치우고, 무엇이 들었으면 줄로 알리고 손대지 않는다
+    os.remove(path)
+    os.mkdir(path)
+    assert call("pack_check", {"dir": "lab", "record": True}, root=lab)["ok"] and doc_text(path) == before
+    os.remove(path)
+    os.mkdir(path)
+    with open(os.path.join(path, "keep.txt"), "w", encoding="utf-8") as f:
+        f.write("x")
+    env = call("pack_check", {"dir": "lab", "record": True}, root=lab)
+    assert [(f["code"], f["kind"]) for f in errors(env)] == [("P6", "records_file")] and os.path.exists(os.path.join(path, "keep.txt"))
+
+
+def test_a_run_reports_what_the_check_would_report(tmp_path):
+    """돌린 결과에 경고를 싣는다. 검사가 거부하는 바인딩이나 선언하지 않은 포트로 내는 모델은 돌려도 ok 가 아니다."""
+    root = str(tmp_path)
+    assert call("pack_new", {"dir": "mylab", "template": "full"}, root=root)["ok"]
+    pack = os.path.join(root, "mylab")
+    edit(os.path.join(pack, "cases", "direct.decisions.yaml"), "choose:", "set:\n  - {at: Inspector, attribute: every, value: 2}\nchoose:")
+    env = call("pack_run", {"dir": "mylab", "case": "direct", "limit": 0}, root=root)
+    assert env["ok"] and [(f["severity"], f["kind"], f["data"]) for f in env["findings"]] == [
+        ("warning", "unused_decision", {"decision": "set/at/Inspector/every"})]
+    edit(os.path.join(pack, "binding.yaml"), "target: Line", "target: Other")
+    found = errors(call("pack_run", {"dir": "mylab", "case": "fast"}, root=root))
+    assert [(f["code"], f["kind"]) for f in found] == [("P3", "binding_target")]
+    edit(os.path.join(pack, "binding.yaml"), "target: Other", "target: Line")
+    edit(os.path.join(pack, "binding.yaml"), 'binding: "1.0"', 'binding: "9.9"')
+    assert "형식의 판은" in errors(call("pack_check", {"dir": "mylab"}, root=root))[0]["message"]
+    edit(os.path.join(pack, "binding.yaml"), 'binding: "9.9"', 'binding: "1.0"')
+    edit(os.path.join(pack, "model_base.py"), 'return {"out": [{"id": self.count}]}', 'return {"out": [{"id": self.count}], "debug": [1]}')
+    found = errors(call("pack_run", {"dir": "mylab", "case": "fast"}, root=root))
+    assert [(f["code"], f["kind"], f["data"]) for f in found] == [("P6", "stray_port", {"component": "Source", "port": "debug"})]
+
+
+def test_no_variant_left_names_the_constraint(tmp_path):
+    """결정이 아직 모자란 채로 제약이 변이를 모두 지우면 어느 제약인지를 알린다."""
+    root = str(tmp_path)
+    assert call("pack_new", {"dir": "mylab", "template": "full"}, root=root)["ok"]
+    pack = os.path.join(root, "mylab")
+    with open(os.path.join(pack, "mylab.ses.yaml"), "a", encoding="utf-8") as f:
+        f.write("\nconstraints:\n  - name: slow_needs_inspector\n    when: {selected: \"Worker/speed=Slow\"}\n"
+                "    require: {var: inspect, eq: 1}\n")
+    with open(os.path.join(pack, "cases", "trial.yaml"), "w", encoding="utf-8") as f:
+        f.write('decisions: "1.0"\ntarget: Line\nvariables: {inspect: 0}\nchoose:\n  - {at: Worker, specialization: speed, alternative: Slow}\n')
+    env = call("pack_choices", {"dir": "mylab", "decisions": "cases/trial.yaml"}, root=root)
+    assert codes(env) == {"P4"} and "결정을 따르는 어느 변이도 제약 slow_needs_inspector 을 지키지 못한다" in said(env)
+
+
+def test_a_new_pack_needs_a_name_that_stays_a_name(tmp_path):
+    root = str(tmp_path)
+    for name in ("true", "null", "yes", "No", "OFF"):
+        for args in ({"dir": name}, {"dir": "x", "name": name}):
+            env = call("pack_new", args, root=root)
+            assert codes(env) == {"A0"} and "YAML 이 다른 것으로 읽는 낱말" in said(env), args
+            assert not os.path.exists(os.path.join(root, args["dir"]))
+    with open(os.path.join(root, "afile"), "w", encoding="utf-8") as f:
+        f.write("x")
+    env = call("pack_new", {"dir": "afile/inside"}, root=root)          # 만들 수 없는 자리. 입력의 잘못이고 남기는 것이 없다
+    assert codes(env) == {"A0"} and env["findings"][0]["where"] == "dir"
+    env = call("pack_new", {"dir": "good"}, root=root)
+    assert env["ok"] and env["result"]["files"][-1] == "records.yaml"
+
+
+def test_the_call_command_keeps_the_output_file_safe(lab, tmp_path):
+    """--out 의 파일은 연산을 돌리기 전에 쓸 수 있는지 보고, 글자로 옮길 수 없는 것이 있어도 적는다."""
+    out = io.StringIO()
+    os.remove(os.path.join(lab, "lab", "records.yaml"))      # 쓸 수 없는 자리이면 연산을 돌리기 전에 멈춘다. 기록이 적히지 않는다
+    code = cli.main(["call", "pack_check", "--args", '{"dir": "lab", "record": true}', "--root", lab, "--out",
+                     str(tmp_path / "no" / "x.json")], out)
+    assert code == 2 and not os.path.exists(os.path.join(lab, "lab", "records.yaml"))
+    edit(os.path.join(lab, "lab", "model_base.py"), "        self.count = 0", '        self.count = 0\n        print("\\ud800")')
+    target = tmp_path / "env.json"
+    out = io.StringIO()
+    code = cli.main(["call", "pack_run", "--args", '{"dir": "lab", "case": "fast", "limit": 1}', "--root", lab, "--pretty",
+                     "--out", str(target)], out)
+    saved = json.loads(target.read_text(encoding="utf-8"))
+    assert code == 0 and saved["ok"] and saved["result"]["events"] == 19
 
 
 def test_the_document_says_what_the_code_does():

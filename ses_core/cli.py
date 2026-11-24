@@ -544,6 +544,14 @@ def cmd_call(args, out) -> int:
                 "findings": [{"severity": "error", "code": "A0", "where": str(args.operation)[:80], "message": message,
                               "kind": "input", "data": {}, "next": ops.NEXT["input"]}]}
 
+    if args.out is not None:
+        # 연산을 돌리기 전에 파일에 쓸 수 있는지 본다. 그리고 실패의 봉투를 먼저 적어 둔다. 묶음의 코드가 프로세스를 바로
+        # 끝내면(os._exit) 봉투도 종료 코드도 믿을 수 없다. 그때 파일에 남은 것이 실패라고 말한다
+        try:
+            with open(args.out, "w", encoding="utf-8") as f:
+                f.write(json.dumps(refused("연산이 끝나기 전에 프로세스가 끝났다. 묶음의 코드가 프로세스를 끝냈을 수 있다")) + "\n")
+        except OSError as e:
+            raise Stop(USAGE, f"--out 의 파일에 쓸 수 없다: {e}")
     env = None
     text = args.args
     if args.args is not None and args.args_file is not None:
@@ -572,11 +580,9 @@ def cmd_call(args, out) -> int:
                              "message": f"도구의 결함이다. 봉투를 JSON 으로 옮기지 못했다: {type(e).__name__}"}]}
         line = json.dumps(env, ensure_ascii=True)
     if args.out is not None:
-        try:
-            with open(args.out, "w", encoding="utf-8") as f:
+        with contextlib.suppress(OSError):                   # 쓸 수 있는지는 위에서 보았다. 글자로 옮길 수 없는 것은 \\ 꼴로 적는다
+            with open(args.out, "w", encoding="utf-8", errors="backslashreplace") as f:
                 f.write(line + "\n")
-        except OSError as e:
-            raise Stop(USAGE, f"--out 의 파일에 쓸 수 없다: {e}")
     try:
         print(line, file=out)
     except UnicodeEncodeError:                               # --pretty 인데 받는 쪽이 한글을 적지 못한다

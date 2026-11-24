@@ -108,9 +108,11 @@ def check_binding_file(d) -> None:
     unknown = sorted(map(str, set(d) - _BINDING_KEYS))
     if unknown:
         raise BindingError(f"모르는 항목 {unknown} 가 있다. 쓸 수 있는 것은 {sorted(_BINDING_KEYS)} 다")
-    for key in ("executor", "map"):
+    for key in ("binding", "executor", "map"):
         if key not in d:
-            raise BindingError(f"{key} 가 없다")
+            raise BindingError(f"{key} 가 없다" + (". 첫 항목은 binding: \"1.0\" 이다" if key == "binding" else ""))
+    if str(d["binding"]) != "1.0":
+        raise BindingError(f"binding: 형식의 판은 \"1.0\" 이다. 적힌 것은 {d['binding']!r} 다")
     if not isinstance(d["executor"], str):
         raise BindingError(f"executor: 실행기의 이름을 글로 적는다. 적힌 것은 {d['executor']!r} 다")
     if d.get("target") is not None and not isinstance(d["target"], str):
@@ -174,6 +176,8 @@ def grid(value: float, unit: float) -> Optional[int]:
     if not math.isfinite(k):
         return None
     n = round(k)
+    if n == 0 and value > 0:                                 # 단위가 값보다 훨씬 크다. 0 눈금으로 읽으면 시각이 나아가지 않는다
+        return None
     return n if abs(k - n) <= 1e-9 * max(1.0, abs(k)) else None
 
 

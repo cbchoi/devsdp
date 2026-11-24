@@ -113,13 +113,78 @@ class Item:
 # 프로파일 적재
 # ---------------------------------------------------------------------------
 
-def _bounds(x) -> tuple:
-    if isinstance(x, int):
+# 파일에서 쓸 수 있는 항목. 스키마(schema/profile.schema.json)와 같다. 모르는 항목을 말없이 넘기면 잘못 적은 규칙이
+# 없는 것이 되어 족의 검사가 꺼진다
+KEYS = {
+    "profile": {"profile", "name", "description", "kinds", "links", "rules"},
+    "kind": {"contains", "doc", "fields", "title", "ui"},
+    "field": {"type", "required", "values", "default", "doc", "title", "ui"},
+    "link": {"from", "to", "acyclic", "target", "doc", "title", "ui"},
+    "coverage": {"name", "each", "incoming", "outgoing"},
+    "measure": {"name", "at", "sum", "count", "min", "max", "equals"},
+    "sum": {"field", "over"},
+    "count": {"over"},
+    "bounds": {"min", "max"},
+}
+
+
+def _table(x, kind: str, where: str) -> dict:
+    """x 가 그 종류의 항목만 가진 표인가. 아니면 어디가 틀렸는지를 적는다."""
+    if not isinstance(x, dict):
+        raise AlgebraError(f"{where}: 이름과 값의 표로 적는다. 적힌 것은 {x!r} 다")
+    unknown = sorted(map(str, set(x) - KEYS[kind]))
+    if unknown:
+        raise AlgebraError(f"{where}: 모르는 항목 {unknown} 가 있다. 쓸 수 있는 것은 {sorted(KEYS[kind])} 다")
+    return x
+
+
+def _number(x, where: str):
+    if x is not None and (isinstance(x, bool) or not isinstance(x, (int, float)) or x != x):
+        raise AlgebraError(f"{where}: 수로 적는다. 적힌 것은 {x!r} 다")
+    return x
+
+
+def _bounds(x, where: str = "개수") -> tuple:
+    if isinstance(x, int) and not isinstance(x, bool):
         return (x, None)
-    return (x.get("min", 0), x.get("max"))
+    x = _table(x, "bounds", where)
+    return (_number(x.get("min", 0), f"{where}.min"), _number(x.get("max"), f"{where}.max"))
 
 
 def load_profile_dict(d: dict) -> Profile:
+    """사전으로 읽은 프로파일을 자료구조로. 모양이 틀리면 AlgebraError 로 알린다."""
+    try:
+        return _load_profile_dict(d)
+    except AlgebraError:
+        raise
+    except (LookupError, TypeError, AttributeError, ValueError) as e:       # 모양이 틀린 곳을 미리 다 막지는 못했다
+        raise AlgebraError(f"프로파일의 모양이 형식과 다르다 ({type(e).__name__}: {e})") from None
+
+
+def _load_profile_dict(d: dict) -> Profile:
+    d = _table(d, "profile", "프로파일")
+    for key in ("name", "kinds"):
+        if key not in d:
+            raise AlgebraError(f"프로파일: {key} 가 없다")
+    for name, k in (d.get("kinds") or {}).items():
+        for f, spec in (_table(k or {}, "kind", f"kinds.{name}").get("fields") or {}).items():
+            _table(spec, "field", f"kinds.{name}.fields.{f}")
+    for name, l in (d.get("links") or {}).items():
+        _table(l or {}, "link", f"links.{name}")
+    if not isinstance(d.get("rules") or [], list):
+        raise AlgebraError("rules: 규칙의 목록으로 적는다")
+    for i, r in enumerate(d.get("rules") or []):
+        if not isinstance(r, dict):
+            raise AlgebraError(f"rules[{i}]: 이름과 값의 표로 적는다. 적힌 것은 {r!r} 다")
+        where = f"rules[{i}]" + (f" ({r['name']})" if isinstance(r.get("name"), str) else "")
+        _table(r, "coverage" if "each" in r else "measure", where)
+        if "name" not in r:
+            raise AlgebraError(f"{where}: name 이 없다")
+        for op in ("sum", "count"):
+            if op in r:
+                _table(r[op], op, f"{where}.{op}")
+        for key in ("min", "max", "equals"):
+            _number(r.get(key), f"{where}.{key}")
     kinds = {}
     for name, k in (d.get("kinds") or {}).items():
         k = k or {}
@@ -137,8 +202,10 @@ def load_profile_dict(d: dict) -> Profile:
     for r in d.get("rules", []):
         if "each" in r:
             rules.append(Rule(r["name"], "coverage", each=r["each"],
-                              incoming={k: _bounds(v) for k, v in (r.get("incoming") or {}).items()},
-                              outgoing={k: _bounds(v) for k, v in (r.get("outgoing") or {}).items()}))
+                              incoming={k: _bounds(v, f"규칙 {r['name']} 의 incoming.{k}")
+                                        for k, v in (r.get("incoming") or {}).items()},
+                              outgoing={k: _bounds(v, f"규칙 {r['name']} 의 outgoing.{k}")
+                                        for k, v in (r.get("outgoing") or {}).items()}))
         elif "sum" in r or "count" in r:
             op = "sum" if "sum" in r else "count"
             body = r[op]

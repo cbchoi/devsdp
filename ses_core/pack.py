@@ -269,6 +269,17 @@ def module(pack: Pack):
 # 기록
 # ---------------------------------------------------------------------------
 
+def _described(x) -> str:
+    """JSON 으로 옮길 수 없는 값을 글로. 글로 옮기는 것조차 실패하는 객체는 타입의 이름으로 적는다."""
+    try:
+        return str(x)
+    except Exception:                                        # noqa: BLE001  모델이 낸 객체의 __str__ 이 예외를 낸다
+        return f"({type(x).__name__})"
+
+
+_HUGE_BITS = 13000                 # 이보다 긴 정수(4,000자리쯤)는 십진수의 글로 옮기지 않는다. 값마다 견주므로 싸야 한다
+
+
 def canonical(v):
     """지문을 낼 값의 모양. JSON 으로 옮겨지는 값은 그대로 두고, 순서가 없는 것에 순서를 준다.
 
@@ -278,20 +289,22 @@ def canonical(v):
     if isinstance(v, dict):
         if all(isinstance(k, str) for k in v):
             return {k: canonical(x) for k, x in v.items()}
-        return {(k if isinstance(k, str) else json.dumps(canonical(k), ensure_ascii=False, sort_keys=True, default=str)):
+        return {(k if isinstance(k, str) else json.dumps(canonical(k), ensure_ascii=False, sort_keys=True, default=_described)):
                 canonical(x) for k, x in v.items()}
     if isinstance(v, (list, tuple)):
         return [canonical(x) for x in v]
     if isinstance(v, (set, frozenset)):
-        return sorted((canonical(x) for x in v), key=lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True, default=str))
+        return sorted((canonical(x) for x in v), key=lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True, default=_described))
+    if isinstance(v, int) and not isinstance(v, bool) and v.bit_length() > _HUGE_BITS:
+        return "int:" + hex(v)                               # 수천 자리의 정수는 십진수의 글로 옮겨지지 않는다
     return v
 
 
 def digest(log: list) -> str:
     """사건 기록의 지문. 같은 기록이면 어느 컴퓨터에서나 같다."""
     rows = [[t, "/".join(map(str, path)), port, canonical(value)] for t, path, port, value in log]
-    text = json.dumps(rows, ensure_ascii=False, sort_keys=True, default=str)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    text = json.dumps(rows, ensure_ascii=False, sort_keys=True, default=_described)
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:16]         # 짝 없는 대리 문자가 든 값도 지문을 낸다
 
 
 def summary(log: list, until: float) -> dict:
@@ -334,13 +347,14 @@ def structure_digest(built) -> str:
     sk = skeleton(built.layered.ses.tree, built.layered.void, built.variant)
     whole = {"variables": dict(built.sigma), "tree": tree(sk) if sk is not None else None,
              "structure": interpret(built.layered, built.variant)}
-    text = json.dumps(canonical(whole), ensure_ascii=False, sort_keys=True, default=str)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    text = json.dumps(canonical(whole), ensure_ascii=False, sort_keys=True, default=_described)
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
 def _record_key(name: str) -> str:
     """기록 파일에 적을 사례의 이름. 그대로 적으면 YAML 이 다른 것으로 읽는 이름(2024, yes, null, 빈 글, 기호가 든 것)은
-    따옴표로 감싼다. 감싸지 않으면 적은 기록을 다시 읽을 때 그 사례의 것이 아니게 된다."""
+    따옴표로 감싼다. 감싸지 않으면 적은 기록을 다시 읽을 때 그 사례의 것이 아니게 된다. 따옴표 안에서는 글자, 숫자,
+    흔한 기호가 아닌 것을 모두 \\u 꼴로 적는다. 제어 문자와 줄을 나누는 문자는 YAML 이 그대로는 받지 않는다."""
     import re
     import yaml
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", name):
@@ -349,10 +363,22 @@ def _record_key(name: str) -> str:
                 return name
         except yaml.YAMLError:
             pass
-    return json.dumps(name, ensure_ascii=False)
+    out = []
+    for ch in name:
+        code = ord(ch)
+        if ch in '"\\':
+            out.append("\\" + ch)
+        elif ch.isalnum() or ch in " _-.,:;/()[]{}<>=+*&%$#@!?'~^|`":
+            out.append(ch)
+        else:
+            out.append(f"\\u{code:04x}" if code < 0x10000 else f"\\U{code:08x}")
+    return '"' + "".join(out) + '"'
 
 
 def write_records(pack: Pack, records: dict) -> None:
+    """기록을 적는다. 적을 글을 먼저 다 만들고, 다시 읽어 같은지 보고, 옆에 적은 뒤 바꿔 놓는다. 적다가 실패해도
+    옛 기록이 남는다. 적을 수 없으면 PackError(P6) 다."""
+    from . import safeyaml
     lines = ["# 사례의 기록의 요약. ses pack check --record 가 적는다. 손으로 고치지 않는다.",
              "# 돌린 사례는 참조 시뮬레이터의 사건 기록의 지문을, 돌리지 않는 사례는 만든 구조의 지문을 적는다.",
              "# 모델 베이스나 문서를 고쳐 기록이 달라지면 검사가 알린다. 뜻한 변화이면 다시 적는다."]
@@ -364,11 +390,26 @@ def write_records(pack: Pack, records: dict) -> None:
             continue
         lines.append(f"{key}: {{until: {r['until']}, events: {r['events']}, "
                      f"last: {'null' if r['last'] is None else r['last']}, digest: \"{r['digest']}\"}}")
+    text = "\n".join(lines) + "\n"
+    try:
+        raw = text.encode("utf-8")
+        again = safeyaml.load_text(text) or {}
+    except (UnicodeEncodeError, safeyaml.YamlError) as e:
+        raise PackError(f"{RECORDS} 에 적을 수 없는 것이 있다. 사례의 이름을 글자, 숫자, 밑줄로 적는다: {str(e)[:200]}", "P6")
+    if sorted(again) != sorted(records):                     # 적은 것을 다시 읽으면 같은 사례들이어야 한다
+        raise PackError(f"{RECORDS} 에 적은 사례의 이름이 다시 읽으면 달라진다. 사례의 이름을 글자, 숫자, 밑줄로 적는다", "P6")
     path = pack.path(RECORDS)
-    if os.path.islink(path):                                 # 링크를 따라가 다른 파일을 덮어쓰지 않는다
-        os.remove(path)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
+    try:
+        if os.path.islink(path) or (os.path.lexists(path) and not os.path.isfile(path) and not os.path.isdir(path)):
+            os.remove(path)                                  # 링크를 따라가 다른 파일을 덮어쓰지 않는다. 파일이 아닌 것도 치운다
+        elif os.path.isdir(path):
+            os.rmdir(path)                                   # 빈 디렉터리만 치운다. 무엇이 들었으면 손대지 않는다
+        tmp = path + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(raw)
+        os.replace(tmp, path)
+    except OSError as e:
+        raise PackError(f"{RECORDS} 를 적을 수 없다: {e.strerror or e}. 그 자리에 있는 것을 치운다", "P6")
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +435,7 @@ def _interface(name: str, mod, unit: Optional[float], say) -> None:
             say("error", "P2", name, f"REQUIRED 의 {port} 는 입력 포트가 아니다", kind="required_not_input", module=name, port=port)
     defaults = {}
     for param, decl in mod.params.items():
-        if not (isinstance(decl, tuple) and 1 <= len(decl) <= 2 and decl[0] in _TYPES):
+        if not (isinstance(decl, tuple) and 1 <= len(decl) <= 2 and isinstance(decl[0], str) and decl[0] in _TYPES):
             say("error", "P2", name, f"매개변수 {param} 의 선언은 (타입,) 또는 (타입, 기본값) 이고 타입은 "
                                      f"{sorted(_TYPES)} 가운데 하나다: {decl!r}", kind="param_declaration", module=name, param=param)
             return
@@ -439,10 +480,19 @@ def _engine(name: str):
     return C.CevsimExecutor(home), None
 
 
+def _shown_value(x) -> str:
+    """사건 하나를 글로. 모델이 낸 객체의 repr 이 예외를 내도 줄은 나와야 한다."""
+    try:
+        text = repr(x)
+    except Exception:                                        # noqa: BLE001
+        text = f"({type(x).__name__})"
+    return text if len(text) <= 300 else text[:300] + " ..."
+
+
 def _first_difference(a: list, b: list) -> str:
     for i, (x, y) in enumerate(zip(a, b)):
         if x != y:
-            return f"{i}번째 사건이 다르다. 참조 {x!r}, 이 실행기 {y!r}"
+            return f"{i}번째 사건이 다르다. 참조 {_shown_value(x)}, 이 실행기 {_shown_value(y)}"
     return f"사건의 수가 다르다. 참조 {len(a)}개, 이 실행기 {len(b)}개"
 
 
@@ -526,11 +576,14 @@ def model_base(pack: Pack, say) -> tuple:
 
 def document(pack: Pack, say) -> tuple:
     """묶음의 (문서, 프로파일). 읽지 못한 것은 None 이고 까닭을 P1 로 적는다."""
+    from .algebra import AlgebraError
     from .loader import LoadError, load_ses
     from .profile import load_profile
     doc = profile = None
     try:
         profile = load_profile(pack.path(pack.profile)) if pack.profile else None
+    except AlgebraError as e:
+        say("error", "P1", pack.profile, f"프로파일의 모양이 틀렸다. {e}", kind="profile_load", file=pack.profile)
     except Exception as e:                                   # noqa: BLE001
         say("error", "P1", pack.profile, f"프로파일을 읽을 수 없다: {type(e).__name__}: {e}", kind="profile_load", file=pack.profile)
     try:
@@ -539,7 +592,48 @@ def document(pack: Pack, say) -> tuple:
         say("error", "P1", pack.document, f"문서를 적재할 수 없다. {e}", kind="document_load", file=pack.document)
     except Exception as e:                                   # noqa: BLE001
         say("error", "P1", pack.document, f"문서를 읽을 수 없다: {type(e).__name__}: {e}", kind="document_load", file=pack.document)
+    if doc is not None:
+        many = too_many_replicas(doc)
+        if many:                                             # 묶음의 검사와 조립은 이 크기에서 끝나지 않는다. 문서를 받지 않는다
+            for where, most in many:
+                say("error", "P1", pack.document, f"{where}: 묶음의 문서에서 복제본의 수는 {REPLICA_LIMIT}개까지다. 적힌 것은 "
+                    f"{most if most < 10 ** 30 else '그보다 훨씬 큰 수'} 다. 족을 세는 계산은 더 큰 수도 받지만 묶음의 검사와 조립은 "
+                    "그 크기에서 끝나지 않는다", kind="too_many_replicas", file=pack.document, limit=REPLICA_LIMIT)
+            doc = None
     return doc, profile
+
+
+# YAML 이 글이 아닌 것으로 읽는 낱말. 묶음의 이름으로 쓰면 선언의 name 이 참, 거짓, 없음으로 읽힌다
+YAML_WORDS = {"true", "false", "yes", "no", "on", "off", "null", "y", "n", "nan", "inf"}
+REPLICA_LIMIT = 10000              # 묶음의 문서에서 multi-aspect 하나가 만드는 복제본의 수의 한도
+OPTIONS_SHOWN = 200                # 줄 하나의 자료에 싣는 선택지의 수
+
+
+def too_many_replicas(doc) -> list:
+    """복제본의 수가 한도를 넘을 수 있는 multi-aspect 들: (자리, 가장 큰 개수). 상한이 없는 것은 들지 않는다.
+
+    상한이 없는 개수는 사례가 정한다. 그것은 결정 집합에서 본다(build_variant).
+    """
+    from . import model as M
+    out = []
+    for name, ent in doc.entities.items():
+        for ma in ent.multi_aspects.values():
+            card = ma.cardinality
+            most = None
+            if isinstance(card, M.Fixed):
+                most = card.n
+            elif isinstance(card, M.VarCard):
+                var = doc.variables.get(card.var)
+                domain = getattr(var, "domain", None)
+                if isinstance(domain, M.Range):
+                    most = domain.max
+                elif isinstance(domain, M.EnumSet):
+                    most = max((v for v in domain.values if isinstance(v, int) and not isinstance(v, bool)), default=None)
+            else:
+                most = card.max
+            if isinstance(most, int) and not isinstance(most, bool) and most > REPLICA_LIMIT:
+                out.append((f"{name}/{ma.name}", most))
+    return out
 
 
 def decisions_of(pack: Pack, relative: Optional[str], where: str, doc, say):
@@ -561,7 +655,8 @@ def decisions_of(pack: Pack, relative: Optional[str], where: str, doc, say):
     return ds
 
 
-def build_variant(doc, ds, profile, functions, defaults: bool, where: str, say, pack: Optional[Pack] = None):
+def build_variant(doc, ds, profile, functions, defaults: bool, where: str, say, pack: Optional[Pack] = None,
+                  keep: bool = False):
     """결정 집합이 정하는 변이 하나를 만든다. 만들지 못하면 FAILED 이고 까닭을 적는다.
 
     결정의 탓(P4)과 문서나 함수의 탓(P1, P2)을 가른다. 결정이 문서에 맞는지는 만들기 전에 따로 본다. 그 뒤에
@@ -571,6 +666,12 @@ def build_variant(doc, ds, profile, functions, defaults: bool, where: str, say, 
     from .algebra import AlgebraError
     from .decisions import DecisionSet
     file = pack.document if pack is not None else ""
+    for c in (ds.choose if ds is not None else ()):          # 상한이 없는 개수를 사례가 지나치게 크게 정했다
+        big = [n for n in (c.count or ()) if isinstance(n, int) and not isinstance(n, bool) and n > REPLICA_LIMIT]
+        if big:
+            say("error", "P4", where, f"결정 집합이 정한 복제본의 수 {big[0] if big[0] < 10 ** 30 else '(아주 큰 수)'} 가 한도 "
+                f"{REPLICA_LIMIT}개를 넘는다", kind="misfit")
+            return FAILED
     try:
         direct._check(doc, ds or DecisionSet())
     except AlgebraError as e:
@@ -582,8 +683,9 @@ def build_variant(doc, ds, profile, functions, defaults: bool, where: str, say, 
     try:
         built = direct.build(doc, ds, profile=profile, functions=functions, use_defaults=defaults, infer=True)
     except direct.Undecided as e:
-        say("error", "P4", where, f"결정이 모자라다. {e}", kind="undecided", at=list(e.where), choice=e.kind, group=e.group,
-            options=list(e.options))
+        # 자리는 결정 집합의 path 에 그대로 적을 수 있는 꼴이다. 선택지가 많으면 앞의 것만 싣고 수를 적는다
+        say("error", "P4", where, f"결정이 모자라다. {e}", kind="undecided", path=list(e.where), choice=e.kind, group=e.group,
+            options=list(e.options)[:OPTIONS_SHOWN], options_count=len(e.options))
         return FAILED
     except direct.Contradiction as e:
         say("error", "P4", where, f"만들 수 없다. {e}", kind="contradiction")
@@ -604,7 +706,7 @@ def build_variant(doc, ds, profile, functions, defaults: bool, where: str, say, 
             return FAILED
         except Exception:                                    # noqa: BLE001  판정하지 못하면 아래의 경고로 남긴다
             pass
-    wrong = False
+    wrong = short = False
     for where_, attribute, have in _valueless_each(doc, built):
         # 복제본마다의 값(each)이 이 변이의 복제본 수보다 적고 default 도 없다. 그 복제본은 값을 받지 못하고, 모델이
         # 그 매개변수의 기본값을 가지면 말없이 그것으로 돈다
@@ -612,7 +714,7 @@ def build_variant(doc, ds, profile, functions, defaults: bool, where: str, say, 
             f"가운데 어느 것도 받지 못한다. 복제본의 번호가 그보다 뒤이거나 복제되는 자리가 아니다. 문서의 each 에 값을 더 "
             f"적거나 값을 받지 못한 자리가 쓸 default 를 적는다",
             kind="each_too_short", component=where_.split("/"), attribute=attribute, values=have)
-        wrong = True
+        short = True
     for key in built.unused:
         shown_key = "/".join("/".join(map(str, k)) if isinstance(k, tuple) else str(k) for k in key)
         why = _no_such_attribute(built, key)
@@ -621,7 +723,8 @@ def build_variant(doc, ds, profile, functions, defaults: bool, where: str, say, 
             wrong = True
         else:
             say("warning", "P4", where, f"쓰이지 않은 결정: {shown_key}", kind="unused_decision", decision=shown_key)
-    return FAILED if wrong else built
+    # 값을 받지 못한 자리가 있어도 구조는 만들어졌다. 구조를 보이려는 쪽(keep)에는 그것을 돌려준다
+    return FAILED if wrong or (short and not keep) else built
 
 
 def _valueless_each(doc, built) -> list:
@@ -714,6 +817,29 @@ def _deepest_line(e: BaseException) -> Optional[tuple]:
             found = (os.path.basename(file), tb.tb_lineno)
         tb = tb.tb_next
     return found
+
+
+def binding_faults(pack: Pack, doc, library, binding) -> list:
+    """바인딩이 문서와 모델 베이스에 맞지 않는 곳들: (줄, 종류, 자료). 검사(P3)와 실행이 같은 것을 본다."""
+    out = []
+    if binding.executor != "devs":
+        # 묶음의 바인딩은 공통 모델 기반의 모듈을 가리킨다. 어느 실행기에서 견줄지는 선언의 executors 가 정한다
+        out.append((f"executor 가 {binding.executor} 다. 묶음의 바인딩은 devs 로 적는다. 다른 실행기에서 같은 기록을 내는지는 "
+                    f"{MANIFEST} 의 executors 가 정한다", "binding_load", {}))
+    if doc is None:
+        return out
+    if binding.target is not None and binding.target != doc.name:
+        out.append((f"target 이 {binding.target} 인데 문서의 이름은 {doc.name} 이다", "binding_target",
+                    {"target": binding.target, "document": doc.name}))
+    for name, bind in binding.map.items():
+        if name not in doc.entities:
+            out.append((f"문서에 없는 정의 {name} 를 묶었다", "unknown_definition",
+                        {"definition": name, "definitions": sorted(doc.entities)}))
+        out += [(line, "binding_params", data) for line, data in binding_params(doc, library, name, bind)]
+        if library is not None and bind.module not in library:
+            out.append((f"정의 {name} 를 묶은 모듈 {bind.module} 이 라이브러리에 없다", "unknown_module",
+                        {"definition": name, "module": bind.module, "modules": sorted(library)}))
+    return out
 
 
 def binding_params(doc, library, name: str, bind) -> list:
@@ -911,20 +1037,9 @@ def _check(root: str, record: bool, executors: Optional[tuple]) -> Report:
             say("error", "P3", pack.binding, f"바인딩의 모양이 틀렸다. {e}", kind="binding_load", file=pack.binding)
         except Exception as e:                               # noqa: BLE001
             say("error", "P3", pack.binding, f"바인딩을 읽을 수 없다: {type(e).__name__}: {e}", kind="binding_load", file=pack.binding)
-    if binding is not None and binding.executor != "devs":
-        # 묶음의 바인딩은 공통 모델 기반의 모듈을 가리킨다. 어느 실행기에서 견줄지는 선언의 executors 가 정한다
-        say("error", "P3", pack.binding, f"executor 가 {binding.executor} 다. 묶음의 바인딩은 devs 로 적는다. 다른 실행기에서 "
-            f"같은 기록을 내는지는 {MANIFEST} 의 executors 가 정한다", kind="binding_load", file=pack.binding)
-    if binding is not None and doc is not None:
-        if binding.target is not None and binding.target != doc.name:
-            say("error", "P3", pack.binding, f"target 이 {binding.target} 인데 문서의 이름은 {doc.name} 이다", kind="binding_target", file=pack.binding, target=binding.target, document=doc.name)
-        for name, bind in binding.map.items():
-            if name not in doc.entities:
-                say("error", "P3", pack.binding, f"문서에 없는 정의 {name} 를 묶었다", kind="unknown_definition", file=pack.binding, definition=name, definitions=sorted(doc.entities))
-            for line, data in binding_params(doc, library, name, bind):
-                say("error", "P3", pack.binding, line, kind="binding_params", file=pack.binding, **data)
-            if library is not None and bind.module not in library:
-                say("error", "P3", pack.binding, f"정의 {name} 를 묶은 모듈 {bind.module} 이 라이브러리에 없다", kind="unknown_module", file=pack.binding, definition=name, module=bind.module, modules=sorted(library))
+    if binding is not None:
+        for line, kind, data in binding_faults(pack, doc, library, binding):
+            say("error", "P3", pack.binding, line, kind=kind, file=pack.binding, **data)
 
     # P2 모듈마다의 계약 ----------------------------------------------------------------------
     if library is not None:
@@ -937,10 +1052,11 @@ def _check(root: str, record: bool, executors: Optional[tuple]) -> Report:
                 _interface(name, mod_, unit, say)
 
     # 사례 ------------------------------------------------------------------------------------
+    broken = False
     try:
         records = read_records(pack)
     except PackError as e:
-        records = {}
+        records, broken = {}, True
         if not record:                                       # 다시 적을 때는 틀린 파일을 새로 쓴다
             say("error", "P6", RECORDS, f"{e}. ses pack check --record 가 다시 적는다",
                 kind="records_file")
@@ -1116,8 +1232,11 @@ def _check(root: str, record: bool, executors: Optional[tuple]) -> Report:
     stale = sorted(set(records) - {c.name for c in pack.cases})
     if record:                                               # 없어진 사례의 기록은 지운다
         new_records = {name: r for name, r in new_records.items() if name not in stale}
-        if new_records != records:
-            write_records(pack, new_records)
+        if new_records != records or broken:                  # 읽을 수 없던 파일은 적을 것이 없어도 새로 적는다
+            try:
+                write_records(pack, new_records)
+            except PackError as e:
+                say("error", "P6", RECORDS, str(e), kind="records_file")
     else:
         for name in stale:
             say("warning", "P6", name, f"{RECORDS} 에 사례 {name} 의 기록이 있는데 그런 사례가 없다. "
@@ -1126,7 +1245,8 @@ def _check(root: str, record: bool, executors: Optional[tuple]) -> Report:
 
 
 def run(root: str, case_name: Optional[str] = None, until: Optional[float] = None, *, decisions: Optional[str] = None,
-        change: Optional[dict] = None, defaults: Optional[bool] = None, max_steps: Optional[int] = None) -> tuple:
+        change: Optional[dict] = None, defaults: Optional[bool] = None, max_steps: Optional[int] = None,
+        notes: Optional[list] = None) -> tuple:
     """묶음의 변이 하나를 참조 시뮬레이터로 돌린다. (사건 기록, 변수 값, 원자 구성요소의 수)를 돌려준다.
 
     무엇을 돌릴지는 사례의 이름(case_name)이나 묶음 안의 결정 집합 파일(decisions) 가운데 하나로 준다.
@@ -1136,17 +1256,20 @@ def run(root: str, case_name: Optional[str] = None, until: Optional[float] = Non
     같은 선택 지점, 같은 속성에 대한 것은 바꾸고 없는 것은 더한다. 값을 바꿔 가며 여러 번 돌리는 실험에 쓴다.
         run(".", "fast", change={"set": [{"at": "Source", "attribute": "seed", "value": 3}]})
     기록(records.yaml)은 읽지도 적지도 않는다. max_steps 는 걸음 수의 한도다. 주지 않으면 사례의 것(기본 1,000,000)이다.
+    notes 에 목록을 주면 돌리는 동안 나온 경고(쓰이지 않은 결정 같은 것)를 Finding 으로 담아 준다.
 
     만들 수 없거나 돌릴 수 없으면 PackError 를 낸다. 그 code 는 막힌 곳의 부호다(P0 선언, P1 문서, P2 모델 베이스,
     P3 바인딩, P4 결정, P5 실행 가능성, P6 실행). kind 와 data 는 검사가 같은 잘못에 붙이는 종류와 자료다.
     """
     with quiet_bytecode():
-        return _run(root, case_name, until, decisions, change, defaults, max_steps)
+        return _run(root, case_name, until, decisions, change, defaults, max_steps, notes)
 
 
 def _run(root: str, case_name: Optional[str], until: Optional[float], decisions: Optional[str] = None,
-         change: Optional[dict] = None, defaults: Optional[bool] = None, max_steps: Optional[int] = None) -> tuple:
+         change: Optional[dict] = None, defaults: Optional[bool] = None, max_steps: Optional[int] = None,
+         notes: Optional[list] = None) -> tuple:
     from . import executor as X
+    from . import structure as st
     from .decisions import DecisionError, overlaid
     from .devs import DevsExecutor, simulate
     from .extension import violations
@@ -1173,9 +1296,13 @@ def _run(root: str, case_name: Optional[str], until: Optional[float], decisions:
         raise PackError(f"{case_name} 에 돌릴 시각이 없다. until 을 준다(명령에서는 --until)")
     said: list = []
 
+    warned: list = []                                        # 경고와 알림. 부르는 쪽이 notes 로 받아 간다
+
     def say(severity: str, code: str, where: str, message: str, kind: str = "", **data) -> None:
         if severity == "error":
             said.append((code, message, kind, data))
+        else:
+            warned.append(Finding(severity, code, where, message, kind, data))
 
     def stop() -> None:
         if said:                                             # 검사가 같은 잘못에 붙이는 종류와 자료를 그대로 싣는다
@@ -1198,9 +1325,9 @@ def _run(root: str, case_name: Optional[str], until: Optional[float], decisions:
         binding = X.load_binding(pack.path(pack.binding))
     except Exception as e:                                   # noqa: BLE001
         raise PackError(f"사례 {case_name} 를 돌릴 수 없다. 바인딩을 읽을 수 없다: {type(e).__name__}: {e}", "P3", "binding_load")
-    wrong = [found for name, bind in binding.map.items() for found in binding_params(doc, library, name, bind)]
+    wrong = binding_faults(pack, doc, library, binding)     # 검사가 거부하는 바인딩으로는 돌리지 않는다
     if wrong:
-        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. {wrong[0][0]}", "P3", "binding_params", wrong[0][1])
+        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. {wrong[0][0]}", "P3", wrong[0][1], wrong[0][2])
     dx = DevsExecutor()
     try:
         L, ext = X.attach(built.layered, dx, binding, library)
@@ -1214,10 +1341,19 @@ def _run(root: str, case_name: Optional[str], until: Optional[float], decisions:
                         violation_data(built, found)[0])
     try:
         log = simulate(X.realize(L, ext, dx, built.variant), until, max_steps=case.max_steps)
-        atoms = len(X.frontier(X.plan(L, ext, built.variant)))
+        plan = X.plan(L, ext, built.variant)
+        atoms = len(X.frontier(plan))
     except (Exception, SystemExit) as e:                     # noqa: BLE001  모델의 코드가 낸 것은 무엇이든 알린다
         raise PackError(f"사례 {case_name} 를 돌릴 수 없다. 참조 시뮬레이터에서 멈췄다: {type(e).__name__}: {e}" + _longer(e), "P6",
                         _run_kind(e), _run_data(e, pack))
+    outs = {tuple(p): {port for port, decl in st.subtree(plan, p)["ports"].items() if decl[1] == "out"} for p in X.frontier(plan)}
+    strays = sorted({("/".join(p), port) for _, p, port, _ in log if port not in outs.get(tuple(p), ())})
+    if strays:                                               # 검사가 P6 로 알리는 것이다. 돌린 결과를 그대로 믿게 두지 않는다
+        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. {strays[0][0]} 가 선언하지 않은 출력 포트 {strays[0][1]} 로 냈다. 모델의 "
+                        "PORTS 와 문서의 ports 에 그 포트를 적는다", "P6", "stray_port",
+                        {"component": strays[0][0], "port": strays[0][1]})
+    if notes is not None:
+        notes.extend(warned)
     return log, dict(built.sigma), atoms
 
 
@@ -1433,8 +1569,9 @@ def scaffold(root: str, name: Optional[str] = None, template: str = "minimal") -
     name = name or os.path.basename(os.path.abspath(root))
     if template not in TEMPLATES:
         raise PackError(f"뼈대 {template!r} 를 모른다. 쓸 수 있는 것은 {list(TEMPLATES)} 다")
-    if not name.isidentifier():
-        raise PackError(f"묶음의 이름 {name[:40]!r} 는 글자, 숫자, 밑줄로 적는다. --name 으로 따로 줄 수 있다")
+    if not name.isidentifier() or name.lower() in YAML_WORDS:
+        raise PackError(f"묶음의 이름 {name[:40]!r} 는 글자, 숫자, 밑줄로 적는다. true, null, yes 같은 낱말은 쓰지 못한다. "
+                        "--name 으로 따로 줄 수 있다")
     if len(name) > 60:
         raise PackError("묶음의 이름은 60자 이하로 적는다")
     if os.path.exists(root) and (not os.path.isdir(root) or os.listdir(root)):

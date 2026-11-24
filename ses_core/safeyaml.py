@@ -26,6 +26,12 @@ def unfolded_size(x: Any, limit: int = LIMIT) -> int:
     active: set = set()
 
     def go(v) -> int:
+        if isinstance(v, str):
+            try:
+                v.encode("utf-8")
+            except UnicodeEncodeError:                       # "\ud800" 처럼 적은 짝 없는 대리 문자. 파일로도 지문으로도 옮겨지지 않는다
+                raise YamlError("글자로 옮길 수 없는 것이 들어 있다(짝 없는 대리 문자). 그 글자를 지운다") from None
+            return 1
         if not isinstance(v, (dict, list, tuple)):
             return 1
         key = id(v)

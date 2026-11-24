@@ -341,3 +341,33 @@ def test_random_profile_sample_is_not_vacuous():
             seen |= {c for _, c, _, _ in violations(L, V)}
     assert fw >= 10 and mixed >= 60 and none >= 30
     assert {"F2", "T2", "L1", "L2", "L3", "M", "R1", "R2"} <= seen
+
+
+def test_a_profile_with_a_misspelt_key_is_refused():
+    """프로파일의 모르는 항목을 말없이 넘기면 잘못 적은 규칙이 없는 것이 되어 족의 검사가 꺼진다."""
+    from ses_core.profile import KEYS, load_profile_dict
+    with open(os.path.join(DOMAINS, "curriculum.profile.yaml"), encoding="utf-8") as f:
+        good = yaml.safe_load(f)
+    assert load_profile_dict(copy.deepcopy(good)).rules
+
+    def refused(change, word) -> None:
+        d = copy.deepcopy(good)
+        change(d)
+        with pytest.raises(AlgebraError, match=word):
+            load_profile_dict(d)
+
+    refused(lambda d: d.__setitem__("rule", d.pop("rules")), r"프로파일: 모르는 항목 \['rule'\]")
+    coverage = next(i for i, r in enumerate(good["rules"]) if "each" in r and r.get("incoming"))
+    key = next(iter(good["rules"][coverage]["incoming"]))
+    refused(lambda d: d["rules"][coverage].__setitem__("incomming", d["rules"][coverage].pop("incoming")), "모르는 항목 \\['incomming'\\]")
+    refused(lambda d: d["rules"][coverage]["incoming"].__setitem__(key, {"min": "one"}), "min: 수로 적는다")
+    refused(lambda d: d["rules"][coverage]["incoming"].__setitem__(key, {"least": 1}), "모르는 항목 \\['least'\\]")
+    refused(lambda d: d["rules"].append({"each": "x"}), "name 이 없다")
+    refused(lambda d: next(iter(d["kinds"].values())).__setitem__("field", {}), "모르는 항목 \\['field'\\]")
+    refused(lambda d: d.__setitem__("rules", {"a": 1}), "규칙의 목록으로 적는다")
+    refused(lambda d: d.pop("kinds"), "kinds 가 없다")
+    with open(os.path.join(os.path.dirname(DOMAINS), "schema", "profile.schema.json"), encoding="utf-8") as f:
+        schema = json.load(f)
+    assert KEYS["profile"] == set(schema["properties"])      # 항목의 표는 스키마와 같다
+    for name in ("kind", "field", "link"):
+        assert KEYS[name] == set(schema["$defs"][name]["properties"]), name

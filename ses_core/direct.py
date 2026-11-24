@@ -234,8 +234,34 @@ def why_none(doc: m.SesDocument, ds: Optional[DecisionSet], functions=None, use_
     except Contradiction as e:
         return str(e)
     except Exception:                                            # noqa: BLE001  모자란 것과 그 밖의 것은 까닭이 아니다
+        pass
+    return _constraint_that_leaves_none(doc, ds, functions)
+
+
+def _constraint_that_leaves_none(doc: m.SesDocument, ds: Optional[DecisionSet], functions) -> str:
+    """결정이 아직 모자라 조립이 막히는 자리까지 가지 못할 때, 어느 제약이 변이를 모두 지우는지를 족에서 찾는다.
+
+    제약을 모두 뺀 족에 변이가 있고, 제약 하나만 둔 족에 변이가 없으면 그 제약이 까닭이다. 하나로 가려지지 않으면
+    제약들이 함께 지운 것이다.
+    """
+    from dataclasses import replace
+    from . import folded
+    if not doc.constraints or (ds is not None and any(c.node is not None for c in ds.choose)):
         return ""
-    return ""
+
+    def left(constraints) -> Optional[int]:
+        try:
+            return folded.analyze(replace(doc, constraints=tuple(constraints)), functions, ds,
+                                  max_assignments=INFER_ASSIGNMENTS).variants
+        except Exception:                                        # noqa: BLE001
+            return None
+
+    if not left(()):
+        return ""                                                # 제약이 없어도 변이가 없다. 까닭은 결정이나 규칙이다
+    alone = [c.name for c in doc.constraints if left((c,)) == 0]
+    if alone:
+        return f"결정을 따르는 어느 변이도 제약 {alone[0]} 을 지키지 못한다"
+    return f"결정을 따르는 변이 가운데 제약들을 함께 지키는 것이 없다. 제약은 {[c.name for c in doc.constraints][:8]} 다"
 
 
 INFER_ASSIGNMENTS = 200000         # 정해진 것을 찾아 줄 때 돌아보는 변수 값의 조합의 한도

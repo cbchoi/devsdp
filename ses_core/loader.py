@@ -170,11 +170,31 @@ def _scalar(t: str) -> m.ScalarType:
 def _variable(name: str, d: dict) -> m.Variable:
     _known(d, "variable", f"variables.{name}", ("type",))
     domain = None
+    kind = _scalar(d["type"])
     if "range" in d:
-        domain = m.Range(d["range"][0], d["range"][1])
+        r = d["range"]
+        whole = kind == m.ScalarType.INT
+        if not (isinstance(r, list) and len(r) == 2 and all(_plain_number(x, whole) for x in r)):
+            raise LoadError(f"variables.{name}.range: [가장 작은 값, 가장 큰 값] 으로 " + ("정수" if whole else "수")
+                            + f" 둘을 적는다. 적힌 것은 {r!r} 다")
+        domain = m.Range(r[0], r[1])
     elif "values" in d:
-        domain = m.EnumSet(tuple(d["values"]))
-    return m.Variable(name, _scalar(d["type"]), d.get("default"), domain, d.get("doc"))
+        vs = d["values"]
+        if not isinstance(vs, list) or any(isinstance(v, (list, dict)) for v in vs):
+            raise LoadError(f"variables.{name}.values: 값의 목록으로 적는다. 값은 수, 글, 참과 거짓 가운데 하나다")
+        if len(vs) > RANGE_LIMIT:
+            raise LoadError(f"variables.{name}.values: 값이 {RANGE_LIMIT}개를 넘는다. 변수는 구조를 가르는 값에 쓴다")
+        domain = m.EnumSet(tuple(vs))
+    return m.Variable(name, kind, d.get("default"), domain, d.get("doc"))
+
+
+def _plain_number(x, whole: bool = False) -> bool:
+    """유한한 수인가. whole 이면 정수여야 한다. 참과 거짓은 수가 아니다."""
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return False
+    if whole:
+        return isinstance(x, int)
+    return x == x and abs(x) != float("inf")
 
 
 def _port_type(name: str, d: dict) -> m.PortType:
@@ -488,12 +508,15 @@ def check_integrity(doc: m.SesDocument) -> None:
                     errors.append(f"{where}: 정의되지 않은 변수 {card.var}")
                 elif not _counts(var):
                     errors.append(f"{where}: 개수 변수 {card.var} 의 값은 0 이상의 정수여야 한다")
+
             elif isinstance(card, m.Fixed):
                 if not _count(card.n):
                     errors.append(f"{where}: 개수는 0 이상의 정수여야 한다: {card.n!r}")
+
             elif not _count(card.min) or (card.max is not None and (not _count(card.max) or card.max < card.min)):
                 errors.append(f"{where}: 개수의 범위는 0 이상의 정수이고 비어 있지 않아야 한다: "
                               f"min {card.min!r}, max {card.max!r}")
+
             expr_vars(ma.rule, f"{name}/{ma.name}.rule")
             if ma.pattern is not None and ma.part.def_name in ents:
                 # 자리표시자 {part} 를 실제 부분 이름으로 치환한 뒤 결합을 검사한다
@@ -589,8 +612,15 @@ def check_integrity(doc: m.SesDocument) -> None:
                 errors.append(f"variables.{vname}: 값 {twice} 가 글자로 적으면 같다. 값은 서로 달라야 한다")
             # 값으로도 서로 달라야 한다. 0 과 false, 1 과 true, 1 과 1.0 은 글자는 달라도 같은 값으로 읽힌다.
             # 그런 값들을 함께 두면 선택 지점 표가 둘을 구별하지 못한다
-            alike = [(a, b) for i, a in enumerate(var.domain.values) for b in var.domain.values[i + 1:]
-                     if a == b and str(a) != str(b)]
+            first: dict = {}                                  # 값에서 처음 적힌 것으로. 값이 많아도 한 번만 돈다
+            alike = []
+            for v in var.domain.values:
+                try:
+                    if v in first and str(first[v]) != str(v):
+                        alike.append((first[v], v))
+                    first.setdefault(v, v)
+                except TypeError:
+                    continue
             if alike:
                 errors.append(f"variables.{vname}: 값 {alike[0][0]!r} 와 {alike[0][1]!r} 는 같은 값으로 읽힌다. "
                               "값은 서로 달라야 한다")

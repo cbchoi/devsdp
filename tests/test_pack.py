@@ -961,3 +961,23 @@ def test_the_full_template_ignores_what_an_installation_leaves_beside_it(tmp_pat
     written = P.scaffold(root, template="full")
     assert len(written) == 10 and not os.path.exists(os.path.join(root, "__pycache__"))
     assert not os.path.exists(os.path.join(root, "notes.bin")) and P.check(root, record=True).ok
+
+
+def test_a_time_unit_far_larger_than_the_values_is_caught_before_running(line):
+    """시간 단위가 값보다 훨씬 크면 값이 0 눈금으로 읽혀 시각이 나아가지 않는다. 백만 걸음을 돌고 모델을 탓하던 것이다."""
+    from ses_core.executor import grid
+    assert grid(2.0, 1.0e300) is None and grid(0.0, 1.0e300) == 0 and grid(2.0, 1.0) == 2 and grid(1e-12, 1.0) is None
+    edit(line, "binding.yaml", "time_unit: 1.0", "time_unit: 1.0e+300")
+    report = P.check(line)
+    assert codes(report) == {"P5"} and {f.kind for f in report.errors} == {"off_grid"}
+    assert "시간 단위 1e+300 의 음이 아닌 정수배가 아니다" in said(report, "P5")
+
+
+def test_a_value_that_cannot_even_be_printed_does_not_break_the_check(line):
+    """모델이 낸 객체의 __str__ 과 __repr__ 이 예외를 내도 검사는 줄로 답한다. 지문과 줄의 글이 그 값을 글로 옮긴다."""
+    edit(line, "model_base.py", 'return {"out": [{"id": self.count}]}',
+         'return {"out": [{"id": self.count, "v": type("E", (), {"__str__": lambda s: 1 / 0, "__repr__": lambda s: 1 / 0})()}]}')
+    report = P.check(line)                                   # 예외가 밖으로 나오지 않는다
+    assert all(isinstance(f.message, str) for f in report.findings) and "fast" in report.cases
+    assert re.fullmatch(r"[0-9a-f]{16}", P.digest([(1.0, ("A",), "out", type("E", (), {"__str__": lambda s: 1 / 0})())]))
+    assert P._shown_value(type("E", (), {"__repr__": lambda s: 1 / 0})()) == "(E)"

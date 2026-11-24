@@ -44,6 +44,7 @@ COMPONENTS_LIMIT = 2000          # pack_build 가 한 번에 내는 구성요소
 OPTIONS_LIMIT = 200              # 선택 지점 하나가 늘어놓는 선택지의 수
 FINDINGS_LIMIT = 200             # 봉투에 싣는 줄의 수
 MESSAGE_LIMIT = 2000             # 줄 하나의 글의 글자 수
+STRING_LIMIT = 20000             # 결과에 싣는 글 하나의 글자 수. 넘으면 자르고 전체의 길이를 적는다
 VALUES_LIMIT = 200000            # 결과에 싣는 값의 수. 넘으면 결과를 싣지 않고 A2 로 알린다
 DEPTH_LIMIT = 100                # 결과의 값이 겹친 깊이. 넘는 곳은 글로 줄인다
 MAX_ASSIGNMENTS = 200000         # pack_choices 가 돌아보는 변수 값의 조합의 한도 (cli.py 와 같다)
@@ -60,6 +61,7 @@ NEXT = {
     "unknown_operation": "연산의 이름을 고친다",
     "not_supported": "줄이 적은 대로 입력이나 결정을 바꾼다",
     "limit": "입력을 좁혀 다시 부른다",
+    "more_findings": "앞의 줄들을 고치고 다시 부른다. data.more 가 싣지 못한 줄의 수다",
     "tool_fault": "고치려 하지 말고 이 입력과 함께 사람에게 알린다",
     "pack_code_exit": "모델 베이스에서 프로세스를 끝내는 코드를 지운다",
     "declaration": "pack.yaml 을 고친다",
@@ -71,6 +73,7 @@ NEXT = {
     "family_unbounded": "족의 검사를 받으려면 문서의 cardinality 에 max 를 적는다",
     "no_wellformed_variant": "문서의 결합이나 규칙을 고친다. family_violation 의 줄이 어긋난 곳을 알린다",
     "profile_load": "프로파일 파일을 고친다",
+    "too_many_replicas": "문서의 그 multi-aspect 의 개수(cardinality 나 개수 변수의 범위)를 data.limit 이하로 줄인다",
     "model_base_load": "모델 베이스 파일을 고친다. data.line 이 줄이다",
     "function_failed": "문서의 식이 부르는 함수를 고친다",
     "functions_shape": "모델 베이스 파일에서 함수의 사전을 고친다",
@@ -92,8 +95,10 @@ NEXT = {
                       "속성(data.attributes 가운데 하나)이다",
     "decisions_load": "결정 집합 파일을 고친다",
     "decisions_target": "결정 집합의 target 을 문서의 name 과 같게 적는다",
-    "undecided": "그 사례의 결정 집합에 결정을 더한다. data.at 이 자리, data.choice 가 종류, data.group 이 이름, "
-                 "data.options 가 고를 수 있는 것이다. 한 번에 한 곳만 알린다. 남은 선택 지점을 모두 보려면 pack_choices 를 부른다",
+    "undecided": "그 사례의 결정 집합에 결정을 더한다. data.choice 가 variable 이면 variables 에 data.group 의 값을 적는다. "
+                 "그 밖에는 choose 에 적는다. data.path 가 자리이고 path 에 그대로 적는다. 그 정의가 놓인 모든 자리를 같이 정하려면 "
+                 "at 에 정의의 이름을 적는다. data.group 이 specialization 이나 multi_aspect 의 이름, data.options 가 고를 수 있는 "
+                 "것이다. 한 번에 한 곳만 알린다. 남은 선택 지점을 모두 보려면 pack_choices 를 부른다",
     "contradiction": "결정들이 서로 어긋나거나 규칙과 제약에 걸린다. pack_choices 로 결정을 하나씩 빼며 본다",
     "misfit": "결정이 가리키는 이름을 문서의 것으로 고친다",
     "unused_decision": "그 결정을 지우거나 가리키는 곳을 고친다",
@@ -180,8 +185,10 @@ def _plain(x, budget: Optional[list] = None, depth: int = 0):
     budget[0] -= 1
     if budget[0] < 0:
         raise _Fail("A2", "result", f"결과가 값 {VALUES_LIMIT}개를 넘는다. 묶음의 파일이나 모델이 내는 값이 지나치게 크다", "limit")
-    if x is None or isinstance(x, (bool, str)):
+    if x is None or isinstance(x, bool):
         return x
+    if isinstance(x, str):                                   # 긴 글은 자르고 전체의 길이를 적는다
+        return x if len(x) <= STRING_LIMIT else x[:STRING_LIMIT] + f" (뒤는 잘렸다. 전체 {len(x)}자)"
     if isinstance(x, int):
         return x if -SAFE_INTEGER < x < SAFE_INTEGER else _decimal(x)
     if isinstance(x, float):
@@ -189,7 +196,13 @@ def _plain(x, budget: Optional[list] = None, depth: int = 0):
     if depth >= DEPTH_LIMIT:
         return "(너무 깊이 겹친 값)"
     if isinstance(x, dict):
-        return {_key(k): _plain(v, budget, depth + 1) for k, v in x.items()}
+        out: dict = {}
+        for k, v in x.items():
+            key = _key(k)
+            while key in out:                                # 1 과 "1" 처럼 글로 옮기면 같은 열쇠. 하나를 잃지 않게 가른다
+                key += " (다른 타입의 같은 열쇠)"
+            out[key] = _plain(v, budget, depth + 1)
+        return out
     if isinstance(x, (list, tuple)):
         return [_plain(v, budget, depth + 1) for v in x]
     if isinstance(x, (set, frozenset)):
@@ -205,7 +218,14 @@ def _text(x) -> str:
 
 
 def _key(k) -> str:
-    return k if isinstance(k, str) else _text(k)
+    """사전의 열쇠를 글로. 글이 아닌 열쇠는 지문을 낼 때와 같은 꼴로 옮긴다. 집합의 순서에 기대지 않는다."""
+    if isinstance(k, str):
+        return k
+    try:
+        import json
+        return json.dumps(P.canonical(k), ensure_ascii=False, sort_keys=True, default=str)[:MESSAGE_LIMIT]
+    except (TypeError, ValueError):
+        return _text(k)
 
 
 def _decimal(n: int) -> str:
@@ -221,9 +241,9 @@ def _number(n: int) -> dict:
 
 def _line(severity: str, code: str, where, message: str, kind: str = "", **data) -> dict:
     """봉투의 줄 하나."""
-    text = _text(message)
+    text = message if isinstance(message, str) else _text(message)
     out = {"severity": severity, "code": code, "where": _text(where)[:200],
-           "message": text if len(text) < MESSAGE_LIMIT else text[:MESSAGE_LIMIT] + " (뒤는 잘렸다)"}
+           "message": text if len(text) <= MESSAGE_LIMIT else text[:MESSAGE_LIMIT - 10] + " (뒤는 잘렸다)"}
     if kind:
         out["kind"] = kind
         out["data"] = data
@@ -287,6 +307,8 @@ def problems(schema: dict, value, at: str = "입력") -> list:
         if not isinstance(value, list):
             return [f"{at}: 목록이어야 한다"]
         return [p for i, x in enumerate(value) for p in problems(schema["items"], x, f"{at}[{i}]")]
+    if t == "integer" and isinstance(value, float) and value.is_integer():
+        return []                                            # 5.0 은 JSON Schema 에서 정수다. 부를 때 정수로 바꿔 쓴다
     if (isinstance(value, bool) and t != "boolean") or not isinstance(value, _TYPES[t]):
         return [f"{at}: {t} 여야 한다. 받은 것은 {_shown(value)} 다"]
     if t == "number" and not _finite(value):
@@ -385,16 +407,17 @@ def _pack_new(root: str, args: dict) -> tuple:
         raise _Fail("A0", "dir", f"{_shown(args['dir'])} 는 디렉터리가 아니다")
     if os.path.isdir(path) and os.listdir(path):
         raise _Fail("A0", "dir", f"{_shown(args['dir'])} 가 비어 있지 않다. 없거나 빈 디렉터리에 만든다")
-    if not (name.isidentifier() and name.isascii() and len(name) <= 60):
+    if not (name.isidentifier() and name.isascii() and len(name) <= 60) or name.lower() in P.YAML_WORDS:
         raise _Fail("A0", "name" if "name" in args else "dir",
-                    "묶음의 이름은 영문자, 숫자, 밑줄로 60자 이하로 적는다. 디렉터리의 이름이 그렇지 않으면 name 으로 따로 준다")
+                    "묶음의 이름은 영문자, 숫자, 밑줄로 60자 이하로 적는다. true, null, yes 처럼 YAML 이 다른 것으로 읽는 낱말은 "
+                    "쓰지 못한다. 디렉터리의 이름이 그렇지 않으면 name 으로 따로 준다")
     try:
         written = P.scaffold(path, name, args.get("template", "minimal"))
-    except P.PackError as e:
-        raise _Fail("P0", "dir", str(e), "declaration")
+    except P.PackError as e:                                 # 만들 수 없는 자리다. 입력의 잘못이다. 만들다 만 것은 남기지 않는다
+        raise _Fail("A0", "dir", str(e))
     report = P.check(path, record=True)
     result = _report(report)
-    result["files"] = sorted(os.path.relpath(w, path) for w in written) + [P.RECORDS]
+    result["files"] = sorted(os.path.relpath(w, path) for w in written) + ([P.RECORDS] if os.path.isfile(os.path.join(path, P.RECORDS)) else [])
     return [_finding(f) for f in report.findings], result
 
 
@@ -434,7 +457,7 @@ def _pack_show(root: str, args: dict) -> tuple:
                    "max_steps": c.max_steps, "recorded": records.get(c.name)} for c in pack.cases],
         "experiments": list(pack.experiments),
         # 점으로 시작하는 이름과 __pycache__ 는 빼고 늘어놓는다
-        "files": files[:FILES_LIMIT], "files_truncated": len(files) > FILES_LIMIT,
+        "files": files[:FILES_LIMIT], "files_count": len(files), "files_truncated": len(files) > FILES_LIMIT,
     }
     return findings, result
 
@@ -549,7 +572,7 @@ def _pack_build(root: str, args: dict) -> tuple:
     ds = P.decisions_of(pack, relative, where, doc, say)
     if ds is P.FAILED:
         return findings, None
-    built = P.build_variant(doc, ds, profile, functions, defaults, where, say, pack)
+    built = P.build_variant(doc, ds, profile, functions, defaults, where, say, pack, keep=True)
     if built is P.FAILED:
         return findings, None
     found = violations(built.layered, built.variant)
@@ -647,16 +670,18 @@ def _pack_run(root: str, args: dict) -> tuple:
     if until is None:
         raise _Fail("A0", "until", f"{where} 에 돌릴 시각이 없다. until 을 준다")
     findings: list = []
+    notes: list = []
     try:
         log, sigma, atoms = P.run(path, case.name if case is not None else None, until,
                                   decisions=None if case is not None else relative, defaults=args.get("defaults"),
-                                  max_steps=args.get("max_steps"))
+                                  max_steps=args.get("max_steps"), notes=notes)
     except P.PackError as e:
         # 검사가 같은 잘못에 붙이는 종류와 자료를 그대로 싣는다. 결정 집합 파일로 돌릴 때는 검사가 그 파일을 보지 않으므로
         # 여기서 싣지 않으면 까닭이 글에만 남는다
         raise _Fail(e.code, where, str(e), e.kind or "run_failed", **e.data)
-    rows = [{"t": t, "at": "/".join(map(str, where)), "port": port, "value": value}
-            for t, where, port, value in log[offset:offset + limit]]
+    findings += [_finding(f) for f in notes]                 # 쓰이지 않은 결정 같은 경고. 돌렸다고 해서 버리지 않는다
+    rows = [{"t": t, "at": "/".join(map(str, at)), "port": port, "value": value}
+            for t, at, port, value in log[offset:offset + limit]]
     try:
         fingerprint = P.digest(log)
     except (TypeError, ValueError) as e:
@@ -691,6 +716,10 @@ SHAPES = {
                                "대안은 extends 로 이 정의를 가리킨다. stereotype: void 인 대안을 고르면 그 부분이 빠진다",
     "document.constraint": "{name: 이름, when: 조건, require: 조건} 또는 require 대신 forbid. 조건은 {var: 변수, ge: 값} 이나 "
                            "{selected: \"정의/specialization=대안\"} 이나 {selected: \"정의/multi_aspect=개수\"}",
+    "profile.profile": "도메인 프로파일의 파일(pack.yaml 의 profile 이 가리킨다). {profile: \"1.0\", name: 이름, kinds: {유형: {fields: "
+                       "{항목: {type: 타입}}}}, links: {관계: {from: [유형], to: [유형]}}, rules: [규칙]}. 규칙은 "
+                       "{name: 이름, each: 유형, incoming: {관계: {min: 1}}} 이나 {name: 이름, at: 유형, sum: {field: 항목, over: [유형]}, "
+                       "min: 수, max: 수} 다",
     "decisions.variables": "{변수: 값}",
     "decisions.choose": "목록. {at: 정의, specialization: 이름, alternative: 대안} 은 그 정의가 놓인 모든 자리에, "
                         "{path: [뿌리, 부분, 복제본], specialization: 이름, alternative: 대안} 은 그 자리 하나에 적용된다. at 과 path 는 "
@@ -713,7 +742,9 @@ def _formats(root: str, args: dict) -> tuple:
     from . import decisions as D
     from . import executor as X
     from . import loader
+    from . import profile as F
     return [], {
+        "profile": {kind: sorted(keys) for kind, keys in sorted(F.KEYS.items())},
         "pack": {"file": P.MANIFEST, "keys": sorted(P.KEYS), "model_base": sorted(P.MODEL_BASE_KEYS),
                  "case": sorted(P.CASE_KEYS), "executors": list(P.EXECUTORS), "version": P.VERSION},
         "document": {kind: sorted(keys) for kind, keys in sorted(loader.KEYS.items())},
@@ -817,7 +848,7 @@ OPERATIONS = {op.name: op for op in (
         "묶음의 파일마다 쓸 수 있는 항목의 이름과, 항목마다 값의 모양(shapes)을 낸다. 선언, 문서, 결정 집합, 바인딩, 모델이 "
         "채우는 것. 형식을 모를 때 부른다. 돌아가는 본보기가 필요하면 pack_new 를 template: full 로 부른다.",
         _schema({}, ()),
-        "pack, document, attribute_types, decisions, binding, model, shapes(항목마다 값의 모양과 본보기), "
+        "pack, document, profile, attribute_types, decisions, binding, model, shapes(항목마다 값의 모양과 본보기), "
         "checks(줄의 data.check 에 오는 부호의 뜻), templates, example",
         False, _formats),
 )}
@@ -877,10 +908,15 @@ def _call(env: dict, name, args, root) -> dict:
                                  "unknown_operation", operations=sorted(OPERATIONS))]
         return env
     args = {} if args is None else args
+    if root is not None and not (isinstance(root, str) and root and "\x00" not in root and _encodable(root)):
+        env["findings"] = [_line("error", "A0", "root", "작업 자리는 디렉터리의 경로를 글로 준다", "input")]
+        return env
     bad = problems(op.input_schema, args)
     if bad:
         env["findings"] = [_line("error", "A0", op.name, line, "input") for line in bad[:FINDINGS_LIMIT]]
         return env
+    args = {k: (int(v) if op.input_schema["properties"][k]["type"] == "integer" and isinstance(v, float) else v)
+            for k, v in args.items()}
     seen = io.StringIO()
     findings, result = [], None
     try:
@@ -908,13 +944,19 @@ def _call(env: dict, name, args, root) -> dict:
         text = seen.getvalue()
     except ValueError:                                       # 묶음의 코드가 표준 출력을 닫았다
         text = ""
-    env["output"] = text if len(text) <= OUTPUT_LIMIT else "(앞은 잘렸다) " + text[-OUTPUT_LIMIT:]
-    lines = [_plain(f) for f in findings]
+    env["output"] = text if len(text) <= OUTPUT_LIMIT else "(앞은 잘렸다) " + text[-(OUTPUT_LIMIT - 10):]
+    budget = [VALUES_LIMIT]                                  # 줄들의 자료도 값의 수의 한도 안에 든다
+    lines = []
+    for f in findings:
+        try:
+            lines.append(_plain(f, budget))
+        except _Fail:                                        # 자료가 지나치게 크다. 자료를 빼고 싣는다
+            lines.append({k: v for k, v in f.items() if k != "data"} | {"data": {"cut": True}})
     if len(lines) > FINDINGS_LIMIT:                          # 줄이 지나치게 많으면 오류를 앞세워 자르고 그 수를 알린다
         lines.sort(key=lambda f: {"error": 0, "warning": 1}.get(f["severity"], 2))
         rest = len(lines) - FINDINGS_LIMIT + 1
         lines = lines[:FINDINGS_LIMIT - 1] + [_line("info", "A2", op.name, f"줄이 {rest}건 더 있다. 앞의 것을 고치고 다시 부른다",
-                                                    "limit", more=rest)]
+                                                    "more_findings", more=rest)]
     env["findings"] = lines
     env["result"] = result
     env["ok"] = not _failed(lines)
