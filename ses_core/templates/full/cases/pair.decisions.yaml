@@ -1,0 +1,10 @@
+decisions: "1.0"
+name: pair
+target: Line
+
+variables:
+  inspect: 1
+  workers: 2
+
+choose:
+  - {at: Worker, specialization: speed, alternative: Slow}

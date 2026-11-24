@@ -77,7 +77,7 @@ def test_choices_and_variants_follow_the_decisions(tmp_path):
         assert ses("choices", PROCESSING, "--decisions", f)[1].startswith("남은 변이 1개\n")
     f = tmp_path / "none.yaml"
     f.write_text('{"decisions": "1.0", "variables": {"policy": "priority", "num_servers": 1}}', encoding="utf-8")
-    assert ses("choices", PROCESSING, "--decisions", f) == (1, "남은 변이가 없다\n")
+    assert ses("choices", PROCESSING, "--decisions", f) == (1, "남은 변이가 없다\n어긋난 곳: 제약 priority_needs_pool 을 어긴다\n")
     assert ses("variants", PROCESSING, "--max-variants", 3)[0] == 1
 
 
@@ -170,7 +170,7 @@ def test_choices_and_variants_report_bad_input_without_a_traceback(tmp_path):
             (1, "변이 공간을 만들 수 없다. variable/x: specialization 에는 남길 alternative 가 있어야 한다\n")
         broken = written(tmp_path, "broken.yaml", "decisions: [1, 2\nchoose: }")
         code, out = ses(command, doc, "--decisions", broken)
-        assert code == 1 and out.startswith("결정 집합을 읽을 수 없다")
+        assert code == 1 and out.startswith("결정 집합의 모양이 틀렸다. YAML 문법이 틀렸다. 2번째 줄")
         listed = written(tmp_path, "listed.yaml",
                          'decisions: "1.0"\nchoose: [{at: [R], specialization: s, alternative: D}]\n')
         code, out = ses(command, doc, "--decisions", listed)
@@ -287,3 +287,39 @@ def test_the_module_can_be_run_as_a_program():
     r = subprocess.run([sys.executable, "-m", "ses_core", "check", PROCESSING], cwd=ROOT,
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0 and r.stdout == "변이 15개, 그 가운데 적격 15개\n"
+
+
+def test_a_family_violation_says_in_which_variants_it_happens(tmp_path):
+    """족의 위반은 어느 변이에서 나는지를 함께 적는다. 변이가 많을 때 어디를 고칠지 알 수 있어야 한다."""
+    doc = tmp_path / "crossing.ses.yaml"
+    doc.write_text(
+        'ses: "1.0"\nname: Crossing\nport_types:\n  Call: {fields: {lane: int}}\nentities:\n'
+        "  Crossing:\n    root: true\n    aspects:\n      main:\n        parts: [Detector, Controller]\n"
+        "        couplings:\n          - {from: Detector.call, to: Controller.call}\n"
+        "  Controller:\n    specializations:\n      kind:\n        alternatives: [FixedTime, Actuated]\n"
+        "  FixedTime:\n    extends: Controller\n"
+        "  Actuated:\n    extends: Controller\n    ports:\n      call: {type: Call, direction: in, required: true}\n"
+        "  Detector:\n    ports:\n      call: {type: Call, direction: out}\n", encoding="utf-8")
+    code, out = ses("check", doc)
+    assert code == 1
+    assert ("error C1 entities/Crossing: Detector.call 에서 Controller.call: 포트가 없다 "
+            "(변이 2개 가운데 1개. Controller/kind=FixedTime 일 때)") in out.splitlines()
+    assert out.splitlines()[-1] == "변이 2개, 그 가운데 적격 1개"
+
+
+def test_choices_say_that_they_do_not_look_at_the_profile(tmp_path):
+    """선택지 표는 선택의 핵만 본다. 문서가 프로파일을 가리키면 그 규칙을 보지 않았다고 알린다."""
+    with open(PROCESSING, encoding="utf-8") as f:
+        text = f.read()
+    assert "\nprofile:" not in text
+    assert "프로파일" not in ses("choices", PROCESSING)[1]
+    doc = tmp_path / "with_profile.ses.yaml"
+    doc.write_text(text.replace("\nname:", "\nprofile: some.profile.yaml\nname:", 1), encoding="utf-8")
+    code, out = ses("choices", doc)
+    assert code == 0 and out.splitlines()[-1] == (
+        "문서가 프로파일 some.profile.yaml 을 가리킨다. 이 표는 프로파일의 규칙을 보지 않았다. ses check --profile 로 본다")
+
+
+def test_a_library_that_is_not_found_says_where_it_looked():
+    code, out = ses("choices", PROCESSING, "--functions", "nowhere.at.all:FUNCTIONS")
+    assert code == 1 and "모듈은 지금 디렉터리에서 찾는다" in out and "Traceback" not in out

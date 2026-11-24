@@ -1,0 +1,10 @@
+decisions: "1.0"
+name: direct
+target: Line
+
+variables:
+  inspect: 0
+  workers: 1
+
+choose:
+  - {at: Worker, specialization: speed, alternative: Fast}

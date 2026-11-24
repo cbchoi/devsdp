@@ -308,7 +308,9 @@ class DevsExecutor(Executor):
 
         def rec(n: dict, path: tuple):
             if st.is_atom(n):
-                model = library[n["module"]].body("/".join(path) or n.get("name", ""), **n["params"])
+                who = "/".join(path) or n.get("name", "")
+                # 모델을 만들 때 init 이 돈다. 거기서 난 예외도 어느 구성요소의 것인지를 붙여 낸다
+                model = _call(who, "init", 0.0, lambda: library[n["module"]].body(who, **n["params"]))
                 model.ports = dict(n["ports"])
                 return model
             return Coupled(n.get("name", ""), n["ports"],

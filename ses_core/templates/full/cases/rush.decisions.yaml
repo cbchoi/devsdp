@@ -1,0 +1,12 @@
+decisions: "1.0"
+name: rush
+target: Line
+
+variables:
+  inspect: 1
+  workers: 1
+
+choose:
+  - {at: Worker, specialization: speed, alternative: Fast}
+set:
+  - {at: Source, attribute: period, value: 1.0}

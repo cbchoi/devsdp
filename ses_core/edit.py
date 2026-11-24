@@ -1022,9 +1022,8 @@ def to_dict(m: Model) -> dict:
 
 
 def load(path: str) -> Model:
-    import yaml
-    with open(path, encoding="utf-8") as f:
-        return from_dict(yaml.safe_load(f))
+    from . import safeyaml
+    return from_dict(safeyaml.load(path))
 
 
 def dump(m: Model) -> str:

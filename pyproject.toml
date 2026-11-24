@@ -26,4 +26,4 @@ ses = "ses_core.cli:main"
 packages = ["ses_core"]
 
 [tool.setuptools.package-data]
-ses_core = ["cevsim_bridge/*.cpp", "cevsim_bridge/*.hpp"]
+ses_core = ["cevsim_bridge/*.cpp", "cevsim_bridge/*.hpp", "templates/full/*", "templates/full/cases/*"]

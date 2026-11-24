@@ -6,12 +6,12 @@
     ses build    문서 --decisions 파일 [--defaults] [--depth N] [--functions 모듈:이름]
     ses plan     문서 --decisions 파일 --binding 파일 --library 모듈:이름 [--json] [...]
     ses run      문서 --decisions 파일 --binding 파일 --library 모듈:이름 --until 시각 [--log N] [...]
-    ses pack new   디렉터리 [--name 이름]
+    ses pack new   디렉터리 [--name 이름] [--template minimal|full]
     ses pack check 디렉터리 [--record] [--executors devs,pyevsim,cevsim]
     ses pack show  디렉터리
     ses pack run   디렉터리 사례 [--until 시각] [--log N]
     ses ops        [--tools]
-    ses call       연산 [--args JSON | --args-file 파일] [--root 디렉터리] [--pretty]
+    ses call       연산 [--args JSON | --args-file 파일] [--root 디렉터리] [--pretty] [--out 파일]
 
 check 는 문서와 변이 공간 전체를 진단한다(편집기의 진단과 같다). choices 와 variants 는 결정 집합을
 적용한 족에서 남은 선택지와 변이를 보인다.
@@ -33,8 +33,8 @@ pack 은 분야 묶음을 다룬다(ses_core/pack.py, docs/ses-platform/20_packs
 지키는지 본다.
 
 ops 와 call 은 에이전트가 부르는 연산이다(ses_core/ops.py, docs/ses-platform/21_agent_operations.md). ops 는 연산의
-목록을 JSON 으로 내고, call 은 연산 하나를 불러 결과의 봉투를 표준 출력의 마지막 줄에 JSON 한 줄로 낸다.
-call 의 종료 코드는 봉투의 ok 가 참이면 0, 거짓이면 1 이다.
+목록을 JSON 으로 내고, call 은 연산 하나를 불러 결과의 봉투를 JSON 한 줄로 낸다. 한글은 \\u 꼴로 적는다.
+call 의 종료 코드는 봉투의 ok 가 참이면 0, 거짓이면 1 이다. 없는 옵션처럼 명령의 쓰임새가 틀리면 2 다.
 
 모듈:이름 은 파이썬 모듈 안의 사전을 가리킨다. 문서의 식이 부르는 함수들(--functions)과 실행기의 모듈
 라이브러리(--library)다. 모듈은 지금 디렉터리에서도 찾는다.
@@ -79,7 +79,8 @@ def _resolve(spec: Optional[str], what: str):
         for part in attr.split("."):
             obj = getattr(obj, part)
     except (ImportError, AttributeError) as e:
-        raise Stop(FAILED, f"{what} {spec} 를 찾을 수 없다: {e}")
+        raise Stop(FAILED, f"{what} {spec} 를 찾을 수 없다: {e}. 모듈은 지금 디렉터리에서 찾는다. 다른 디렉터리의 것이면 그 "
+                           "디렉터리에서 치거나 점으로 이은 경로로 적는다")
     except Exception as e:                                   # noqa: BLE001  쓰는 사람의 모듈이 실리다가 낸 것
         raise Stop(FAILED, f"{what} {spec} 를 실을 수 없다: {type(e).__name__}: {e}")
     finally:
@@ -159,23 +160,22 @@ def _text(x) -> str:
 # ---------------------------------------------------------------------------
 
 def cmd_check(args, out) -> int:
-    from . import edit
-    from .diagnose import analyze
+    from . import edit, safeyaml
+    from .diagnose import analyze, where_it_happens
     from .profile import load_profile
     try:
         m = edit.load(args.document)
     except OSError as e:
         raise Stop(FAILED, f"문서를 읽을 수 없다: {e}")
-    except Exception as e:                                   # noqa: BLE001  YAML 의 문법 오류
-        if type(e).__module__.split(".")[0] != "yaml":
-            raise
-        mark = getattr(e, "problem_mark", None)
-        where = f"{mark.line + 1}번째 줄 {mark.column + 1}번째 칸: " if mark is not None else ""
-        raise Stop(FAILED, f"문서를 읽을 수 없다. YAML 문법이 틀렸다. {where}{getattr(e, 'problem', None) or str(e).splitlines()[0]}")
-    profile = load_profile(args.profile) if args.profile else None
+    except safeyaml.YamlError as e:
+        raise Stop(FAILED, f"문서를 읽을 수 없다. {e}")
+    try:
+        profile = load_profile(args.profile) if args.profile else None
+    except Exception as e:                                   # noqa: BLE001
+        raise Stop(FAILED, f"프로파일을 읽을 수 없다: {type(e).__name__}: {e}")
     a = analyze(m, profile, max_variants=args.max_variants, functions=_resolve(args.functions, "--functions"))
     for d in a.diagnostics:
-        print(f"{d.severity} {d.code} {d.address or '-'}: {d.message}", file=out)
+        print(f"{d.severity} {d.code} {d.address or '-'}: {d.message}{where_it_happens(d)}", file=out)
     if a.variants is None and a.core is not None:
         print(f"변이 {_count(a.core.variants)}개, 그 가운데 핵 적격 {_count(a.core.wellformed)}개 "
               "(열거하지 않고 정의 표 위에서 셌다. 확장은 결합의 국소 검사만 했다)", file=out)
@@ -233,25 +233,33 @@ def _on_definitions(args):
         raise Stop(FAILED, f"결정 집합의 모양이 틀렸다: {type(e).__name__}: {e}")
 
 
-def _print_table(points, out) -> None:
+def _print_table(points, out, single: bool = False) -> None:
+    """선택 지점의 표. 줄은 정의마다 하나다. single 은 남은 변이가 하나라는 뜻이다. 그때 한 줄에 여럿이 남았으면
+    그 정의가 놓인 자리마다 다른 것이 정해진 것이고, 더 정할 것은 없다."""
     for p in points:
         everything = [o for o, _ in p.options]
         where = f"{p.owner} {p.kind}" + (f" {p.group}" if p.group else "")
-        state = "정해짐" if p.decided else ("남은 것 없음" if not p.active else "열림")
+        state = "정해짐" if p.decided else ("남은 것 없음" if not p.active else "자리마다 정해짐" if single else "열림")
         print(f"{where}: {state}. 남은 선택지 {_short(p.remaining)} / 전체 {_short(everything)}", file=out)
 
 
 def cmd_choices(args, out) -> int:
-    from . import folded
+    from . import direct, folded
     from .algebra import count_variants, sem
     from .decisions import ChoicePoint, choice_table
     doc, ds, fam = _on_definitions(args)
     if fam is not None:                                      # 정의 표 위에서. 족을 펼치지 않는다
         if not fam.variants:
             print("남은 변이가 없다", file=out)
+            why = direct.why_none(doc, ds, _resolve(args.functions, "--functions"))
+            if why:
+                print(f"어긋난 곳: {why}", file=out)
             return FAILED
         print(f"남은 변이 {_count(fam.variants)}개", file=out)
-        _print_table([ChoicePoint(*row) for row in folded.choice_rows(doc, fam)], out)
+        _print_table([ChoicePoint(*row) for row in folded.choice_rows(doc, fam)], out, single=fam.variants == 1)
+        if doc.profile:                                      # 이 표는 선택의 핵만 본다. 프로파일의 규칙이 지우는 변이도 센다
+            print(f"문서가 프로파일 {doc.profile} 을 가리킨다. 이 표는 프로파일의 규칙을 보지 않았다. ses check --profile 로 본다",
+                  file=out)
         return OK
     doc, S, pruned, domains = _family(args)
     if pruned is None:
@@ -352,6 +360,8 @@ def _planned(args, out):
         binding = X.load_binding(args.binding)
     except OSError as e:
         raise Stop(FAILED, f"바인딩을 읽을 수 없다: {e}")
+    except X.BindingError as e:
+        raise Stop(FAILED, f"바인딩의 모양이 틀렸다. {e}")
     except (AttributeError, KeyError, TypeError, ValueError) as e:
         raise Stop(FAILED, f"바인딩의 모양이 틀렸다: {type(e).__name__}: {e}")
     library = _resolve(args.library, "--library")
@@ -392,8 +402,8 @@ def cmd_run(args, out) -> int:
     built, L, ext, executor = _planned(args, out)
     if not isinstance(executor, DevsExecutor):
         raise Stop(FAILED, f"run 은 참조 시뮬레이터(devs)만 돌린다. 바인딩의 실행기는 {ext.binding.executor} 다")
-    model = X.realize(L, ext, executor, built.variant)
     try:
+        model = X.realize(L, ext, executor, built.variant)   # 모델의 init 이 여기서 돈다
         log = simulate(model, args.until, max_steps=args.max_steps)
     except Exception as e:                                   # noqa: BLE001  모델의 코드가 낸 것은 무엇이든 한 줄로 알린다
         raise Stop(FAILED, f"시뮬레이션이 멈췄다: {e}" if isinstance(e, RuntimeError) else
@@ -434,7 +444,7 @@ def _report(report, out) -> None:
 def cmd_pack_new(args, out) -> int:
     from . import pack as P
     try:
-        written = P.scaffold(args.directory, args.name)
+        written = P.scaffold(args.directory, args.name, args.template)
     except P.PackError as e:
         raise Stop(FAILED, str(e))
     for path in written:
@@ -516,24 +526,59 @@ def cmd_ops(args, out) -> int:
 
 
 def cmd_call(args, out) -> int:
+    """연산 하나를 부르고 봉투를 낸다. 봉투는 ASCII 로만 적은 JSON 한 줄이다.
+
+    한글과 줄바꿈 문자는 \\u 꼴로 적는다. 그래서 받는 쪽의 글자 인코딩이 무엇이든, 줄을 어떻게 나누든 봉투가
+    깨지지 않는다. --pretty 는 사람이 보라고 여러 줄로, 한글을 그대로 적는다. --out 은 봉투를 파일에 적는다.
+    묶음의 코드가 표준 출력을 어지럽혀도 파일은 온전하다.
+    """
     from . import ops
-    if args.args is not None and args.args_file is not None:
-        raise Stop(USAGE, "--args 와 --args-file 가운데 하나만 준다")
+
+    def refused(message: str) -> dict:
+        return {"op": str(args.operation)[:80], "version": ops.VERSION, "ok": False, "result": None, "output": "",
+                "findings": [{"severity": "error", "code": "A0", "where": str(args.operation)[:80], "message": message,
+                              "kind": "input", "data": {}, "next": ops.NEXT["input"]}]}
+
+    env = None
     text = args.args
-    if args.args_file is not None:
+    if args.args is not None and args.args_file is not None:
+        env = refused("--args 와 --args-file 가운데 하나만 준다")
+    elif args.args_file is not None:
         try:
-            text = sys.stdin.read() if args.args_file == "-" else open(args.args_file, encoding="utf-8").read()
-        except OSError as e:
-            raise Stop(USAGE, f"입력 파일을 읽을 수 없다: {e}")
+            if args.args_file == "-":
+                text = sys.stdin.read()
+            else:
+                with open(args.args_file, encoding="utf-8") as f:
+                    text = f.read()
+        except (OSError, UnicodeDecodeError) as e:
+            env = refused(f"입력 파일을 읽을 수 없다: {e}")
+    if env is None:
+        try:
+            given = json.loads(text) if text is not None and text.strip() else {}
+        except (ValueError, RecursionError) as e:            # JSON 이 아니거나, 너무 깊거나, 수가 너무 크다
+            env = refused(f"입력이 JSON 이 아니다: {type(e).__name__}: {str(e)[:200]}")
+        else:
+            env = ops.call(args.operation, given, root=args.root)
     try:
-        given = json.loads(text) if text is not None and text.strip() else {}
-    except ValueError as e:
-        env = {"op": args.operation, "version": ops.VERSION, "ok": False, "result": None, "output": "",
-               "findings": [{"severity": "error", "code": "A0", "where": args.operation,
-                             "message": f"입력이 JSON 이 아니다: {e}"}]}
-    else:
-        env = ops.call(args.operation, given, root=args.root)
-    print(json.dumps(env, ensure_ascii=False, indent=1 if args.pretty else None, allow_nan=False), file=out)
+        line = json.dumps(env, ensure_ascii=not args.pretty, indent=1 if args.pretty else None, allow_nan=False)
+    except (ValueError, TypeError, RecursionError) as e:     # 봉투를 글로 옮기지 못했다. 도구의 결함이다
+        env = {"op": str(args.operation)[:80], "version": ops.VERSION, "ok": False, "result": None, "output": "",
+               "findings": [{"severity": "error", "code": "A9", "where": str(args.operation)[:80],
+                             "message": f"도구의 결함이다. 봉투를 JSON 으로 옮기지 못했다: {type(e).__name__}"}]}
+        line = json.dumps(env, ensure_ascii=True)
+    if args.out is not None:
+        try:
+            with open(args.out, "w", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError as e:
+            raise Stop(USAGE, f"--out 의 파일에 쓸 수 없다: {e}")
+    try:
+        print(line, file=out)
+    except UnicodeEncodeError:                               # --pretty 인데 받는 쪽이 한글을 적지 못한다
+        print(json.dumps(env, ensure_ascii=True, indent=1), file=out)
+    except ValueError:                                       # 묶음의 코드가 표준 출력을 닫았다
+        with contextlib.suppress(OSError):
+            os.write(1, (line + "\n").encode("utf-8"))
     return OK if env["ok"] else FAILED
 
 
@@ -552,6 +597,8 @@ def parser() -> argparse.ArgumentParser:
     c = pk.add_parser("new", help="돌아가는 가장 작은 묶음을 새 디렉터리에 만든다")
     c.add_argument("directory")
     c.add_argument("--name", help="묶음의 이름. 주지 않으면 디렉터리의 이름")
+    c.add_argument("--template", choices=["minimal", "full"], default="minimal",
+                   help="뼈대의 종류. full 은 변수, 없음 대안, 복제, 사례마다 다른 값을 모두 쓰는 본보기다")
     c.set_defaults(run=cmd_pack_new)
     c = pk.add_parser("check", help="묶음이 플랫폼의 계약을 지키는지 본다")
     c.add_argument("directory")
@@ -576,7 +623,8 @@ def parser() -> argparse.ArgumentParser:
     c.add_argument("--args", help="입력. JSON 객체의 글")
     c.add_argument("--args-file", help="입력이 든 JSON 파일. - 이면 표준 입력")
     c.add_argument("--root", help="작업 자리. 연산은 이 안의 디렉터리만 다룬다. 주지 않으면 지금 디렉터리")
-    c.add_argument("--pretty", action="store_true", help="여러 줄로 보기 좋게 낸다")
+    c.add_argument("--pretty", action="store_true", help="여러 줄로, 한글을 그대로 적어 낸다. 사람이 볼 때 쓴다")
+    c.add_argument("--out", help="봉투를 이 파일에도 적는다. 표준 출력이 어지럽혀져도 파일은 온전하다")
     c.set_defaults(run=cmd_call)
 
     c = sub.add_parser("check", help="문서와 변이 공간 전체를 진단한다")

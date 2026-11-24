@@ -70,6 +70,20 @@ def _known(d: Any, kind: str, where: str, required: tuple = ()) -> None:
             raise LoadError(f"{where}: {key} 가 없다")
 
 
+def _list(x: Any, where: str, what: str = "항목") -> list:
+    """목록으로 적어야 하는 곳. 아니면 어디가 틀렸는지를 적는다."""
+    if not isinstance(x, list):
+        raise LoadError(f"{where}: {what}의 목록으로 적는다. 적힌 것은 {x!r} 다")
+    return x
+
+
+def _close(name, known) -> str:
+    """이름을 잘못 적었을 때 뜻했을 만한 이름. 없으면 빈 글."""
+    import difflib
+    found = difflib.get_close_matches(str(name), [str(k) for k in known], n=1, cutoff=0.6)
+    return f". {found[0]} 를 뜻했는가" if found else ""
+
+
 # ---------------------------------------------------------------------------
 # 표현식: 저장 축약형을 AST 로 펼친다
 # ---------------------------------------------------------------------------
@@ -221,8 +235,8 @@ def _part_ref(x: Any) -> m.PartRef:
 def _aspect(name: str, d: dict) -> m.Aspect:
     _known(d, "aspect", f"aspect {name}", ("parts",))
     return m.Aspect(
-        name, tuple(_part_ref(p) for p in d["parts"]),
-        tuple(_coupling(c) for c in d.get("couplings", [])),
+        name, tuple(_part_ref(p) for p in _list(d["parts"], f"aspect {name}.parts", "부분")),
+        tuple(_coupling(c) for c in _list(d.get("couplings") or [], f"aspect {name}.couplings", "결합")),
         parse_expr(d["rule"]) if "rule" in d else None,
         d.get("priority"), d.get("doc"))
 
@@ -239,7 +253,7 @@ def _cardinality(x: Any) -> m.Cardinality:
 
 def _pattern(d: dict) -> m.CouplingPattern:
     _known(d, "pattern", "결합의 틀")
-    cp = lambda key: tuple(_coupling(c) for c in d.get(key, []))  # noqa: E731
+    cp = lambda key: tuple(_coupling(c) for c in _list(d.get(key) or [], f"결합의 틀의 {key}", "결합"))  # noqa: E731
     return m.CouplingPattern(m.PatternKind(d.get("pattern", "custom")),
                              cp("fan_out"), cp("fan_in"), cp("between"), cp("custom"),
                              cp("first"), cp("last"))
@@ -247,6 +261,8 @@ def _pattern(d: dict) -> m.CouplingPattern:
 
 def _multi_aspect(name: str, d: dict) -> m.MultiAspect:
     _known(d, "multiAspect", f"multi-aspect {name}", ("part", "cardinality"))
+    if not isinstance(d.get("naming", ""), str):
+        raise LoadError(f"multi-aspect {name}.naming: 복제본의 이름의 틀을 글로 적는다. 예: \"w{{i}}\". 적힌 것은 {d['naming']!r} 다")
     return m.MultiAspect(
         name, _part_ref(d["part"]), _cardinality(d["cardinality"]),
         d.get("naming", "{part}_{i}"),
@@ -278,7 +294,8 @@ def _entity(name: str, d: dict) -> m.EntityDef:
     except LoadError as e:
         raise LoadError(f"{name}: {e}") from None
     except (LookupError, TypeError, AttributeError, ValueError) as e:   # 모양이 틀린 곳을 미리 다 막지는 못했다
-        raise LoadError(f"{name}: 모양이 틀렸다. {type(e).__name__}: {e}. ses check 가 틀린 자리를 알린다") from None
+        raise LoadError(f"{name}: 적힌 값의 모양이 형식과 다르다 ({type(e).__name__}: {e}). 이 정의의 항목마다 표, 목록, 글 "
+                        "가운데 무엇으로 적는지를 본다") from None
 
 
 def _entity_body(name: str, d: dict) -> m.EntityDef:
@@ -318,7 +335,8 @@ def load_ses_dict(d: dict) -> m.SesDocument:
     except LoadError:
         raise
     except (LookupError, TypeError, AttributeError, ValueError, RecursionError) as e:   # 모양이 틀린 곳을 미리 다 막지는 못했다
-        raise LoadError(f"모양이 틀렸다. {type(e).__name__}: {e}. ses check 가 틀린 자리를 알린다") from None
+        raise LoadError(f"적힌 값의 모양이 형식과 다르다 ({type(e).__name__}: {e}). 항목마다 표, 목록, 글 가운데 무엇으로 "
+                        "적는지를 본다") from None
 
 
 def _load_ses_dict(d: dict) -> m.SesDocument:
@@ -344,14 +362,11 @@ def _load_ses_dict(d: dict) -> m.SesDocument:
 
 
 def load_ses(path: str) -> m.SesDocument:
-    import yaml  # 지연 임포트. 코어 자료구조 자체는 yaml 에 의존하지 않는다
-    with open(path, encoding="utf-8") as f:
-        try:
-            d = yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            mark = getattr(e, "problem_mark", None)
-            where = f"{mark.line + 1}번째 줄 {mark.column + 1}번째 칸: " if mark is not None else ""
-            raise LoadError(f"YAML 문법이 틀렸다. {where}{getattr(e, 'problem', None) or str(e).splitlines()[0]}") from None
+    from . import safeyaml
+    try:
+        d = safeyaml.load(path)
+    except safeyaml.YamlError as e:
+        raise LoadError(str(e)) from None
     return load_ses_dict(d)
 
 
@@ -367,7 +382,14 @@ def check_integrity(doc: m.SesDocument) -> None:
 
     def ref_ok(name: str, where: str) -> None:
         if name not in ents:
-            errors.append(f"{where}: 정의되지 않은 엔티티 참조 {name}")
+            errors.append(f"{where}: 정의되지 않은 엔티티 참조 {name}{_close(name, ents)}")
+
+    def chain(name: str):
+        """extends 를 따라간 정의들. extends 가 없는 정의를 가리키거나 돌면 None 이다. 그것은 따로 알린다."""
+        try:
+            return doc.ancestors(name)
+        except (ValueError, KeyError):
+            return None
 
     def expr_vars(e: m.Expr | None, where: str, constraint: bool = False, attribute: bool = False) -> None:
         if e is None:
@@ -398,8 +420,10 @@ def check_integrity(doc: m.SesDocument) -> None:
             ref_ok(ent.extends, f"{name}.extends")
             try:
                 doc.ancestors(name)
-            except (ValueError, KeyError) as e:
+            except ValueError as e:
                 errors.append(f"{name}: {e}")
+            except KeyError:                                  # 없는 정의를 가리킨다. 바로 위나 그 정의의 줄에서 알렸다
+                pass
         # valid brothers
         names = ent.decomposition_names
         if len(names) != len(set(names)):
@@ -486,7 +510,7 @@ def check_integrity(doc: m.SesDocument) -> None:
                 errors.append(f"{name}/{sp.name}: 대안 {twice} 를 두 번 적었다")
             for alt in sp.alternatives:
                 ref_ok(alt, f"{name}/{sp.name}.alternatives")
-                if alt in ents and name not in doc.ancestors(alt):
+                if alt in ents and chain(alt) is not None and name not in chain(alt):
                     errors.append(f"{name}/{sp.name}: 대안 {alt} 가 {name} 을 extends 하지 않는다")
             if sp.default is not None and sp.default not in sp.alternatives:
                 errors.append(f"{name}/{sp.name}.default: {sp.default} 는 대안이 아니다")
@@ -570,6 +594,15 @@ def check_integrity(doc: m.SesDocument) -> None:
             if alike:
                 errors.append(f"variables.{vname}: 값 {alike[0][0]!r} 와 {alike[0][1]!r} 는 같은 값으로 읽힌다. "
                               "값은 서로 달라야 한다")
+        # 범위는 값을 하나씩 늘어놓아 쓴다. 지나치게 넓은 범위는 기억을 다 쓴다. 넓은 범위가 필요한 값은 변수가 아니라
+        # 속성으로 두고 결정 집합의 set 으로 준다
+        if isinstance(var.domain, m.Range) and var.type == m.ScalarType.INT and _whole(var.domain.min) \
+                and _whole(var.domain.max) and var.domain.max - var.domain.min >= RANGE_LIMIT:
+            errors.append(f"variables.{vname}: 범위의 값이 {RANGE_LIMIT}개를 넘는다. 변수는 구조를 가르는 값에 쓴다. "
+                          "넓은 범위의 값은 속성으로 두고 결정 집합의 set 으로 준다")
+        # 기본값은 가질 수 있는 값 가운데 하나여야 한다. 아니면 기본값을 쓰는 사례가 "결정이 모자라다"만 듣는다
+        if var.default is not None and not _in_domain(var, var.default):
+            errors.append(f"variables.{vname}: 기본값 {var.default!r} 이 가질 수 있는 값에 들지 않는다")
 
     # strict hierarchy: 펼친 경로에서 같은 정의 반복 금지
     try:
@@ -581,6 +614,25 @@ def check_integrity(doc: m.SesDocument) -> None:
 
     if errors:
         raise LoadError("무결성 오류 " + str(len(errors)) + "건:\n  " + "\n  ".join(errors))
+
+
+RANGE_LIMIT = 100000               # 정수 변수의 범위가 가질 수 있는 값의 수의 한도
+
+
+def _whole(n) -> bool:
+    return isinstance(n, int) and not isinstance(n, bool)
+
+
+def _in_domain(var: m.Variable, value) -> bool:
+    """값이 변수가 가질 수 있는 값 가운데 하나인가. 범위가 없는 변수는 타입만 본다."""
+    if isinstance(var.domain, m.EnumSet):
+        return any(value == v and str(value) == str(v) for v in var.domain.values)
+    if isinstance(var.domain, m.Range):
+        try:
+            return fits(value, var.type) and var.domain.min <= value <= var.domain.max
+        except TypeError:
+            return False
+    return fits(value, var.type)
 
 
 def _count(n) -> bool:

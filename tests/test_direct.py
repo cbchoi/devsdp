@@ -152,21 +152,27 @@ def rand_decisions(rng: random.Random, doc, L: Layered) -> DecisionSet:
 
 
 def inferred(doc, functions, L, ds) -> None:
-    """적힌 결정만으로는 모자랄 때. 결정 집합이 족을 변이 하나로 줄이면 infer 가 그 변이를 만든다."""
+    """적힌 결정만으로는 모자랄 때. infer 는 족에 비추어 답한다.
+
+    결정을 따르는 변이가 하나이면 그것을 만든다. 없으면 어긋났다고 한다. 여럿이면 묻는다."""
     R = apply(L.ses, ds)
     left = sem(R) if R is not None else []
     more = direct.completed(doc, ds, functions)
     assert (more is not None) == (len(left) == 1)                # 남은 변이가 하나일 때, 그때만 채운다
     try:
         b = direct.build(doc, ds, functions=functions, infer=True)
-    except Undecided:
-        STATS["infer_still_undecided"] += len(left) == 1         # 자리마다 다르게 정해져 정의의 결정으로 적을 수 없는 경우
+    except Undecided as e:
+        assert len(left) >= 1                                    # 변이가 없는데 묻지 않는다
+        STATS["infer_still_undecided"] += len(left) == 1         # 하나 남았는데도 채우지 못한 경우. 드물어야 한다
+        STATS["infer_asked"] += len(left) > 1
+        assert len(e.options) >= 2
         return
     except Contradiction:
-        assert len(left) == 1 and not mergeable(L, left[0])      # 하나 남은 변이가 합칠 수 없는 것이다
+        assert not left or (len(left) == 1 and not mergeable(L, left[0]))    # 변이가 없거나, 하나 남은 것이 합칠 수 없다
         STATS["infer_contradiction"] += 1
+        STATS["infer_empty"] += not left
         return
-    assert left == [b.variant]                                   # 만든 것이 그 하나 남은 변이다
+    assert [W for W in left if mergeable(L, W)] == [b.variant]   # 만든 것이 그 하나 남은 변이다
     assert set(b.unused) <= {c.key for c in ds.choose} | {o.key for o in ds.set}
     STATS["infer_built"] += 1
 
@@ -546,7 +552,7 @@ def test_direct_samples_are_not_vacuous():
     assert STATS["random_built"] >= 500 and STATS["random_contradiction"] >= 500, STATS
     assert STATS["random_undecided"] >= 500 and STATS["random_unused"] >= 100, STATS
     assert STATS["infer_built"] >= 40 and STATS["infer_contradiction"] >= 5, STATS
-    assert STATS["infer_still_undecided"] <= 5, STATS
+    assert STATS["infer_still_undecided"] == 0 and STATS["infer_asked"] >= 100, STATS
 
 
 FLAGGED = {"ses": "1.0", "name": "Sys",

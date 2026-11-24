@@ -223,7 +223,7 @@
         },
         "extends": {
           "$ref": "#/$defs/identifier",
-          "description": "전문화 부모 엔티티. 속성과 포트를 상속한다."
+          "description": "전문화 부모 엔티티. 대안으로 골라져 합쳐질 때 부모의 속성과 포트가 함께 든다. 부분으로 직접 놓인 정의가 부모의 것을 물려받는지는 아직 정해지지 않았다. 지금은 적재기는 받고 족의 검사는 받지 않는다(ROADMAP.md 의 정해야 할 것 5)."
         },
         "stereotype": {
           "type": "string",

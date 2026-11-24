@@ -330,14 +330,54 @@ def check_file(d) -> None:
             for where in ("path", "node"):
                 if item.get(where) is not None and not isinstance(item[where], list):
                     raise DecisionError(f"{key}[{i}].{where}: 이름의 목록으로 적는다. 예: [뿌리, 부분]")
+            for where in ("at", "specialization", "multi_aspect", "attribute"):
+                if item.get(where) is not None and not isinstance(item[where], str):
+                    raise DecisionError(f"{key}[{i}].{where}: 이름 하나를 글로 적는다. 적힌 것은 {item[where]!r} 다")
+    for name in ("name", "target"):
+        if d.get(name) is not None and not isinstance(d[name], str):
+            raise DecisionError(f"{name}: 글로 적는다. 적힌 것은 {d[name]!r} 다")
 
 
 def load_decisions(path: str) -> DecisionSet:
-    import yaml
-    with open(path, encoding="utf-8") as f:
-        d = yaml.safe_load(f)
+    from . import safeyaml
+    try:
+        d = safeyaml.load(path)
+    except safeyaml.YamlError as e:
+        raise DecisionError(str(e)) from None
     check_file(d)
-    return DecisionSet.from_dict(d)
+    try:
+        return DecisionSet.from_dict(d)
+    except (TypeError, ValueError, AttributeError, LookupError) as e:       # 모양이 틀린 곳을 미리 다 막지는 못했다
+        raise DecisionError(f"모양이 틀렸다. {type(e).__name__}: {e}") from None
+
+
+_CHANGE_KEYS = {"variables", "choose", "set"}
+
+
+def overlaid(ds: Optional[DecisionSet], change) -> DecisionSet:
+    """결정 집합 위에 고친 것(change)을 얹는다. 실험에서 사례 하나의 값을 바꿔 가며 돌릴 때 쓴다.
+
+    change 는 결정 집합 파일의 variables, choose, set 과 같은 모양의 표다. 같은 변수, 같은 선택 지점, 같은 곳의
+    같은 속성에 대한 것이 이미 있으면 바꾸고 없으면 더한다. 모양이 틀리면 DecisionError 다.
+    """
+    if not isinstance(change, dict):
+        raise DecisionError(f"고칠 것은 variables, choose, set 을 가진 표로 준다. 받은 것은 {change!r} 다")
+    extra = sorted(map(str, set(change) - _CHANGE_KEYS))
+    if extra:
+        raise DecisionError(f"고칠 것에 모르는 항목 {extra[0]} 가 있다. 쓸 수 있는 것은 {sorted(_CHANGE_KEYS)} 다")
+    check_file(dict(change))
+    try:
+        more = DecisionSet.from_dict(change)
+    except (TypeError, ValueError, AttributeError, LookupError) as e:
+        raise DecisionError(f"모양이 틀렸다. {type(e).__name__}: {e}") from None
+    out = ds or DecisionSet()
+    for name, values in more.variables.items():
+        out = out.assign(name, *values)
+    for c in more.choose:
+        out = out.decide(c)
+    for o in more.set:
+        out = out.override(o)
+    return out
 
 
 # ---------------------------------------------------------------------------

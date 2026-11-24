@@ -1,0 +1,11 @@
+# 사례: 느린 처리기. 처리 시간(3)이 도착 간격(2)보다 길어 줄이 쌓인다.
+decisions: "1.0"
+name: slow
+target: Line
+
+variables:
+  inspect: 1
+  workers: 1
+
+choose:
+  - {at: Worker, specialization: speed, alternative: Slow}

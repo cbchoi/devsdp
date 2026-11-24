@@ -1,5 +1,5 @@
 # 사례의 기록의 요약. ses pack check --record 가 적는다. 손으로 고치지 않는다.
 # 돌린 사례는 참조 시뮬레이터의 사건 기록의 지문을, 돌리지 않는 사례는 만든 구조의 지문을 적는다.
 # 모델 베이스나 문서를 고쳐 기록이 달라지면 검사가 알린다. 뜻한 변화이면 다시 적는다.
-field_1000: {structure: "7ecd9b7fee89048c"}
+field_1000: {structure: "11ad23bc71fbe9f7"}
 field_9: {until: 30.0, events: 103, last: 30.0, digest: "cc636e837dacd5c1"}

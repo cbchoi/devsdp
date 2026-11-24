@@ -622,3 +622,243 @@ def test_a_case_with_an_engine_specific_module_is_not_compared_across_engines(li
     assert code == 0 and "pyevsim 건너뜀(특정 엔진의 모듈이 들어 있다)" in out
     edit(line, "pack.yaml", "  native: [Sink]\n", "  native: [Drain]\n")
     assert "model_base.native 에 적힌 모듈이 라이브러리에 없다" in said(P.check(line), "P2")
+
+
+# ---------------------------------------------------------------------------
+# 연산을 맡겨 본 검토와 안내서의 둘째 검증에서 나온 것 (21 문서의 8절, 20 문서의 6절)
+# ---------------------------------------------------------------------------
+
+def test_a_warning_about_the_model_base_does_not_skip_the_cases(line):
+    """모델 베이스의 경고는 사례를 건너뛰게 하지 않는다. 건너뛰면 검사가 아무것도 돌리지 않고 통과한다."""
+    edit(line, "model_base.py", "from ses_core.devs import", "import time\nfrom ses_core.devs import")
+    edit(line, "model_base.py", "LIBRARY = ", "def stamp():\n    return time.time()\n\n\nLIBRARY = ")
+    report = P.check(line)
+    assert report.ok and [f.code for f in report.findings if f.severity == "warning"] == ["P2"]
+    assert all("events" in info and "digest" in info for info in report.cases.values())     # 돌렸다
+    edit(line, "line.ses.yaml", "service: {type: float, default: 1.0, doc: 작업 하나를 처리하는 시간}",
+         "service: {type: float, default: 2.0}")
+    report = P.check(line)                                   # 경고가 있어도 적어 둔 기록과 견준다
+    assert codes(report) == {"P6"} and "기록이 적어 둔 것과 다르다" in said(report, "P6")
+    assert [f.where for f in report.errors] == ["fast"]
+
+
+def test_a_model_that_fails_while_it_is_made_is_located(line, monkeypatch):
+    """init 에서 난 예외도 어느 구성요소의 것인지와 줄을 적는다. 기본값으로는 나지 않고 사례의 값에서만 나는 경우다."""
+    edit(line, "model_base.py", "        self.count = 0", "        self.count = 0\n        self.rate = 1 / (self.period - 5.0)")
+    edit(line, "cases/fast.decisions.yaml", "choose:", "set:\n  - {at: Source, attribute: period, value: 5.0}\nchoose:")
+    report = P.check(line)
+    text = said(report, "P6")
+    assert "Source 의 init() 이 시각 0.0 에서 예외를 냈다: ZeroDivisionError" in text and "(model_base.py 30번째 줄)" in text
+    found = [f for f in report.errors if f.kind == "model_error"]
+    assert [(f.data["component"], f.data["function"], f.data["line"]) for f in found] == [("Source", "init", 30)]
+    with pytest.raises(P.PackError, match=r"Source 의 init\(\) 이 시각 0.0 에서 예외를 냈다") as e:
+        P.run(line, "fast")
+    assert e.value.code == "P6"
+    monkeypatch.chdir(line)                                  # 명령도 역추적을 찍지 않는다
+    monkeypatch.syspath_prepend(line)
+    sys.modules.pop("model_base", None)
+    code, out = ses("run", "line.ses.yaml", "--decisions", "cases/fast.decisions.yaml", "--binding", "binding.yaml",
+                    "--library", "model_base:LIBRARY", "--until", 5)
+    sys.modules.pop("model_base", None)
+    assert code == 1 and "Traceback" not in out and "Source 의 init() 이 시각 0.0 에서 예외를 냈다" in out
+    # 기본값으로도 나는 것은 돌리기 전에 모델 베이스의 줄로 알린다. 그 줄에도 자리가 있다
+    edit(line, "model_base.py", "self.period - 5.0", "self.period - 2.0")
+    report = P.check(line)
+    assert "기본값으로 만들어 처음 상태를 볼 수 없다: ZeroDivisionError" in said(report, "P2")
+    assert "(model_base.py 30번째 줄)" in said(report, "P2")
+    assert [f.data.get("line") for f in report.errors if f.kind == "initial_state_error"] == [30]
+
+
+def test_a_set_on_a_place_with_a_misspelt_attribute_is_an_error(line):
+    """자리(path)로 적은 재정의의 속성 이름이 틀리면 모델은 말없이 기본값으로 돈다. 그 자리의 구성요소가 있으면 오류다."""
+    edit(line, "cases/fast.decisions.yaml", "choose:", "set:\n  - {path: [Line, Worker], attribute: servce, value: 2.0}\nchoose:")
+    report = P.check(line)
+    assert codes(report) == {"P4"}
+    assert "set/path/Line/Worker/servce: 구성요소 Line/Worker 에 속성 servce 가 없다. 있는 속성은 ['service'] 다" in said(report, "P4")
+    with pytest.raises(P.PackError, match="속성 servce 가 없다") as e:
+        P.run(line, "fast")
+    assert e.value.code == "P4"
+    # 그 자리가 이 변이에 없으면 쓰이지 않은 결정이다. 경고로 남는다. 자리는 빗금으로 이어 적는다
+    edit(line, "cases/fast.decisions.yaml", "{path: [Line, Worker], attribute: servce, value: 2.0}",
+         "{path: [Line, Nowhere], attribute: service, value: 2.0}")
+    report = P.check(line)
+    assert report.ok and "쓰이지 않은 결정: set/path/Line/Nowhere/service" in said(report, "P4")
+    # 맞게 적으면 값이 간다
+    edit(line, "cases/fast.decisions.yaml", "{path: [Line, Nowhere], attribute: service, value: 2.0}",
+         "{path: [Line, Worker], attribute: service, value: 2.0}")
+    report = P.check(line)
+    assert codes(report) == {"P6"} and not report.of("P4")
+
+
+def test_a_variant_is_run_from_a_decisions_file_or_with_changes(line):
+    """실험에서 값을 바꿔 가며 돌린다. 선언에 없는 결정 집합 파일로, 또는 사례 위에 고칠 것을 얹어서."""
+    before = records_of(line)
+    log, sigma, atoms = P.run(line, "fast")
+    slow = P.run(line, "slow")[0]
+    assert P.run(line, decisions="cases/fast.decisions.yaml", until=20) == (log, sigma, atoms)
+    for args, kwargs, word in (((), {}, "하나로 준다"),
+                               (("fast",), {"decisions": "cases/fast.decisions.yaml"}, "하나로 준다"),
+                               ((), {"decisions": "cases/fast.decisions.yaml"}, "돌릴 시각이 없다"),
+                               ((), {"decisions": "../fast.decisions.yaml", "until": 5}, "묶음 밖을 가리킨다"),
+                               ((), {"decisions": "cases/none.yaml", "until": 5}, "가 없다")):
+        with pytest.raises(P.PackError, match=word):
+            P.run(line, *args, **kwargs)
+    # 같은 선택 지점의 결정은 바꾸고, 없는 것은 더한다
+    change = {"choose": [{"at": "Worker", "specialization": "speed", "alternative": "Slow"}]}
+    assert P.run(line, "fast", change=change)[0] == slow
+    quick = P.run(line, "fast", change={"set": [{"at": "Source", "attribute": "period", "value": 1.0}]})[0]
+    assert len(quick) > len(log) and quick[0][0] == 1.0
+    again = P.run(line, "fast", change={"set": [{"at": "Source", "attribute": "period", "value": 1.0},
+                                                 {"at": "Source", "attribute": "period", "value": 2.0}]})[0]
+    assert again == log                                      # 같은 속성은 뒤의 것이 이긴다
+    for bad, word in (({"sets": []}, "모르는 항목 sets"), ([], "표로 준다"), ({"name": "x"}, "모르는 항목 name"),
+                      ({"set": [{"at": "Source", "attribute": "perid", "value": 1.0}]}, "속성 perid 가 없다"),
+                      ({"set": [{"at": "Source", "attribute": "period"}]}, "값")):
+        with pytest.raises(P.PackError, match=word) as e:
+            P.run(line, "fast", change=bad)
+        assert e.value.code == "P4", bad
+    assert records_of(line) == before                        # 기록은 읽지도 적지도 않는다
+
+
+def test_the_fingerprint_does_not_depend_on_how_python_orders_things():
+    """집합과, 열쇠의 타입이 섞인 사전. 순서가 없는 것에 순서를 주어 지문을 낸다."""
+    a = [(1.0, ("A",), "out", {"b": 1, "a": {3, 1, 2}, "f": frozenset({"x", "y"})})]
+    b = [(1.0, ("A",), "out", {"f": frozenset({"y", "x"}), "a": {2, 3, 1}, "b": 1})]
+    assert P.digest(a) == P.digest(b)
+    assert P.digest([(1.0, ("A",), "out", {"a": {1, 2}})]) != P.digest([(1.0, ("A",), "out", {"a": {1, 3}})])
+    mixed = [(1.0, ("A",), "out", {1: "x", "1": "y", (2, 3): "z", None: 0})]
+    assert re.fullmatch(r"[0-9a-f]{16}", P.digest(mixed))
+    assert P.canonical({(1, 2): {3}}) == {"[1, 2]": [3]} and P.canonical(({2, 1}, [frozenset()])) == [[1, 2], [[]]]
+
+
+def test_the_structure_fingerprint_tells_structures_apart(line):
+    """돌리지 않는 사례는 구조의 지문을 적는다. 구성요소의 수가 같아도 구조가 다르면 지문이 다르다."""
+    edit(line, "pack.yaml", "{name: fast, decisions: cases/fast.decisions.yaml, until: 20}",
+         "{name: fast, decisions: cases/fast.decisions.yaml}")
+    edit(line, "pack.yaml", "{name: slow, decisions: cases/slow.decisions.yaml, until: 20}",
+         "{name: slow, decisions: cases/slow.decisions.yaml}")
+    report = P.check(line, record=True)
+    assert report.ok
+    fast, slow = report.cases["fast"]["structure"], report.cases["slow"]["structure"]
+    assert fast != slow and report.cases["fast"]["components"] == report.cases["slow"]["components"]
+    edit(line, "line.ses.yaml", "service: {type: float, default: 3.0}", "service: {type: float, default: 4.0}")
+    report = P.check(line)                                   # 속성의 값도 구조의 지문에 든다
+    assert codes(report) == {"P6"} and [f.where for f in report.errors] == ["slow"]
+    assert "구조가 적어 둔 것과 다르다" in said(report, "P6")
+
+
+def test_what_is_not_inside_the_pack_is_not_followed(line, tmp_path):
+    """묶음 안의 파일이 묶음 밖을 가리키는 링크이면 읽지 않는다. 기록은 링크를 따라 쓰지 않는다."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    shutil.move(os.path.join(line, "model_base.py"), str(outside / "mb.py"))
+    os.symlink(str(outside / "mb.py"), os.path.join(line, "model_base.py"))
+    report = P.check(line)
+    assert codes(report) == {"P0"} and "model_base.py 는 묶음 밖의 파일로 가는 링크다" in said(report, "P0")
+    with pytest.raises(P.PackError, match="묶음 밖의 파일로 가는 링크다"):
+        P.run(line, "fast")
+    os.remove(os.path.join(line, "model_base.py"))
+    shutil.move(str(outside / "mb.py"), os.path.join(line, "model_base.py"))
+    assert P.check(line).ok
+
+    kept = "# 묶음 밖의 파일. 건드리면 안 된다\n"
+    (outside / "rec.yaml").write_text(kept, encoding="utf-8")
+    os.remove(os.path.join(line, "records.yaml"))
+    os.symlink(str(outside / "rec.yaml"), os.path.join(line, "records.yaml"))
+    report = P.check(line)
+    assert codes(report) == {"P6"} and "묶음 안의 보통 파일이어야 한다" in said(report, "P6")
+    report = P.check(line, record=True)
+    assert report.ok and (outside / "rec.yaml").read_text(encoding="utf-8") == kept
+    assert not os.path.islink(os.path.join(line, "records.yaml")) and sorted(records_of(line)) == ["fast", "slow"]
+    # 묶음 안에서 묶음 안을 가리키는 링크는 받는다
+    shutil.move(os.path.join(line, "binding.yaml"), os.path.join(line, "real.yaml"))
+    os.symlink("real.yaml", os.path.join(line, "binding.yaml"))
+    assert P.check(line).ok
+
+
+@pytest.mark.parametrize("text,word", [
+    ("fast: [1, 2\n", "YAML 문법이 틀렸다"),
+    ("- 1\n- 2\n", "모양이 틀렸다"),
+    ("fast: hello\n", "모양이 틀렸다"),
+    ("a: &a [*a]\n", "자기 자신을 가리키는 별칭"),
+])
+def test_a_broken_record_file_is_reported_and_written_again(line, text, word):
+    with open(os.path.join(line, "records.yaml"), "w", encoding="utf-8") as f:
+        f.write(text)
+    report = P.check(line)
+    assert codes(report) == {"P6"} and word in said(report, "P6") and [f.kind for f in report.errors] == ["records_file"]
+    assert P.check(line, record=True).ok and sorted(records_of(line)) == ["fast", "slow"]
+    assert P.check(line).ok
+
+
+def test_the_binding_of_a_pack_is_read_strictly(line):
+    """모르는 항목을 말없이 넘기면 사례의 값이 모델에 가지 않는다."""
+    for old, new, word in (
+            ("time_unit: 1.0", "time_unit: 1.0\ntime_units: 2", "모르는 항목 ['time_units']"),
+            ("  Sink: {module: Sink}", "  Sink: {modul: Sink}", "map.Sink: 모르는 항목 ['modul']"),
+            ("  Sink: {module: Sink}", "  Sink: {module: Sink, params: 3}", "map.Sink.params: 모듈의 매개변수 이름에서 속성 이름으로"),
+            ("  Sink: {module: Sink}", "  Sink: Sink", "map.Sink: {module: 모듈의 이름} 의 모양으로 적는다"),
+            ("executor: devs", "executor: spice", "executor 가 spice 다. 묶음의 바인딩은 devs 로 적는다"),
+            ("executor: devs", "executor: 3", "executor: 실행기의 이름을 글로 적는다")):
+        edit(line, "binding.yaml", old, new)
+        report = P.check(line)
+        assert codes(report) == {"P3"} and word in said(report, "P3"), (new, said(report, "P3"))
+        assert "Error:" not in said(report, "P3")              # 파이썬의 예외 이름을 그대로 내지 않는다
+        edit(line, "binding.yaml", new, old)
+    assert P.check(line).ok
+
+
+def test_the_full_template_passes_and_a_failed_scaffold_leaves_nothing(tmp_path):
+    root = str(tmp_path / "mylab")
+    written = P.scaffold(root, template="full")
+    assert len(written) == 10 and sorted(os.listdir(os.path.join(root, "cases"))) == [
+        "careful.decisions.yaml", "direct.decisions.yaml", "fast.decisions.yaml", "pair.decisions.yaml",
+        "rush.decisions.yaml", "slow.decisions.yaml"]
+    report = P.check(root, record=True)
+    assert report.ok and report.family == (78, 78) and sorted(report.cases) == ["careful", "direct", "fast", "pair", "rush", "slow"]
+    assert not [f for f in report.findings if f.severity == "warning"]
+    with open(os.path.join(root, "pack.yaml"), encoding="utf-8") as f:
+        assert "name: mylab\n" in f.read()
+    other = str(tmp_path / "other")
+    P.scaffold(other, "plant", template="full")                # 이름을 주면 선언과 문서 파일의 이름이 그것을 따른다
+    assert os.path.exists(os.path.join(other, "plant.ses.yaml")) and P.check(other, record=True).ok
+    assert P.load(other).name == "plant"
+    with pytest.raises(P.PackError, match="뼈대"):
+        P.scaffold(str(tmp_path / "third"), template="huge")
+    assert not os.path.exists(str(tmp_path / "third"))
+
+
+def test_the_structure_fingerprint_sees_the_tree_itself(tmp_path):
+    """속성도 포트도 없는 문서. 고른 대안만 다른 두 구조의 지문이 달라야 한다. 적어 둔 뒤에 사례가 다른 대안을 고르면 알린다."""
+    root = tmp_path / "thing"
+    (root / "cases").mkdir(parents=True)
+    (root / "pack.yaml").write_text('pack: "1.0"\nname: thing\ndocument: thing.ses.yaml\ncases:\n'
+                                    "  - {name: one, decisions: cases/one.yaml}\n  - {name: two, decisions: cases/two.yaml}\n",
+                                    encoding="utf-8")
+    (root / "thing.ses.yaml").write_text(
+        'ses: "1.0"\nname: Thing\nentities:\n  Thing: {root: true, aspects: {a: {parts: [Part]}}}\n'
+        "  Part: {specializations: {kind: {alternatives: [B1, B2]}}}\n  B1: {extends: Part}\n  B2: {extends: Part}\n", encoding="utf-8")
+    for name, alt in (("one", "B1"), ("two", "B2")):
+        (root / "cases" / f"{name}.yaml").write_text(
+            f'decisions: "1.0"\ntarget: Thing\nchoose:\n  - {{at: Part, specialization: kind, alternative: {alt}}}\n', encoding="utf-8")
+    report = P.check(str(root), record=True)
+    assert report.ok and report.cases["one"]["structure"] != report.cases["two"]["structure"]
+    assert report.cases["one"]["components"] == report.cases["two"]["components"] == 2
+    edit(str(root), "cases/one.yaml", "alternative: B1", "alternative: B2")
+    report = P.check(str(root))
+    assert codes(report) == {"P6"} and [f.where for f in report.errors] == ["one"]
+    assert report.cases["one"]["structure"] == report.cases["two"]["structure"]
+
+
+def test_every_wrong_case_of_the_declaration_is_told_at_once(line):
+    """선언의 사례 여럿에 잘못이 있으면 한 번에 알린다. 하나 고치고 다시 돌리기를 사례의 수만큼 하지 않게 한다."""
+    edit(line, "pack.yaml", "{name: fast, decisions: cases/fast.decisions.yaml, until: 20}",
+         "{name: fast, decision: cases/fast.decisions.yaml, until: 20}")
+    edit(line, "pack.yaml", "{name: slow, decisions: cases/slow.decisions.yaml, until: 20}",
+         "{name: slow, decisions: cases/slow.decisions.yaml, until: -1}")
+    report = P.check(line)
+    text = said(report, "P0")
+    assert codes(report) == {"P0"} and len(report.errors) == 1
+    assert "cases[0]: 모르는 항목 ['decision']" in text and "다른 사례 1개에도 잘못이 있다: cases[1].until: 돌릴 시각은 0 이상" in text
+    edit(line, "pack.yaml", "until: -1", "until: 20")
+    assert "다른 사례" not in said(P.check(line), "P0")

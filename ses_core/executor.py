@@ -89,10 +89,59 @@ class Binding:
         return out
 
 
+class BindingError(ValueError):
+    """바인딩의 파일이 형식에 맞지 않다. 어디가 틀렸는지를 적는다."""
+
+
+_BINDING_KEYS = {"binding", "executor", "target", "time_unit", "map"}
+_BIND_KEYS = {"module", "params"}
+
+
+def check_binding_file(d) -> None:
+    """파일에서 읽은 바인딩의 모양을 본다. 틀리면 BindingError 를 낸다. 모르는 항목을 조용히 넘기지 않는다.
+
+    항목의 표는 스키마(schema/binding.schema.json)의 binding 과 같다. params 를 param 으로 적으면 매개변수의
+    이름 바꾸기가 없는 것처럼 읽혀서 값이 모델에 가지 않는다.
+    """
+    if not isinstance(d, dict):
+        raise BindingError('이름과 값의 표로 적어야 한다. binding: "1.0" 으로 시작한다')
+    unknown = sorted(map(str, set(d) - _BINDING_KEYS))
+    if unknown:
+        raise BindingError(f"모르는 항목 {unknown} 가 있다. 쓸 수 있는 것은 {sorted(_BINDING_KEYS)} 다")
+    for key in ("executor", "map"):
+        if key not in d:
+            raise BindingError(f"{key} 가 없다")
+    if not isinstance(d["executor"], str):
+        raise BindingError(f"executor: 실행기의 이름을 글로 적는다. 적힌 것은 {d['executor']!r} 다")
+    if d.get("target") is not None and not isinstance(d["target"], str):
+        raise BindingError(f"target: 문서의 이름을 글로 적는다. 적힌 것은 {d['target']!r} 다")
+    if not isinstance(d["map"], dict):
+        raise BindingError("map: 정의의 이름에서 {module: 모듈의 이름} 으로 가는 표로 적는다")
+    for name, e in d["map"].items():
+        if not isinstance(e, dict):
+            raise BindingError(f"map.{name}: {{module: 모듈의 이름}} 의 모양으로 적는다. 적힌 것은 {e!r} 다")
+        unknown = sorted(map(str, set(e) - _BIND_KEYS))
+        if unknown:
+            raise BindingError(f"map.{name}: 모르는 항목 {unknown} 가 있다. 쓸 수 있는 것은 {sorted(_BIND_KEYS)} 다")
+        if not isinstance(e.get("module"), str):
+            raise BindingError(f"map.{name}.module: 모듈의 이름을 글로 적는다. 적힌 것은 {e.get('module')!r} 다")
+        params = e.get("params")
+        if params is not None and not (isinstance(params, dict) and all(isinstance(k, str) and isinstance(v, str)
+                                                                         for k, v in params.items())):
+            raise BindingError(f"map.{name}.params: 모듈의 매개변수 이름에서 속성 이름으로 가는 표로 적는다")
+
+
 def load_binding(path: str) -> Binding:
-    import yaml
-    with open(path, encoding="utf-8") as f:
-        return Binding.from_dict(yaml.safe_load(f))
+    from . import safeyaml
+    try:
+        d = safeyaml.load(path)
+    except safeyaml.YamlError as e:
+        raise BindingError(str(e)) from None
+    check_binding_file(d)
+    try:
+        return Binding.from_dict(d)
+    except ValueError as e:                                  # 시간 단위가 틀렸다
+        raise BindingError(str(e)) from None
 
 
 def load_library_dict(d: dict, bodies: Optional[Mapping] = None) -> dict:
@@ -311,7 +360,9 @@ class Bound(Extension):
             module = mod.name
             for p, decl in ports.items():
                 if mod.ports.get(p) != decl:
-                    say("B3", f"모듈 {mod.name} 의 포트 {p} 가 {decl} 이 아니다")
+                    theirs = mod.ports.get(p)                    # 모듈이 그 포트를 어떻게 선언했는가
+                    say("B3", f"모듈 {mod.name} 의 포트 {p} 가 {decl} 이 아니다. "
+                        + (f"모듈은 {theirs} 로 선언했다" if theirs is not None else "모듈에 그 포트가 없다"))
             for p in mod.required:
                 if p not in ports:
                     say("B3", f"모듈 {mod.name} 의 필수 포트 {p} 가 SES의 인터페이스에 없다")

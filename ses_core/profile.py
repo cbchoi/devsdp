@@ -153,9 +153,8 @@ def load_profile_dict(d: dict) -> Profile:
 
 
 def load_profile(path: str) -> Profile:
-    import yaml
-    with open(path, encoding="utf-8") as f:
-        return load_profile_dict(yaml.safe_load(f))
+    from . import safeyaml
+    return load_profile_dict(safeyaml.load(path))
 
 
 def _validate(p: Profile) -> None:

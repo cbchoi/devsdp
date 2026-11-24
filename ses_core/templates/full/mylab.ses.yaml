@@ -1,0 +1,99 @@
+# 구조의 족. 무엇으로 이루어지는가(aspect)와 무엇 가운데 하나인가(specialization)를 적는다.
+# 검사: ses check mylab.ses.yaml       남은 선택지: ses choices mylab.ses.yaml
+ses: "1.0"
+name: Line
+description: 원천이 낸 작업을 처리기가 처리하고 수집기가 모은다
+
+port_types:
+  Job: {fields: {id: int}}
+
+variables:
+  inspect: {type: int, range: [0, 1], doc: 검사기를 두는가. 1 이면 둔다}
+  workers: {type: int, range: [1, 3], doc: 처리기의 수}
+
+entities:
+
+  Line:
+    root: true
+    aspects:
+      inspected:                             # 검사기가 있을 때
+        rule: {var: inspect, eq: 1}
+        parts: [Source, Workers, Inspector, Sink]
+        couplings:
+          - {from: Source.out, to: Workers.in}
+          - {from: Workers.out, to: Inspector.in}
+          - {from: Inspector.ok, to: Sink.in}
+      direct:                                # 검사기가 없을 때. 처리기에서 바로 수집기로 간다
+        rule: {var: inspect, eq: 0}
+        parts: [Source, Workers, Inspector, Sink]
+        couplings:
+          - {from: Source.out, to: Workers.in}
+          - {from: Workers.out, to: Sink.in}
+
+  Source:
+    ports:
+      out: {type: Job, direction: out}
+    attributes:
+      period: {type: float, default: 2.0, doc: 작업을 내는 간격}
+
+  Workers:
+    ports:
+      in: {type: Job, direction: in, required: true}
+      out: {type: Job, direction: out}
+    multi_aspects:
+      pool:
+        part: Worker
+        cardinality: {var: workers}
+        naming: "w{i}"
+        couplings:
+          pattern: fan_out_fan_in
+          fan_out: [{from: in, to: "{part}.in"}]
+          fan_in: [{from: "{part}.out", to: out}]
+
+  Worker:
+    ports:
+      in: {type: Job, direction: in, required: true}
+      out: {type: Job, direction: out}
+    attributes:
+      me: {type: int, expr: {replica: index}, doc: 몇 번째 복제본인가}
+      of: {type: int, expr: {var: workers}, doc: 복제본이 모두 몇 개인가}
+    specializations:
+      speed:                                 # 대안: Worker 는 둘 가운데 하나다
+        alternatives: [Fast, Careful, Slow]
+
+  Fast:
+    extends: Worker
+    attributes:
+      service: {type: float, default: 1.0, doc: 작업 하나를 처리하는 시간}
+
+  Careful:
+    extends: Worker
+    attributes:
+      service: {type: float, default: 2.0}
+
+  Slow:
+    extends: Worker
+    attributes:
+      service: {type: float, default: 3.0}
+
+  Inspector:
+    ports:
+      in: {type: Job, direction: in, required: true}
+      ok: {type: Job, direction: out}
+    attributes:
+      every: {type: int, default: 3, doc: 이 번째 작업마다 하나를 버린다}
+    specializations:
+      presence:
+        alternatives: [Present, Absent]
+        select: {when: {var: inspect, eq: 1}, then: Present, else: Absent}
+
+  Present:
+    extends: Inspector
+
+  Absent:
+    extends: Inspector
+    stereotype: void
+
+  Sink:
+    ports:
+      in: {type: Job, direction: in, required: true}

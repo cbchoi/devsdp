@@ -1,0 +1,19 @@
+# 분야 묶음의 선언. 이 디렉터리에 무엇이 어디 있는지를 적는다.
+# 검사: ses pack check .      사례를 돌려 보기: ses pack run . fast
+pack: "1.0"
+name: mylab
+title: 작업 하나를 받아 처리하는 줄. 처리기는 빠른 것과 느린 것 가운데 하나다
+
+document: mylab.ses.yaml          # 구조의 족
+model_base:
+  file: model_base.py              # 원자 모델들. 공통 모델 기반(ses_core.devs.Atomic)으로 쓴다
+  library: LIBRARY
+binding: binding.yaml              # 정의를 모듈에 잇는다. 시간 단위를 적는다
+
+cases:                             # 사례 하나가 변이 하나다. until 을 적으면 그 시각까지 돌려 본다
+  - {name: fast, decisions: cases/fast.decisions.yaml, until: 20}
+  - {name: slow, decisions: cases/slow.decisions.yaml, until: 20}
+  - {name: careful, decisions: cases/careful.decisions.yaml, until: 20}
+  - {name: rush, decisions: cases/rush.decisions.yaml, until: 20}
+  - {name: direct, decisions: cases/direct.decisions.yaml, until: 20}
+  - {name: pair, decisions: cases/pair.decisions.yaml, until: 20}

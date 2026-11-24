@@ -4,6 +4,7 @@
 안내서가 적은 출력(text 의 글 상자)은 실제로 나온 출력에 줄마다 있어야 한다.
 """
 
+import contextlib
 import io
 import json
 import os
@@ -55,8 +56,8 @@ def test_the_walk_of_the_guide(tmp_path, monkeypatch):
     seen = []                                                # 지금까지 나온 출력의 줄들
 
     def plain(line: str) -> str:
-        """엔진이 있고 없음과 줄 번호는 컴퓨터와 판마다 다르다. 견주기 전에 지운다."""
-        return re.sub(r"\d+번째 줄", "N번째 줄", line.replace(engines, "pyevsim 건너뜀, cevsim 건너뜀"))
+        """엔진이 있고 없음은 컴퓨터마다 다르다. 견주기 전에 지운다. 줄 번호는 지우지 않는다. 안내서가 적은 그대로여야 한다."""
+        return line.replace(engines, "pyevsim 건너뜀, cevsim 건너뜀")
 
     def run(*argv, code=0):
         got, out = ses(*argv)
@@ -165,15 +166,56 @@ def test_the_walk_of_the_guide(tmp_path, monkeypatch):
     run("pack", "run", ".", "pair", "--log", "4")
     assert ses("pack", "check", ".")[0] == 0
 
+    # 정의로 적은 결정(at)과 자리로 적은 결정(path)은 둘 다 적용된다
+    pair = doc_text("cases/pair.decisions.yaml")
+    at_line = "  - {at: Worker, specialization: speed, alternative: Slow}"
+    append("cases/pair.decisions.yaml", box("yaml", "- {path: [Line, Workers, w1]"))
+    run("choices", doc, "--decisions", "cases/pair.decisions.yaml", code=1)
+    edit("cases/pair.decisions.yaml", at_line, box("yaml", "- {path: [Line, Workers, w0]"))
+    run("choices", doc, "--decisions", "cases/pair.decisions.yaml")
+    run("build", doc, "--decisions", "cases/pair.decisions.yaml")
+    write("cases/pair.decisions.yaml", pair.rstrip("\n"))     # 안내서가 말한 대로 처음의 한 줄로 되돌린다
+    assert ses("pack", "check", ".")[0] == 0
+
+    # 7절의 끝. 대안마다 포트가 다를 때와 제약
+    crossing = str(tmp_path / "crossing.ses.yaml")
+    write(crossing, box("yaml", 'ses: "1.0"\nname: Crossing'))
+    run("check", crossing, code=1)
+    append(crossing, "\n" + box("yaml", "constraints:\n  - name: fixed_time_has_no_detector"))
+    run("check", crossing)
+    only = str(tmp_path / "actuated.yaml")                   # 제약이 정하는 선택은 다시 적지 않아도 된다
+    write(only, 'decisions: "1.0"\ntarget: Crossing\nchoose:\n  - {at: Controller, specialization: kind, alternative: Actuated}')
+    assert "Detector: Detector, Installed" in run("build", crossing, "--decisions", only)
+    write(only, 'decisions: "1.0"\ntarget: Crossing\nchoose:\n  - {at: Controller, specialization: kind, alternative: FixedTime}\n'
+                '  - {at: Detector, specialization: presence, alternative: Installed}')
+    assert "제약 fixed_time_has_no_detector 을 어긴다" in run("build", crossing, "--decisions", only, code=1)
+
     # 11절. 기록을 JSON 으로 받는다
     got, out = ses("call", "pack_run", "--args", '{"dir": ".", "case": "fast", "limit": 1000}')
     env = json.loads(out.splitlines()[-1])
     assert got == 0 and env["ok"] and len(env["result"]["log"]) == env["result"]["events"] == 25
 
+    # 11절. 값을 바꿔 가며 돌리는 스크립트. 안내서의 글을 그대로 돌린다
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        exec(compile(box("python", "from ses_core import pack as P"), "sweep.py", "exec"), {})
+    seen.extend(printed.getvalue().splitlines())
+
+    # 2절. 틀의 full 은 걸음을 끝까지 따라간 상태와 같다
+    from ses_core import pack as P
+    full = str(tmp_path / "full")
+    P.scaffold(full, "mylab", "full")
+    assert P.check(full, record=True).ok
+    mine = sorted(os.path.relpath(os.path.join(base, n), ".") for base, _, names in os.walk(".") for n in names
+                  if "__pycache__" not in base)
+    assert mine == sorted(os.path.relpath(os.path.join(base, n), full) for base, _, names in os.walk(full) for n in names)
+    for name in mine:                                        # 기록까지 같다
+        assert doc_text(name) == doc_text(os.path.join(full, name)), name
+
     # 안내서가 적은 출력은 모두 실제로 나온 것이다
     quoted = [plain(line) for lang, body in boxes() if lang == "text" for line in body.splitlines() if line.strip()]
     quoted = [line for line in quoted if not any(line.startswith(f"info P7 {name}") for name in have)]
-    assert len(quoted) >= 55
+    assert len(quoted) >= 65
     missing = [line for line in quoted if line not in seen]
     assert not missing, missing
 

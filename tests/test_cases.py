@@ -55,6 +55,7 @@ def wsn(limit: int = None) -> dict:
     d = raw("wsn.ses.yaml")
     if limit is not None:
         d["variables"]["sensors"]["range"] = [1, limit]
+        d["variables"]["sensors"].pop("default", None)       # 문서의 기본값 50 은 줄인 범위 밖이다. 기본값은 범위 안이어야 한다
     return d
 
 

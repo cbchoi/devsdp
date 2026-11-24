@@ -10,6 +10,7 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ses_core import load_ses, load_ses_dict, LoadError  # noqa: E402
+from ses_core import loader  # noqa: E402
 from ses_core import model as m  # noqa: E402
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), "..", "docs", "ses-platform",
@@ -390,3 +391,83 @@ def test_a_replicated_part_written_by_its_definition_gets_a_hint():
         load_ses_dict(d)
     d["entities"]["S"]["multi_aspects"]["many"]["couplings"]["fan_in"] = [{"from": "{part}.o", "to": "out"}]
     load_ses_dict(d)
+
+
+# ---------------------------------------------------------------------------
+# 연산을 맡겨 본 검토에서 나온 것: 틀린 모양은 파이썬의 예외가 아니라 자리와 함께 알린다
+# ---------------------------------------------------------------------------
+
+def _line() -> dict:
+    return {"ses": "1.0", "name": "Line",
+            "variables": {"n": {"type": "int", "range": [1, 3]}},
+            "entities": {
+                "Line": {"root": True, "aspects": {"flow": {"parts": ["Pool"]}}},
+                "Pool": {"multi_aspects": {"many": {"part": "Unit", "cardinality": {"var": "n"}, "naming": "u{i}"}}},
+                "Unit": {"specializations": {"kind": {"alternatives": ["A", "B"]}}},
+                "A": {"extends": "Unit"}, "B": {"extends": "Unit"}}}
+
+
+def _error(d: dict) -> str:
+    with pytest.raises(LoadError) as e:
+        load_ses_dict(d)
+    return str(e.value)
+
+
+def test_a_variable_default_must_be_one_of_its_values():
+    """범위 밖의 기본값을 받으면 기본값을 쓰는 사례가 "결정이 모자라다"만 듣는다."""
+    d = _line()
+    d["variables"]["n"]["default"] = 7
+    assert "variables.n: 기본값 7 이 가질 수 있는 값에 들지 않는다" in _error(d)
+    d["variables"]["n"]["default"] = 3
+    assert load_ses_dict(d).variables["n"].default == 3
+    d["variables"]["mode"] = {"type": "enum", "values": ["a", "b"], "default": "c"}
+    assert "variables.mode: 기본값 'c' 이 가질 수 있는 값에 들지 않는다" in _error(d)
+    d["variables"]["mode"] = {"type": "enum", "values": [1, 2], "default": True}      # 1 과 참은 같은 값으로 읽히지만 다른 글자다
+    assert "variables.mode: 기본값 True" in _error(d)
+    d["variables"]["mode"] = {"type": "bool", "default": 3}
+    assert "variables.mode: 기본값 3" in _error(d)
+    d["variables"]["mode"] = {"type": "bool", "default": False}
+    assert load_ses_dict(d).variables["mode"].default is False
+
+
+def test_a_variable_range_is_not_wider_than_what_can_be_listed():
+    """정수 변수의 범위는 값을 하나씩 늘어놓아 쓴다. 지나치게 넓으면 기억을 다 쓴다."""
+    d = _line()
+    d["variables"]["big"] = {"type": "int", "range": [0, 10 ** 12]}
+    assert "variables.big: 범위의 값이 100000개를 넘는다" in _error(d)
+    d["variables"]["big"] = {"type": "int", "range": [0, loader.RANGE_LIMIT - 1]}
+    assert load_ses_dict(d).variables["big"].domain.max == loader.RANGE_LIMIT - 1
+    d["variables"]["big"] = {"type": "int", "range": [0, loader.RANGE_LIMIT]}
+    assert "범위의 값이 100000개를 넘는다" in _error(d)
+
+
+def test_a_name_that_is_not_there_is_reported_with_a_guess():
+    d = _line()
+    d["entities"]["A"]["extends"] = "Unt"
+    text = _error(d)
+    assert "A.extends: 정의되지 않은 엔티티 참조 Unt. Unit 를 뜻했는가" in text and "KeyError" not in text
+    assert "Unit/kind: 대안 A 가 Unit 을 extends 하지 않는다" not in text        # 까닭이 같은 줄을 되풀이하지 않는다
+    d = _line()
+    d["entities"]["Line"]["aspects"]["flow"]["parts"] = ["Pol"]
+    assert "Line/flow.parts: 정의되지 않은 엔티티 참조 Pol. Pool 를 뜻했는가" in _error(d)
+    d = _line()
+    d["entities"]["Line"]["aspects"]["flow"]["parts"] = ["Zebra"]
+    assert _error(d).rstrip().endswith("정의되지 않은 엔티티 참조 Zebra")              # 닮은 이름이 없으면 묻지 않는다
+
+
+@pytest.mark.parametrize("path,value,word", [
+    (("Pool", "multi_aspects", "many", "naming"), 7, "Pool: multi-aspect many.naming: 복제본의 이름의 틀을 글로 적는다"),
+    (("Pool", "multi_aspects", "many", "couplings"), {"pattern": "custom", "custom": 3},
+     "Pool: 결합의 틀의 custom: 결합의 목록으로 적는다. 적힌 것은 3 다"),
+    (("Line", "aspects", "flow", "parts"), "Pool", "Line: aspect flow.parts: 부분의 목록으로 적는다. 적힌 것은 'Pool' 다"),
+    (("Line", "aspects", "flow", "couplings"), {"from": "a", "to": "b"}, "Line: aspect flow.couplings: 결합의 목록으로 적는다"),
+])
+def test_a_wrong_shape_is_reported_with_its_place(path, value, word):
+    """표를 적을 곳에 수를, 목록을 적을 곳에 글을 적은 것. 파이썬의 예외 이름이 아니라 자리와 바라는 모양을 알린다."""
+    d = _line()
+    at = d["entities"]
+    for key in path[:-1]:
+        at = at[key]
+    at[path[-1]] = value
+    text = _error(d)
+    assert word in text and "Error:" not in text and "ses check" not in text

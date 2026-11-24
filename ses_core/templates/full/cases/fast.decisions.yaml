@@ -1,0 +1,11 @@
+# 사례: 빠른 처리기. 결정 집합은 선택 지점마다 남길 선택지를 적는다.
+decisions: "1.0"
+name: fast
+target: Line
+
+variables:
+  inspect: 1
+  workers: 1
+
+choose:
+  - {at: Worker, specialization: speed, alternative: Fast}

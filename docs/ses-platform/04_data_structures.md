@@ -93,7 +93,7 @@
 |---|---|---|---|
 | name | DefName | 예 | |
 | root | bool | | 기본 false |
-| extends | DefName? | | specialization 부모. 포트와 속성을 상속 |
+| extends | DefName? | | specialization 부모. 대안으로 골라질 때 포트와 속성이 함께 든다. 부분으로 직접 놓인 정의가 물려받는지는 정해지지 않았다(ROADMAP의 정해야 할 것 5) |
 | stereotype | Stereotype? | | atomic, coupled, abstract, frame, void. 없으면 구조로 추론. void는 없음 대안(08 문서) |
 | ports | Map<Name, Port> | | 자기 선언 포트. 상속 포트는 포함하지 않음 |
 | attributes | Map<Name, Attribute> | | 자기 선언 속성 |

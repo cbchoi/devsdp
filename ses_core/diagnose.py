@@ -71,6 +71,39 @@ class Analysis:
 # 문서 범위
 # ---------------------------------------------------------------------------
 
+def _decisions_text(d: Optional[dict]) -> str:
+    """결정 집합(사전의 꼴)을 한 줄로. 변수는 이름=값, 선택은 자리/이름=선택지로 적는다."""
+    if not d:
+        return ""
+    parts = [f"{name}={'|'.join(map(str, vs)) if isinstance(vs, (list, tuple)) else vs}" for name, vs in (d.get("variables") or {}).items()]
+    for c in d.get("choose") or ():
+        where = c.get("at") or "/".join(map(str, c.get("path") or c.get("node") or ()))
+        one = lambda v: "|".join(map(str, v)) if isinstance(v, (list, tuple)) else str(v)     # noqa: E731
+        if c.get("specialization") is not None:
+            parts.append(f"{where}/{c['specialization']}={one(c.get('alternative'))}")
+        elif c.get("multi_aspect") is not None:
+            parts.append(f"{where}/{c['multi_aspect']}={one(c.get('count'))}")
+        else:
+            parts.append(f"{where} 의 분해={one(c.get('aspect'))}")
+    return ", ".join(parts)
+
+
+def where_it_happens(d: "Diagnostic") -> str:
+    """족 범위의 위반이 어느 변이에서 나는지를 적은 글. 문서 범위의 진단이면 빈 글이다.
+
+    원인(cause)이 그 위반이 나는 변이를 모두 설명하면 그것을 적는다. 아니면 위반이 나는 변이 하나를 본보기로 적는다.
+    """
+    if d.scope != "family" or not d.affected:
+        return ""
+    hit, total = d.affected
+    count = f"변이 {total}개 가운데 {hit}개"
+    cause = _decisions_text(d.cause)
+    if cause and d.cause_covers == hit:
+        return f" ({count}. {cause} 일 때)"
+    example = _decisions_text(d.witness)
+    return f" ({count}. 예: {example})" if example else f" ({count})"
+
+
 def _hashable(x) -> bool:
     try:
         hash(x)
