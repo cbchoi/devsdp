@@ -338,16 +338,31 @@ def structure_digest(built) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+def _record_key(name: str) -> str:
+    """기록 파일에 적을 사례의 이름. 그대로 적으면 YAML 이 다른 것으로 읽는 이름(2024, yes, null, 빈 글, 기호가 든 것)은
+    따옴표로 감싼다. 감싸지 않으면 적은 기록을 다시 읽을 때 그 사례의 것이 아니게 된다."""
+    import re
+    import yaml
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", name):
+        try:
+            if yaml.safe_load(name) == name:
+                return name
+        except yaml.YAMLError:
+            pass
+    return json.dumps(name, ensure_ascii=False)
+
+
 def write_records(pack: Pack, records: dict) -> None:
     lines = ["# 사례의 기록의 요약. ses pack check --record 가 적는다. 손으로 고치지 않는다.",
              "# 돌린 사례는 참조 시뮬레이터의 사건 기록의 지문을, 돌리지 않는 사례는 만든 구조의 지문을 적는다.",
              "# 모델 베이스나 문서를 고쳐 기록이 달라지면 검사가 알린다. 뜻한 변화이면 다시 적는다."]
     for name in sorted(records):
         r = records[name]
+        key = _record_key(name)
         if "structure" in r:
-            lines.append(f"{name}: {{structure: \"{r['structure']}\"}}")
+            lines.append(f"{key}: {{structure: \"{r['structure']}\"}}")
             continue
-        lines.append(f"{name}: {{until: {r['until']}, events: {r['events']}, "
+        lines.append(f"{key}: {{until: {r['until']}, events: {r['events']}, "
                      f"last: {'null' if r['last'] is None else r['last']}, digest: \"{r['digest']}\"}}")
     path = pack.path(RECORDS)
     if os.path.islink(path):                                 # 링크를 따라가 다른 파일을 덮어쓰지 않는다
@@ -402,7 +417,7 @@ def _interface(name: str, mod, unit: Optional[float], say) -> None:
                         say("error", "P2", name, f"output() 이 선언하지 않은 출력 포트 {port} 로 낸다", kind="initial_output", module=name, port=port)
                     elif not isinstance(values, (list, tuple)):
                         say("error", "P2", name, f"output() 의 포트 {port} 의 값은 목록이어야 한다: {values!r}", kind="initial_output", module=name, port=port)
-    except Exception as e:                                   # noqa: BLE001  모델의 코드가 낸 것은 무엇이든 알린다
+    except (Exception, SystemExit) as e:                     # noqa: BLE001  모델의 코드가 낸 것은 무엇이든 알린다
         line = _deepest_line(e)                              # 모델의 파일에서 난 곳
         say("error", "P2", name, f"기본값으로 만들어 처음 상태를 볼 수 없다: {type(e).__name__}: {e}"
             + (f" ({line[0]} {line[1]}번째 줄)" if line else ""), kind="initial_state_error", module=name,
@@ -724,7 +739,9 @@ def shown(built, found: list) -> list:
 
 
 def _longer(e: BaseException) -> str:
-    """걸음 수의 한도에 걸렸을 때 덧붙이는 말."""
+    """걸음 수의 한도에 걸렸을 때와 모델이 프로세스를 끝내려 했을 때 덧붙이는 말."""
+    if isinstance(e, SystemExit):
+        return ". 모델이 프로세스를 끝내려 했다. 모델 베이스에서 exit 를 부르지 않는다"
     return ". 더 길게 돌리려면 pack.yaml 의 그 사례에 max_steps 를 적는다" if "정해진 걸음 수" in str(e) else ""
 
 
@@ -976,7 +993,7 @@ def _check(root: str, record: bool, executors: Optional[tuple]) -> Report:
         try:
             log = run_reference()
             again = run_reference(touched)                   # 받는 모델마다 값을 베껴서 넘기며 한 번 더
-        except Exception as e:                               # noqa: BLE001
+        except (Exception, SystemExit) as e:                 # noqa: BLE001  모델이 프로세스를 끝내려 한 것도 여기서 받는다
             say("error", "P6", case.name, f"참조 시뮬레이터에서 돌다가 멈췄다: {type(e).__name__}: {e}" + _longer(e), kind=_run_kind(e), case=case.name, **_run_data(e, pack))
             continue
         outs = {p: {port for port, decl in st.subtree(plan, p)["ports"].items() if decl[1] == "out"} for p in atoms}
@@ -993,7 +1010,7 @@ def _check(root: str, record: bool, executors: Optional[tuple]) -> Report:
         if digest(again) != mine["digest"] and not mutated:
             try:
                 third = run_reference()
-            except Exception:                                # noqa: BLE001
+            except (Exception, SystemExit):                  # noqa: BLE001
                 third = None
             if third is None or digest(third) != mine["digest"]:
                 say("error", "P6", case.name, "같은 사례를 두 번 돌린 기록이 다르다. 재현되지 않는다. 난수는 씨앗을 "
@@ -1044,7 +1061,7 @@ def _check(root: str, record: bool, executors: Optional[tuple]) -> Report:
                     theirs = list(sim.run(case.until))
                 finally:
                     sim.close()
-            except Exception as e:                           # noqa: BLE001
+            except (Exception, SystemExit) as e:             # noqa: BLE001
                 say("error", "P7", case.name, f"{name} 에서 돌다가 멈췄다: {type(e).__name__}: {e}",
                     kind="engine_stopped", case=case.name, executor=name)
                 info["executors"][name] = STOPPED

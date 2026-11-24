@@ -435,4 +435,9 @@ MUTANTS = [
     m("O24 선택지를 한도 없이 늘어놓음", OP,
       "                 \"options\": options[:OPTIONS_LIMIT], \"options_count\": len(options)}",
       "                 \"options\": options, \"options_count\": len(options)}"),
+    m("PK49 (P6) YAML 이 다르게 읽는 사례 이름을 기록에 그대로 적음", PA,
+      "        key = _record_key(name)", "        key = name"),
+    m("PK50 (P6) 모델이 프로세스를 끝내려 한 것을 받지 않음", PA,
+      "        except (Exception, SystemExit) as e:                 # noqa: BLE001  모델이 프로세스를 끝내려 한 것도 여기서 받는다",
+      "        except Exception as e:                               # noqa: BLE001"),
 ]

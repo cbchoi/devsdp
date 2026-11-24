@@ -862,3 +862,61 @@ def test_every_wrong_case_of_the_declaration_is_told_at_once(line):
     assert "cases[0]: 모르는 항목 ['decision']" in text and "다른 사례 1개에도 잘못이 있다: cases[1].until: 돌릴 시각은 0 이상" in text
     edit(line, "pack.yaml", "until: -1", "until: 20")
     assert "다른 사례" not in said(P.check(line), "P0")
+
+
+def test_a_case_name_that_yaml_reads_as_something_else_keeps_its_record(line):
+    """사례의 이름이 2024, yes, null 같은 것이면 기록 파일에 그대로 적었을 때 수나 참으로 읽힌다. 따옴표로 감싸 적는다."""
+    edit(line, "pack.yaml", "{name: fast,", '{name: "2024",')
+    edit(line, "pack.yaml", "{name: slow,", '{name: "yes",')
+    report = P.check(line, record=True)
+    assert report.ok and sorted(records_of(line)) == ["2024", "yes"]
+    with open(os.path.join(line, "records.yaml"), encoding="utf-8") as f:
+        text = f.read()
+    assert '"2024": {until: 20.0' in text and '"yes": {until: 20.0' in text
+    report = P.check(line)                                   # 다시 읽어도 그 사례의 기록이다
+    assert report.ok and not [f for f in report.findings if f.severity == "warning"]
+    edit(line, "line.ses.yaml", "service: {type: float, default: 1.0, doc: 작업 하나를 처리하는 시간}",
+         "service: {type: float, default: 2.0}")
+    assert [f.where for f in P.check(line).errors] == ["2024"]            # 기록의 검사가 꺼지지 않았다
+    for name in ("null", "a b", "with: colon", "", "3.5", "~", "plain_name", "case-1", "v1.2"):
+        assert yaml.safe_load(P._record_key(name) + ": 1") == {name: 1}, name
+    assert P._record_key("plain_name") == "plain_name" and P._record_key("yes") == '"yes"'
+
+
+def test_a_model_that_ends_the_process_is_a_finding(line):
+    """모델이 exit 를 부르면 검사가 말없이 0으로 끝나 통과처럼 보였다. 사례의 오류로 알린다."""
+    edit(line, "model_base.py", "        self.count += 1", "        import sys\n        sys.exit(0)")
+    report = P.check(line)
+    assert codes(report) == {"P6"} and sorted(f.where for f in report.errors) == ["fast", "slow"]
+    assert "SystemExit: 0. 모델이 프로세스를 끝내려 했다. 모델 베이스에서 exit 를 부르지 않는다" in said(report, "P6")
+    code, out = ses("pack", "check", line)
+    assert code == 1 and out.strip().endswith("묶음 line: 오류 2건")
+    with pytest.raises(P.PackError, match="모델이 프로세스를 끝내려 했다"):
+        P.run(line, "fast")
+    edit(line, "model_base.py", "        import sys\n        sys.exit(0)", "        self.count += 1")
+    edit(line, "model_base.py", "        self.count = 0", "        self.count = 0\n        raise SystemExit(3)")
+    report = P.check(line)                                   # 만들 때 끝내려 한 것은 모델 베이스의 줄이다
+    assert "P2" in codes(report) and "SystemExit" in said(report, "P2")
+    code, out = ses("pack", "check", line)
+    assert code == 1 and "오류" in out.strip().splitlines()[-1]
+
+
+def test_a_case_that_only_uses_defaults_has_its_commands(tmp_path):
+    """결정 집합 없이 문서의 기본값만으로 정해지는 사례. 명령으로도 만들 수 있어야 하고 show 가 그 명령을 보인다."""
+    root = str(tmp_path / "mylab")
+    P.scaffold(root, template="full")
+    edit(root, "mylab.ses.yaml", "  inspect: {type: int, range: [0, 1], doc: 검사기를 두는가. 1 이면 둔다}",
+         "  inspect: {type: int, range: [0, 1], default: 1}")
+    edit(root, "mylab.ses.yaml", "  workers: {type: int, range: [1, 3], doc: 처리기의 수}", "  workers: {type: int, range: [1, 3], default: 1}")
+    edit(root, "mylab.ses.yaml", "        alternatives: [Fast, Careful, Slow]", "        alternatives: [Fast, Careful, Slow]\n        default: Slow")
+    with open(os.path.join(root, "pack.yaml"), "a", encoding="utf-8") as f:
+        f.write("  - {name: plain, defaults: true, until: 20}\n")
+    report = P.check(root, record=True)
+    assert report.ok and report.cases["plain"]["digest"] == report.cases["slow"]["digest"]
+    code, out = ses("pack", "show", root)
+    assert code == 0 and "  ses build mylab.ses.yaml --defaults --attributes" in out
+    assert "  ses plan mylab.ses.yaml --defaults --binding binding.yaml --library model_base:LIBRARY" in out
+    code, out = ses("build", os.path.join(root, "mylab.ses.yaml"), "--defaults")
+    assert code == 0 and "Worker, Slow" in out and "변수 값 {'inspect': 1, 'workers': 1}" in out
+    code, out = ses("build", os.path.join(root, "mylab.ses.yaml"))
+    assert code != 0 and "결정이 모자라다" in out             # 기본값이 있어도 쓰겠다고 해야 쓴다

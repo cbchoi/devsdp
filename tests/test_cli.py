@@ -268,8 +268,10 @@ def test_bad_module_references_are_reported(spec, why):
 
 def test_usage_errors_exit_with_two():
     with pytest.raises(SystemExit) as e:
-        cli.main(["build", PROCESSING])
+        cli.main(["plan", PROCESSING])                       # 바인딩과 라이브러리가 없다
     assert e.value.code == 2
+    out = io.StringIO()                                      # 결정 집합은 꼭 주는 것이 아니다. 없으면 결정이 없는 것이다
+    assert cli.main(["build", PROCESSING], out) == 3 and "결정이 모자라다" in out.getvalue()
 
 
 def test_modules_are_found_in_the_current_directory_like_an_installed_command():

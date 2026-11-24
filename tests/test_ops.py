@@ -301,6 +301,12 @@ def test_the_large_case_is_answered_and_cut_to_size(tmp_path):
     ("pack_run", {"dir": "lab", "case": "fast", "limit": 1001}, "A0", "limit 은 0 이상 1000 이하"),
     ("pack_run", {"dir": "lab", "case": "fast", "offset": -1}, "A0", "offset 은 0 이상"),
     ("pack_run", {"dir": "lab", "case": "fast", "until": float("inf")}, "A0", "유한한 수"),
+    ("pack_run", {"dir": "lab", "case": "fast", "until": 10 ** 400}, "A0", "유한한 수"),
+    ("pack_run", {"dir": "lab", "case": "fast", "limit": 10 ** 5000}, "A0", "limit 은 0 이상 1000 이하"),
+    ("pack_show", {"dir": "\ud800"}, "A0", "글자로 옮길 수 없는 것"),
+    ("pack_choices", {"dir": "lab", "decisions": "cases/\udfff.yaml"}, "A0", "글자로 옮길 수 없는 것"),
+    ("pack_new", {"dir": "new", "name": "x\ud800"}, "A0", "글자로 옮길 수 없는 것"),
+    ("pack_show", {"dir": "la\x00b"}, "A0", "상대 경로를 글로 적는다"),
 ])
 def test_wrong_input_is_reported_not_raised(lab, name, args, code, word):
     before = snapshot(lab)

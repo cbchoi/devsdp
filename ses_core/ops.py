@@ -224,6 +224,23 @@ def _shown(value) -> str:
     return text if len(text) <= 80 else text[:80] + " ..."
 
 
+def _finite(value) -> bool:
+    """실수로 옮길 수 있는 유한한 수인가. 수백 자리의 정수는 실수로 옮겨지지 않는다."""
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, ValueError):
+        return False
+
+
+def _encodable(value: str) -> bool:
+    """파일 이름과 글로 쓸 수 있는 글인가. 짝 없는 대리 문자는 UTF-8 로 옮겨지지 않아 경로를 다루는 곳에서 예외가 된다."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def problems(schema: dict, value, at: str = "입력") -> list:
     """value 가 schema 에 맞지 않는 곳들. 여기서 쓰는 스키마의 부분만 안다: type, properties, required,
     additionalProperties false, items, enum."""
@@ -244,8 +261,10 @@ def problems(schema: dict, value, at: str = "입력") -> list:
         return [p for i, x in enumerate(value) for p in problems(schema["items"], x, f"{at}[{i}]")]
     if (isinstance(value, bool) and t != "boolean") or not isinstance(value, _TYPES[t]):
         return [f"{at}: {t} 여야 한다. 받은 것은 {_shown(value)} 다"]
-    if t == "number" and not math.isfinite(value):
+    if t == "number" and not _finite(value):
         return [f"{at}: 유한한 수여야 한다"]
+    if t == "string" and not _encodable(value):
+        return [f"{at}: 글자로 옮길 수 없는 것이 들어 있다(짝 없는 대리 문자)"]
     if "enum" in schema and value not in schema["enum"]:
         return [f"{at}: {schema['enum']} 가운데 하나여야 한다. 받은 것은 {_shown(value)} 다"]
     return []

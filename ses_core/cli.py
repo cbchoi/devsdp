@@ -3,9 +3,9 @@
     ses check    문서 [--functions 모듈:이름] [--profile 파일] [--max-variants N]
     ses choices  문서 [--decisions 파일] [--functions 모듈:이름]
     ses variants 문서 [--decisions 파일] [--limit N] [--max-variants N] [--functions 모듈:이름]
-    ses build    문서 --decisions 파일 [--defaults] [--depth N] [--functions 모듈:이름]
-    ses plan     문서 --decisions 파일 --binding 파일 --library 모듈:이름 [--json] [...]
-    ses run      문서 --decisions 파일 --binding 파일 --library 모듈:이름 --until 시각 [--log N] [...]
+    ses build    문서 [--decisions 파일] [--defaults] [--depth N] [--functions 모듈:이름]
+    ses plan     문서 [--decisions 파일] --binding 파일 --library 모듈:이름 [--json] [...]
+    ses run      문서 [--decisions 파일] --binding 파일 --library 모듈:이름 --until 시각 [--log N] [...]
     ses pack new   디렉터리 [--name 이름] [--template minimal|full]
     ses pack check 디렉터리 [--record] [--executors devs,pyevsim,cevsim]
     ses pack show  디렉터리
@@ -460,7 +460,10 @@ def cmd_pack_new(args, out) -> int:
 def cmd_pack_check(args, out) -> int:
     from . import pack as P
     wanted = tuple(x for x in args.executors.split(",") if x) if args.executors else None
-    report = P.check(args.directory, record=args.record, executors=wanted)
+    try:
+        report = P.check(args.directory, record=args.record, executors=wanted)
+    except SystemExit as e:                                  # 묶음의 코드가 프로세스를 끝내려 했다. 통과로 보이면 안 된다
+        raise Stop(FAILED, f"묶음의 코드가 프로세스를 끝내려 했다(SystemExit {e.code}). 모델 베이스에서 exit 를 부르지 않는다")
     _report(report, out)
     errors = len(report.errors)
     warnings = sum(f.severity == "warning" for f in report.findings)
@@ -492,11 +495,13 @@ def cmd_pack_show(args, out) -> int:
     print(f"  ses check {pack.document}{fn}{prof}", file=out)
     print(f"  ses choices {pack.document}{fn}", file=out)
     for c in pack.cases:
+        given = (f" --decisions {c.decisions}" if c.decisions else "") + (" --defaults" if c.defaults else "")
         if c.decisions:
             print(f"  ses choices {pack.document}{fn} --decisions {c.decisions}", file=out)
-            print(f"  ses build {pack.document}{fn}{prof} --decisions {c.decisions} --attributes", file=out)
+        if given:                                            # 결정 집합 없이 기본값만으로 정해지는 사례도 명령이 있다
+            print(f"  ses build {pack.document}{fn}{prof}{given} --attributes", file=out)
             if pack.binding:
-                print(f"  ses plan {pack.document}{fn}{prof} --decisions {c.decisions} --binding {pack.binding} "
+                print(f"  ses plan {pack.document}{fn}{prof}{given} --binding {pack.binding} "
                       f"--library {stem}:{pack.library}", file=out)
     return OK
 
@@ -586,10 +591,11 @@ def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="ses", description="SES 문서와 분야 묶음을 검사하고, 변이를 고르고, 만들고, 돌린다")
     sub = ap.add_subparsers(dest="command", required=True)
 
-    def common(p, decisions_required=False):
+    def common(p):
         p.add_argument("document", help="정준 SES 문서(YAML)")
         p.add_argument("--functions", help="문서의 식이 부르는 함수들의 사전. 모듈:이름")
-        p.add_argument("--decisions", required=decisions_required, help="결정 집합(YAML)")
+        p.add_argument("--decisions", help="결정 집합(YAML). 주지 않으면 결정이 없는 것이다. 문서의 기본값으로 다 정해지는 "
+                                           "변이는 --defaults 만으로 만든다")
         return p
 
     pk = sub.add_parser("pack", help="분야 묶음: 만들고, 검사하고, 사례를 돌린다").add_subparsers(dest="pack_command",
@@ -651,7 +657,7 @@ def parser() -> argparse.ArgumentParser:
     for name, help_, run in (("build", "결정이 끝난 변이 하나를 만든다", cmd_build),
                              ("plan", "변이 하나를 만들고 실행기의 계획을 낸다", cmd_plan),
                              ("run", "변이 하나를 만들고 참조 시뮬레이터로 돌린다", cmd_run)):
-        c = common(sub.add_parser(name, help=help_), decisions_required=True)
+        c = common(sub.add_parser(name, help=help_))
         c.add_argument("--defaults", action="store_true", help="정해지지 않은 변수와 대안에 문서의 기본값을 쓴다")
         c.add_argument("--profile", help="도메인 프로파일(YAML). 문서가 프로파일을 따르면 함께 준다")
         if name == "build":
