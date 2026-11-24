@@ -769,6 +769,13 @@ def test_what_is_not_inside_the_pack_is_not_followed(line, tmp_path):
     report = P.check(line, record=True)
     assert report.ok and (outside / "rec.yaml").read_text(encoding="utf-8") == kept
     assert not os.path.islink(os.path.join(line, "records.yaml")) and sorted(records_of(line)) == ["fast", "slow"]
+    # 기록의 자리가 디렉터리로 가는 링크여도 링크를 치우고 묶음 안에 적는다. 가리킨 디렉터리는 그대로다
+    os.remove(os.path.join(line, "records.yaml"))
+    (outside / "dir").mkdir()
+    (outside / "dir" / "keep.txt").write_text("x", encoding="utf-8")
+    os.symlink(str(outside / "dir"), os.path.join(line, "records.yaml"))
+    assert P.check(line, record=True).ok and os.path.isfile(os.path.join(line, "records.yaml"))
+    assert not os.path.islink(os.path.join(line, "records.yaml")) and os.listdir(str(outside / "dir")) == ["keep.txt"]
     # 묶음 안에서 묶음 안을 가리키는 링크는 받는다
     shutil.move(os.path.join(line, "binding.yaml"), os.path.join(line, "real.yaml"))
     os.symlink("real.yaml", os.path.join(line, "binding.yaml"))
