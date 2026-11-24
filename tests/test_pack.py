@@ -920,3 +920,27 @@ def test_a_case_that_only_uses_defaults_has_its_commands(tmp_path):
     assert code == 0 and "Worker, Slow" in out and "변수 값 {'inspect': 1, 'workers': 1}" in out
     code, out = ses("build", os.path.join(root, "mylab.ses.yaml"))
     assert code != 0 and "결정이 모자라다" in out             # 기본값이 있어도 쓰겠다고 해야 쓴다
+
+
+def test_a_wrong_decision_says_what_there_is(line, tmp_path):
+    """없는 선택지, 없는 속성, 어긋난 개수, 다른 포트 선언. 무엇이 틀렸는지와 함께 무엇이 있는지를 적는다."""
+    edit(line, "cases/fast.decisions.yaml", "alternative: Fast", "alternative: Faster")
+    assert "남기려는 선택지가 대상에 없다: ['Faster']. 있는 것은 ['Fast', 'Slow'] 다" in said(P.check(line), "P4")
+    edit(line, "cases/fast.decisions.yaml", "alternative: Faster", "alternative: Fast")
+    edit(line, "cases/fast.decisions.yaml", "choose:", "set:\n  - {at: Worker, attribute: service, value: 2.0}\nchoose:")
+    text = said(P.check(line), "P4")
+    assert "정의 Worker 에 속성 service 가 없다. 있는 속성은 [] 다" in text
+    assert "그 속성은 대안 ['Fast', 'Slow'] 가 가진다. 대안의 이름으로 적는다" in text
+    edit(line, "cases/fast.decisions.yaml", "{at: Worker, attribute: service, value: 2.0}", "{at: Fast, attribute: service, value: 2.0}")
+    assert not P.check(line).of("P4")
+    edit(line, "model_base.py", '    PORTS = {"in": ("Job", "in")}', '    PORTS = {"in": ("Task", "in")}')      # Sink 의 선언
+    text = said(P.check(line), "P5")
+    assert "B3 Line/Sink: 모듈 Sink 의 포트 in 가 ('Job', 'in') 이 아니다. 모듈은 ('Task', 'in') 로 선언했다" in text
+
+    root = str(tmp_path / "mylab")                           # 개수의 결정이 변수의 값과 어긋난다
+    P.scaffold(root, template="full")
+    edit(root, "cases/pair.decisions.yaml", "choose:", "choose:\n  - {at: Workers, multi_aspect: pool, count: 3}")
+    text = said(P.check(root), "P4")
+    assert "Line/Workers: 남는 분해가 없다. multi-aspect pool 의 개수는 문서와 변수 값으로 [2] 인데 결정 at/Workers 는 [3] 를 남긴다" in text
+    edit(root, "cases/pair.decisions.yaml", "count: 3}", "count: 9}")
+    assert "남기려는 선택지가 대상에 없다: ['9']. 있는 것은 [1, 2, 3] 다" in said(P.check(root), "P4")

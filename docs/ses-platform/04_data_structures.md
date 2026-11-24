@@ -76,8 +76,8 @@
 |---|---|---|---|
 | name | Name | 예 | |
 | type | ScalarType | 예 | int, float, str, bool, enum |
-| default | Value? | | |
-| domain | Domain? | | Range{min, max} 또는 EnumSet{values} |
+| default | Value? | | 가질 수 있는 값 가운데 하나여야 한다(적재기가 본다). 사례가 기본값을 쓰겠다고 할 때만 쓰인다 |
+| domain | Domain? | | Range{min, max} 또는 EnumSet{values}. 정수 범위는 값 100,000개까지다(적재기가 본다). 범위는 값을 늘어놓아 쓰므로 넓은 범위의 값은 속성으로 둔다 |
 | doc | str? | | |
 
 ### 4.3 PortType
@@ -131,7 +131,7 @@ Attribute
 | unit | str? | | 단위 문자열. 검증하지 않고 전달만 한다 |
 | expr | Expr? | | 변수에서 유도되는 값. default 와 동시 지정 시 expr 우선 |
 | values | List<Value>? | | enum 타입의 허용 값 |
-| each | List<Value>? | | 복제본마다의 값. 2026-11-15 추가 (18 문서의 4절). expr 과 함께 쓰지 못한다 |
+| each | List<Value>? | | 복제본마다의 값. 2026-11-15 추가 (18 문서의 4절). expr 과 함께 쓰지 못한다. 목록이 복제본의 수보다 짧으면 남는 복제본은 default 를 쓰고 그것도 없으면 값이 없다. 묶음의 검사는 사례의 변이에 값이 없는 자리가 있으면 오류로 알린다(20 문서의 P5) |
 
 2026-11-15 추가. expr 은 이 날까지 읽기만 하고 쓰지 않았다. 지금은 변수, 등록한 함수, 복제본의 번호와 개수에서 값을 낸다.
 
