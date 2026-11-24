@@ -74,6 +74,16 @@ def _check(doc: m.SesDocument, ds: DecisionSet) -> None:
             raise AlgebraError(f"{where}: 구성요소 경로는 뿌리의 이름 {root} 에서 시작한다. 적힌 것은 {list(path)} 다. "
                                f"계획과 기록은 뿌리를 빼고 보이지만 결정에는 뿌리부터 적는다")
 
+    for name, given in ds.variables.items():            # 변수의 결정. 문서의 탓이 아니라 결정의 탓으로 가려내려고 여기서 본다
+        if name not in doc.variables:
+            raise AlgebraError(f"variable/{name}: 결정이 가리키는 선택 지점이 대상에 없다. 있는 변수는 {sorted(doc.variables)} 다")
+        try:
+            domain = _domain(doc, name)
+        except AlgebraError:
+            continue                                    # 범위가 없는 변수다. 펼칠 때 알린다
+        missing = sorted({str(v) for v in given} - {str(v) for v in domain})
+        if missing:
+            raise AlgebraError(f"variable/{name}: 남기려는 선택지가 대상에 없다: {missing}. 있는 것은 {_few(domain)} 다")
     for c in ds.choose:
         where = "/".join(map(str, c.key))
         bad = c.problems()

@@ -708,10 +708,9 @@ def test_a_variant_is_run_from_a_decisions_file_or_with_changes(line):
     assert P.run(line, "fast", change=change)[0] == slow
     quick = P.run(line, "fast", change={"set": [{"at": "Source", "attribute": "period", "value": 1.0}]})[0]
     assert len(quick) > len(log) and quick[0][0] == 1.0
-    again = P.run(line, "fast", change={"set": [{"at": "Source", "attribute": "period", "value": 1.0},
-                                                 {"at": "Source", "attribute": "period", "value": 2.0}]})[0]
-    assert again == log                                      # 같은 속성은 뒤의 것이 이긴다
+    twice = {"set": [{"at": "Source", "attribute": "period", "value": 1.0}, {"at": "Source", "attribute": "period", "value": 2.0}]}
     for bad, word in (({"sets": []}, "모르는 항목 sets"), ([], "표로 준다"), ({"name": "x"}, "모르는 항목 name"),
+                      (twice, "같은 곳의 같은 속성 period 을 다시 적었다"),      # 뒤의 것이 말없이 이기게 두지 않는다
                       ({"set": [{"at": "Source", "attribute": "perid", "value": 1.0}]}, "속성 perid 가 없다"),
                       ({"set": [{"at": "Source", "attribute": "period"}]}, "값")):
         with pytest.raises(P.PackError, match=word) as e:

@@ -47,6 +47,7 @@ MESSAGE_LIMIT = 2000             # 줄 하나의 글의 글자 수
 VALUES_LIMIT = 200000            # 결과에 싣는 값의 수. 넘으면 결과를 싣지 않고 A2 로 알린다
 DEPTH_LIMIT = 100                # 결과의 값이 겹친 깊이. 넘는 곳은 글로 줄인다
 MAX_ASSIGNMENTS = 200000         # pack_choices 가 돌아보는 변수 값의 조합의 한도 (cli.py 와 같다)
+STEPS_LIMIT = 100000000          # pack_run 에 줄 수 있는 걸음 수의 한도의 상한
 SAFE_INTEGER = 2 ** 53           # 이보다 큰 수는 수로 싣지 않고 글로만 싣는다
 
 # 실행기 사이의 일치의 결과를 기계가 읽는 이름으로
@@ -87,24 +88,32 @@ NEXT = {
     "binding_target": "바인딩의 target 을 문서의 name 과 같게 적는다",
     "unknown_definition": "바인딩의 map 에서 그 이름을 data.definitions 가운데 하나로 고치거나 지운다",
     "unknown_module": "바인딩의 map 에서 모듈의 이름을 data.modules 가운데 하나로 고친다",
+    "binding_params": "바인딩의 그 정의의 params 를 고친다. 왼쪽은 모듈의 매개변수(data.params 가운데 하나), 오른쪽은 문서의 "
+                      "속성(data.attributes 가운데 하나)이다",
     "decisions_load": "결정 집합 파일을 고친다",
     "decisions_target": "결정 집합의 target 을 문서의 name 과 같게 적는다",
     "undecided": "그 사례의 결정 집합에 결정을 더한다. data.at 이 자리, data.choice 가 종류, data.group 이 이름, "
-                 "data.options 가 고를 수 있는 것이다",
+                 "data.options 가 고를 수 있는 것이다. 한 번에 한 곳만 알린다. 남은 선택 지점을 모두 보려면 pack_choices 를 부른다",
     "contradiction": "결정들이 서로 어긋나거나 규칙과 제약에 걸린다. pack_choices 로 결정을 하나씩 빼며 본다",
     "misfit": "결정이 가리키는 이름을 문서의 것으로 고친다",
     "unused_decision": "그 결정을 지우거나 가리키는 곳을 고친다",
     "defaults_ignored": "할 일이 없다. 조립은 pack_build 로 본다",
     "not_assembled": "data.component 의 결합이나 포트를 문서에서 고친다. data.check 가 어긴 조건이다",
-    "not_executable": "data.component 를 바인딩에 묶거나, 문서의 포트와 속성을 모델의 것에 맞춘다. data.check 가 어긴 조건이다",
+    "not_executable": "data.component 를 바인딩에 묶거나, 문서의 포트와 속성을 모델의 것에 맞춘다. data.check 가 어긴 조건이고 "
+                      "data.detail 이 그 내용이다",
+    "unbound": "바인딩의 map 에 data.component 의 정의를 적는다. 대안을 가진 정의이면 고른 대안의 이름으로 적는다",
+    "ambiguous_binding": "data.component 에 합쳐진 정의 가운데 하나만 바인딩에 남긴다",
+    "port_mismatch": "문서의 그 정의의 ports 와 모델의 PORTS 를 같게 적는다. 타입과 방향까지 같아야 한다. data.detail 이 다른 곳이다",
+    "param_value": "문서의 그 속성에 값을 주거나 타입을 모델의 PARAMS 에 맞춘다. data.detail 이 어느 매개변수인지 적는다",
     "model_only_port": "문서의 그 정의의 ports 에 data.port 를 적는다",
     "each_too_short": "문서의 그 속성의 each 에 값을 더 적거나 default 를 적는다. data.component 가 값을 받지 못한 복제본이다",
     "attribute_not_passed": "문서의 속성 이름을 모델의 매개변수 이름으로 고치거나 모델에 그 매개변수를 더한다",
     "model_error": "모델 베이스 파일의 data.line 번째 줄을 본다. data.component 의 data.function 이 data.time 에 예외를 냈다",
-    "off_grid": "바인딩의 time_unit 을 줄이거나 그 시간 값을 time_unit 의 정수배로 고친다",
-    "step_limit": "시간 전진이 0 인 고리가 있는지 본다. 긴 사례이면 pack.yaml 의 그 사례에 max_steps 를 적는다",
+    "off_grid": "바인딩의 time_unit 을 줄이거나 그 시간 값을 time_unit 의 정수배로 고친다. data.component 가 어긋난 값을 낸 곳이다",
+    "step_limit": "data.components 가 data.time 에 되풀이해 움직였다. 시간 전진이 0 인 고리가 있는지 본다. 긴 실행이면 "
+                  "pack.yaml 의 그 사례에 max_steps 를 적거나 pack_run 에 max_steps 를 준다",
     "run_stopped": "모델을 고친다",
-    "run_failed": "pack_check 를 불러 같은 잘못의 종류와 자료를 본다. 결정 집합 파일을 돌렸으면 pack_build 로 본다",
+    "run_failed": "글이 적은 까닭을 고친다. 선언의 사례이면 pack_check 가 같은 잘못의 종류와 자료를 알린다",
     "stray_port": "모델의 PORTS 와 문서의 ports 에 data.port 를 적는다",
     "mutated_input": "data.component 의 data.function 에서 받은 값을 고치지 않게 한다. 고쳐야 하면 복사해서 고친다",
     "depends_on_copying": "낸 값을 낸 뒤에 고치는 모델을 찾아 복사한 것을 내게 한다",
@@ -118,6 +127,25 @@ NEXT = {
     "engine_convention": "모델을 그 엔진의 규약에 맞춘다",
     "engine_stopped": "모델이 계약을 어긴 곳을 찾는다",
     "engine_differs": "모델이 계약을 어긴 곳을 찾는다. 받은 값을 고치는 곳과 같은 시각의 사건의 순서에 기대는 곳이다",
+}
+
+
+# 줄의 data.check 에 오는 조건의 부호. 조립의 조건(08 문서)과 실행 가능성의 조건(14 문서)이다
+CHECKS = {
+    "K0": "뿌리가 없음 대안을 골랐다. 만들 구조가 없다",
+    "K1": "한 자리에 분해가 하나로 정해지지 않았다",
+    "C0": "한 구성요소에 합쳐진 정의들이 같은 이름의 포트를 다른 타입이나 방향으로 적었다",
+    "C1": "결합의 끝이 가리키는 포트가 그 구성요소에 없다",
+    "C2": "결합의 방향이 틀렸다. 내부 결합은 부분의 출력에서 부분의 입력으로 간다",
+    "C3": "결합의 양 끝의 포트 타입이 다르다",
+    "C4": "필수 입력 포트에 들어오는 결합이 없다",
+    "C5": "실행기의 규약을 어긴 결합이다",
+    "A1": "속성의 값이 그 타입이나 허용 값에 맞지 않다",
+    "B1": "원자 구성요소에 묶인 모듈이 없다",
+    "B2": "바인딩이 모호하다. 합쳐진 정의 여럿이 서로 다른 모듈에 묶였다",
+    "B3": "문서의 포트와 모듈의 포트가 다르다",
+    "B4": "모듈의 매개변수에 줄 값이 없거나 타입이 맞지 않다",
+    "B5": "시간으로 쓰는 매개변수의 값이 시간 단위의 정수배가 아니다",
 }
 
 
@@ -536,15 +564,29 @@ def _pack_build(root: str, args: dict) -> tuple:
     values, wiring = seen.get("attr"), seen.get("devs")      # 속성의 값(식과 재정의를 거친 것)과, 포트와 결합
     bound = {}                                               # 원자 구성요소의 자리에서 (모듈, 모델이 받는 매개변수)로
     if library is not None and pack.binding and not found:
+        binding = None
         try:
             binding = X.load_binding(pack.path(pack.binding))
-            L, ext = X.attach(built.layered, DevsExecutor(), binding, library)
-            if not violations(X.alone(L, ext), built.variant):
+        except Exception as e:                               # noqa: BLE001
+            say("error", "P3", pack.binding, f"바인딩을 읽을 수 없다. {e}", "binding_load", file=pack.binding)
+        if binding is not None:
+            for name, bind in binding.map.items():
+                for line, data in P.binding_params(doc, library, name, bind):
+                    say("error", "P3", pack.binding, line, "binding_params", file=pack.binding, **data)
+            try:
+                L, ext = X.attach(built.layered, DevsExecutor(), binding, library)
+                wrong = violations(X.alone(L, ext), built.variant)
+                # 실행 가능하지 않은 변이를 말없이 넘기지 않는다. 묶인 모델과 받는 값은 구할 수 있는 데까지 낸다
+                for line, data in list(zip(P.shown(built, wrong), P.violation_data(built, wrong)))[:7]:
+                    say("error", "P5", where, "이 변이는 실행 가능하지 않다. " + line, P.execution_kind(data["check"]), **data)
+                if len(wrong) > 7:
+                    say("error", "P5", where, f"실행 가능하지 않은 곳이 {len(wrong) - 7}건 더 있다. 앞의 것을 고치면 함께 사라질 수 있다",
+                        "not_executable", more=len(wrong) - 7)
                 plan = X.plan(L, ext, built.variant)
                 bound = {tuple(p): (st.subtree(plan, p).get("module"), st.subtree(plan, p).get("params") or {})
-                         for p in X.frontier(plan)}
-        except Exception:                                    # noqa: BLE001  바인딩의 잘못은 pack_check 가 알린다
-            bound = {}
+                         for p in X.frontier(plan) if st.subtree(plan, p).get("module") is not None}
+            except Exception:                                # noqa: BLE001  계획을 만들 수 없으면 묶인 모델을 싣지 않는다
+                bound = bound or {}
     counts = {"all": 0, "listed": 0, "cut": False}
 
     def total(c) -> None:
@@ -592,6 +634,8 @@ def _pack_run(root: str, args: dict) -> tuple:
         raise _Fail("A0", "offset", "offset 은 0 이상이다")
     if "until" in args and args["until"] < 0:
         raise _Fail("A0", "until", "until 은 0 이상이다")
+    if "max_steps" in args and not 1 <= args["max_steps"] <= STEPS_LIMIT:
+        raise _Fail("A0", "max_steps", f"max_steps 는 1 이상 {STEPS_LIMIT} 이하다")
     pack = _pack(root, args)
     if "case" not in args and "decisions" not in args:
         raise _Fail("A0", "case", "돌릴 것을 case 나 decisions 로 준다")
@@ -605,10 +649,12 @@ def _pack_run(root: str, args: dict) -> tuple:
     findings: list = []
     try:
         log, sigma, atoms = P.run(path, case.name if case is not None else None, until,
-                                  decisions=None if case is not None else relative, defaults=args.get("defaults"))
+                                  decisions=None if case is not None else relative, defaults=args.get("defaults"),
+                                  max_steps=args.get("max_steps"))
     except P.PackError as e:
-        # 같은 잘못을 pack_check 와 pack_build 는 더 자세히 알린다. 종류와 자료는 거기서 본다
-        raise _Fail(e.code, where, str(e), "run_failed")
+        # 검사가 같은 잘못에 붙이는 종류와 자료를 그대로 싣는다. 결정 집합 파일로 돌릴 때는 검사가 그 파일을 보지 않으므로
+        # 여기서 싣지 않으면 까닭이 글에만 남는다
+        raise _Fail(e.code, where, str(e), e.kind or "run_failed", **e.data)
     rows = [{"t": t, "at": "/".join(map(str, where)), "port": port, "value": value}
             for t, where, port, value in log[offset:offset + limit]]
     try:
@@ -618,6 +664,48 @@ def _pack_run(root: str, args: dict) -> tuple:
     return findings, {"variables": sigma, "atoms": atoms, "until": until, "events": len(log),
                       "last": log[-1][0] if log else None, "digest": fingerprint,
                       "offset": offset, "log": rows, "truncated": offset + len(rows) < len(log)}
+
+
+# 항목마다 값의 모양과 본보기. 뼈대의 파일이 보여 주지 않는 것까지 적는다. 이름은 파일.항목이다. 문서는 formats 가
+# document 아래에 늘어놓는 종류의 이름(variable, attribute, aspect, ...)을 쓴다
+SHAPES = {
+    "pack.model_base": "{file: model_base.py, library: LIBRARY, functions: FUNCTIONS, native: [모듈 이름]}. functions 와 native 는 "
+                       "쓸 때만 적는다",
+    "pack.cases": "사례의 목록. 하나는 {name: 이름, decisions: 묶음 안의 결정 집합 파일, defaults: true, until: 20, max_steps: 1000000} "
+                  "가운데 쓰는 것만 적는다. decisions 가 없으면 결정이 없는 사례이고 defaults: true 와 함께 쓴다. defaults 가 true 이면 "
+                  "정해지지 않은 변수와 대안에 문서의 default 를 쓴다. until 이 없으면 돌리지 않고 구조의 지문만 적는다",
+    "pack.experiments": "실험 스크립트 파일의 경로의 목록. 파일이 있는지만 본다. 예: [sweep.py]",
+    "pack.executors": "[devs, pyevsim, cevsim] 가운데에서 고른다. devs 는 늘 든다",
+    "document.portType": "port_types 의 항목 하나. {fields: {항목: 타입}}. fields 는 설명이다. 모델이 내는 값과 견주지 않는다",
+    "document.variable": "구조를 가르는 값. {type: int, range: [1, 3], default: 2}, {type: enum, values: [a, b]}, {type: bool}. "
+                         "default 는 사례가 defaults: true 일 때만 쓰인다. 정수 범위는 값 100000개까지다",
+    "document.attribute": "{type: float, default: 1.0} 값 하나. {type: int, expr: {replica: index}} 복제본의 번호. "
+                          "{type: int, expr: {var: 변수}} 변수의 값. {type: float, each: [1.0, 2.0], default: 1.0} 복제본마다의 값",
+    "document.port": "{type: 포트 타입, direction: in 또는 out, required: true}. required 는 입력 포트에만 쓴다",
+    "document.aspect": "{parts: [정의, {def: 정의, alias: 다른 이름}], couplings: [{from: 부분.포트, to: 부분.포트}], "
+                       "rule: {var: 변수, eq: 값}}. 자기 포트는 점 없이 이름만 적는다. 비교는 eq, ne, lt, le, gt, ge, in 이다",
+    "document.multiAspect": "{part: 정의, cardinality: 3 또는 {var: 변수} 또는 {min: 1, max: 4}, naming: \"w{i}\", "
+                            "couplings: {pattern: fan_out_fan_in, fan_out: [{from: in, to: \"{part}.in\"}], "
+                            "fan_in: [{from: \"{part}.out\", to: out}]}}. 복제본의 이름은 naming 이 정한다(w0, w1)",
+    "document.specialization": "{alternatives: [대안], default: 대안, select: {when: {var: 변수, eq: 값}, then: 대안, else: 대안}}. "
+                               "대안은 extends 로 이 정의를 가리킨다. stereotype: void 인 대안을 고르면 그 부분이 빠진다",
+    "document.constraint": "{name: 이름, when: 조건, require: 조건} 또는 require 대신 forbid. 조건은 {var: 변수, ge: 값} 이나 "
+                           "{selected: \"정의/specialization=대안\"} 이나 {selected: \"정의/multi_aspect=개수\"}",
+    "decisions.variables": "{변수: 값}",
+    "decisions.choose": "목록. {at: 정의, specialization: 이름, alternative: 대안} 은 그 정의가 놓인 모든 자리에, "
+                        "{path: [뿌리, 부분, 복제본], specialization: 이름, alternative: 대안} 은 그 자리 하나에 적용된다. at 과 path 는 "
+                        "둘 다 적용되고 서로 덮지 않는다. 개수는 {at: 정의, multi_aspect: 이름, count: 수}, 분해는 {at: 정의, aspect: 이름}",
+    "decisions.set": "목록. {at: 정의, attribute: 속성, value: 값} 또는 {path: [뿌리, 부분, 복제본], attribute: 속성, value: 값}. "
+                     "같은 속성이면 path 의 값이 그 자리에서 쓰인다. 대안이 가진 속성은 대안의 이름으로 적는다",
+    "decisions.target": "문서의 name",
+    "binding.map": "{정의: {module: 모델 베이스의 클래스 이름, params: {모듈의 매개변수: 문서의 속성}}}. params 는 두 이름이 다를 "
+                   "때만 적는다. 대안을 가진 정의는 대안마다 적는다",
+    "binding.time_unit": "모든 시간 전진이 이 값의 정수배다. 기본 1.0",
+    "binding.executor": "devs",
+    "model.PORTS": "{포트: (포트 타입, \"in\" 또는 \"out\")}. 문서의 그 정의의 ports 와 같아야 한다",
+    "model.PARAMS": "{이름: (타입, 기본값)} 또는 {이름: (타입,)}. 타입은 bool, int, float, str, time. 문서의 같은 이름의 속성이 값을 준다",
+    "model.output": "포트 이름에서 값의 목록으로 가는 사전. 낼 것이 없으면 {}",
+}
 
 
 def _formats(root: str, args: dict) -> tuple:
@@ -635,6 +723,8 @@ def _formats(root: str, args: dict) -> tuple:
         "model": {"base": "ses_core.devs.Atomic",
                   "fill": ["PORTS", "REQUIRED", "PARAMS", "init", "ta", "output", "internal", "external", "confluent"],
                   "param_types": sorted(X._TYPES)},
+        "shapes": dict(SHAPES),
+        "checks": dict(CHECKS),
         "templates": sorted(P.TEMPLATES),
         "example": "pack_new 를 template: full 로 부르면 변수, 없음 대안, 복제, 사례마다 다른 값을 모두 쓰는 묶음이 생긴다. "
                    "그 파일들이 형식의 본보기다",
@@ -717,16 +807,18 @@ OPERATIONS = {op.name: op for op in (
         _schema({"dir": _DIR, "case": _CASE, "decisions": _DECISIONS,
                  "defaults": {"type": "boolean", "description": "정해지지 않은 곳에 문서의 기본값을 쓴다. 주지 않으면 사례의 선언을 따른다"},
                  "until": {"type": "number", "description": "이 시각까지 돌린다. 주지 않으면 사례에 적힌 시각"},
+                 "max_steps": {"type": "integer", "description": f"걸음 수의 한도. 주지 않으면 사례의 것(기본 1000000). 최대 {STEPS_LIMIT}"},
                  "offset": {"type": "integer", "description": "이 번째 사건부터 낸다. 기본 0"},
                  "limit": {"type": "integer", "description": f"낼 사건의 수. 기본 50, 최대 {LOG_LIMIT}"}}, ("dir",)),
         "variables, atoms, until, events, last, digest, offset, log(사건마다 t, at, port, value), truncated",
         False, _pack_run),
     Operation(
         "formats",
-        "묶음의 파일마다 쓸 수 있는 항목의 이름을 낸다. 선언, 문서, 결정 집합, 바인딩, 모델이 채우는 것. 형식을 모를 때 부른다. "
-        "본보기가 필요하면 pack_new 를 template: full 로 부른다.",
+        "묶음의 파일마다 쓸 수 있는 항목의 이름과, 항목마다 값의 모양(shapes)을 낸다. 선언, 문서, 결정 집합, 바인딩, 모델이 "
+        "채우는 것. 형식을 모를 때 부른다. 돌아가는 본보기가 필요하면 pack_new 를 template: full 로 부른다.",
         _schema({}, ()),
-        "pack, document, attribute_types, decisions, binding, model, templates, example",
+        "pack, document, attribute_types, decisions, binding, model, shapes(항목마다 값의 모양과 본보기), "
+        "checks(줄의 data.check 에 오는 부호의 뜻), templates, example",
         False, _formats),
 )}
 
@@ -760,7 +852,7 @@ def tools() -> list:
 
 def manifest() -> dict:
     """연산의 목록과 봉투의 모양."""
-    return {"version": VERSION, "envelope": ENVELOPE, "kinds": dict(NEXT),
+    return {"version": VERSION, "envelope": ENVELOPE, "kinds": dict(NEXT), "checks": dict(CHECKS),
             "operations": [{"name": op.name, "description": op.description, "input_schema": op.input_schema,
                             "result": op.result, "writes": op.writes} for op in OPERATIONS.values()]}
 

@@ -773,6 +773,157 @@ def test_the_call_command_writes_one_ascii_line(lab, tmp_path):
     assert cli.main(["call", "pack_show", "--args", '{"dir": "lab"}', "--root", lab, "--out", str(tmp_path / "no" / "x.json")], out) == 2
 
 
+# ---------------------------------------------------------------------------
+# 고친 표면을 다시 맡겨 본 검토에서 나온 것 (21 문서의 8절의 둘째 표)
+# ---------------------------------------------------------------------------
+
+def errors(env) -> list:
+    return [f for f in env["findings"] if f["severity"] == "error"]
+
+
+def test_binding_params_that_point_at_nothing_are_errors(lab):
+    """params 는 모듈의 매개변수에서 문서의 속성으로 간다. 어느 쪽이든 없으면 값이 모델에 가지 않고 모델은 자기 기본값으로 돈다."""
+    root = os.path.join(lab, "lab")
+    edit(os.path.join(root, "binding.yaml"), "Fast: {module: Worker}", "Fast: {module: Worker, params: {service: servce}}")
+    for op, args in (("pack_check", {}), ("pack_build", {"case": "fast"}), ("pack_run", {"case": "fast"})):
+        found = errors(call(op, {"dir": "lab", **args}, root=lab))
+        assert [(f["code"], f["kind"]) for f in found] == [("P3", "binding_params")], (op, found)
+        assert found[0]["data"]["attribute"] == "servce" and found[0]["data"]["attributes"] == ["service"]
+    edit(os.path.join(root, "binding.yaml"), "params: {service: servce}", "params: {speed: service}")
+    found = errors(call("pack_check", {"dir": "lab"}, root=lab))
+    assert found[0]["kind"] == "binding_params" and found[0]["data"]["param"] == "speed" and found[0]["data"]["params"] == ["service"]
+    # 이름이 다른 속성을 맞게 이으면 값이 간다
+    edit(os.path.join(root, "binding.yaml"), "params: {speed: service}", "params: {service: duration}")
+    edit(os.path.join(root, "lab.ses.yaml"), "service: {type: float, default: 1.0, doc: 작업 하나를 처리하는 시간}",
+         "duration: {type: float, default: 2.0}")
+    env = call("pack_build", {"dir": "lab", "case": "fast"}, root=lab)
+    worker = next(p for p in env["result"]["tree"]["parts"] if p["name"] == "Worker")
+    assert env["ok"] and worker["attributes"] == {"duration": 2.0} and worker["params"] == {"service": 2.0}
+
+
+def test_a_failed_run_says_what_kind_of_failure_it_was(lab):
+    """결정 집합 파일로 돌릴 때는 검사가 그 파일을 보지 않는다. 그래서 돌리다 난 잘못의 종류와 자료를 돌린 쪽이 싣는다."""
+    root = os.path.join(lab, "lab")
+    trial = os.path.join(root, "cases", "trial.yaml")
+
+    def decisions(extra: str = "") -> None:
+        with open(trial, "w", encoding="utf-8") as f:
+            f.write('decisions: "1.0"\ntarget: Line\nchoose:\n  - {at: Worker, specialization: speed, alternative: Fast}\n' + extra)
+
+    def run(**more) -> dict:
+        (found,) = errors(call("pack_run", {"dir": "lab", "decisions": "cases/trial.yaml", "until": 20, **more}, root=lab))
+        assert found["where"] == "cases/trial.yaml"
+        return found
+
+    decisions("set:\n  - {at: Source, attribute: period, value: 0.0}\n")       # 시간 전진이 0 인 고리
+    found = run(max_steps=5000)
+    assert (found["code"], found["kind"]) == ("P6", "step_limit")
+    assert found["data"] == {"exception": "StepLimit", "steps": 5000, "time": 0.0, "components": ["Source", "Worker"]}
+    assert "max_steps" in found["next"] and "결정 집합 파일로 돌릴 때는 max_steps 를 함께 준다" in found["message"]
+    for bad in (0, -1, ops.STEPS_LIMIT + 1):
+        env = call("pack_run", {"dir": "lab", "decisions": "cases/trial.yaml", "until": 20, "max_steps": bad}, root=lab)
+        assert codes(env) == {"A0"} and env["findings"][0]["where"] == "max_steps"
+
+    decisions("set:\n  - {at: Source, attribute: period, value: 2.5}\n")       # 시간 단위에 어긋난 매개변수
+    found = run()
+    assert (found["code"], found["kind"], found["data"]["check"], found["data"]["component"]) == ("P5", "off_grid", "B5", ["Line", "Source"])
+    assert "매개변수 period 의 값 2.5" in found["data"]["detail"] and "time_unit" in found["next"]
+    built = errors(call("pack_build", {"dir": "lab", "decisions": "cases/trial.yaml"}, root=lab))
+    assert [(f["code"], f["kind"], f["data"]["check"]) for f in built] == [("P5", "off_grid", "B5")]      # 조립도 말없이 넘기지 않는다
+
+    decisions()
+    edit(os.path.join(root, "model_base.py"), "self.received += [", "self.gone += [")
+    found = run()
+    assert (found["code"], found["kind"]) == ("P6", "model_error")
+    assert found["data"] == {"component": "Sink", "function": "external", "time": 3.0, "exception": "AttributeError",
+                             "file": "model_base.py", "line": 76}
+    edit(os.path.join(root, "model_base.py"), "self.gone += [", "self.received += [")
+    edit(os.path.join(root, "model_base.py"), "        return self.period", "        return self.period + 0.3")
+    found = run()
+    assert (found["code"], found["kind"]) == ("P6", "off_grid")
+    assert found["data"] == {"exception": "OffGrid", "component": "Source", "value": 2.3, "time_unit": 1.0}
+    # 걸음 수의 한도를 올리면 긴 실행이 끝난다
+    edit(os.path.join(root, "model_base.py"), "        return self.period + 0.3", "        return self.period")
+    short = call("pack_run", {"dir": "lab", "decisions": "cases/trial.yaml", "until": 200, "max_steps": 20, "limit": 0}, root=lab)
+    assert errors(short)[0]["kind"] == "step_limit"
+    longer = call("pack_run", {"dir": "lab", "decisions": "cases/trial.yaml", "until": 200, "max_steps": 2000, "limit": 0}, root=lab)
+    assert longer["ok"] and longer["result"]["events"] > 150
+
+
+def test_build_does_not_hide_a_variant_that_cannot_be_executed(lab):
+    """조립은 되지만 실행 가능하지 않은 변이. 조립이 ok 라고 하고 묶인 모델을 모두 빼던 것을 고쳤다."""
+    root = os.path.join(lab, "lab")
+    edit(os.path.join(root, "binding.yaml"), "  Fast: {module: Worker}\n", "")
+    env = call("pack_build", {"dir": "lab", "case": "fast"}, root=lab)
+    (found,) = errors(env)
+    assert (found["code"], found["kind"], found["data"]["check"], found["data"]["component"]) == ("P5", "unbound", "B1", ["Line", "Worker"])
+    assert "바인딩의 map 에 정의 Fast 를 적는다" in found["data"]["detail"] and "고른 대안의 이름으로 적는다" in found["next"]
+    parts = {p["name"]: p for p in env["result"]["tree"]["parts"]}      # 구한 데까지는 싣는다
+    assert parts["Source"]["module"] == "Source" and parts["Sink"]["module"] == "Sink" and "module" not in parts["Worker"]
+    assert errors(call("pack_check", {"dir": "lab"}, root=lab))[0]["kind"] == "unbound"
+    assert errors(call("pack_run", {"dir": "lab", "case": "fast"}, root=lab))[0]["kind"] == "unbound"
+    assert call("pack_build", {"dir": "lab", "case": "slow"}, root=lab)["ok"]         # 다른 사례는 그대로다
+    assert set(P.EXECUTION_KINDS.values()) <= set(ops.NEXT) and set(P.EXECUTION_KINDS) <= set(ops.CHECKS)
+    assert ops.manifest()["checks"] == ops.CHECKS and all(isinstance(v, str) and v for v in ops.CHECKS.values())
+
+
+def test_a_wrong_variable_value_is_a_fault_of_the_decisions_everywhere(tmp_path):
+    """범위 밖의 변수 값과 없는 변수. 문서의 탓(P1)이 아니라 결정의 탓(P4)이다. 네 연산이 같은 부호와 종류로 알린다."""
+    root = str(tmp_path)
+    assert call("pack_new", {"dir": "mylab", "template": "full"}, root=root)["ok"]
+    pair = os.path.join(root, "mylab", "cases", "pair.decisions.yaml")
+    edit(pair, "workers: 2", "workers: 5")
+    for op in ("pack_check", "pack_build", "pack_choices", "pack_run"):
+        found = errors(call(op, {"dir": "mylab", **({} if op == "pack_check" else {"case": "pair"})}, root=root))
+        assert [(f["code"], f["kind"], f["where"]) for f in found] == [("P4", "misfit", "pair")], (op, found)
+        assert "variable/workers: 남기려는 선택지가 대상에 없다: ['5']" in found[0]["message"]
+    edit(pair, "workers: 5", "workers: 2")
+    edit(pair, "variables:", "variables:\n  nothing: 1")
+    found = errors(call("pack_build", {"dir": "mylab", "case": "pair"}, root=root))
+    assert found[0]["kind"] == "misfit" and "있는 변수는 ['inspect', 'workers'] 다" in found[0]["message"]
+
+
+def test_the_same_thing_written_twice_in_a_decision_file_is_refused(lab):
+    root = os.path.join(lab, "lab")
+    path = os.path.join(root, "cases", "fast.decisions.yaml")
+    edit(path, "choose:", "set:\n  - {at: Source, attribute: period, value: 1.0}\n  - {at: Source, attribute: period, value: 2.0}\nchoose:")
+    (found,) = errors(call("pack_build", {"dir": "lab", "case": "fast"}, root=lab))
+    assert (found["code"], found["kind"]) == ("P4", "decisions_load") and "같은 곳의 같은 속성 period 을 다시 적었다" in found["message"]
+    edit(path, "  - {at: Source, attribute: period, value: 2.0}\n", "")
+    with open(path, "a", encoding="utf-8") as f:              # 같은 열쇠를 두 번. YAML 은 뒤의 것만 남긴다
+        f.write("choose:\n  - {at: Worker, specialization: speed, alternative: Slow}\n")
+    (found,) = errors(call("pack_build", {"dir": "lab", "case": "fast"}, root=lab))
+    assert (found["code"], found["kind"]) == ("P4", "decisions_load") and "열쇠 choose 를 같은 표에 두 번 적었다" in found["message"]
+
+
+def test_warnings_carry_what_they_are_about(lab):
+    root = os.path.join(lab, "lab")
+    edit(os.path.join(root, "cases/fast.decisions.yaml"), "choose:", "set:\n  - {at: Slow, attribute: service, value: 4.0}\nchoose:")
+    edit(os.path.join(root, "lab.ses.yaml"), "period: {type: float, default: 2.0, doc: 작업을 내는 간격}",
+         "period: {type: float, default: 2.0}\n      note: {type: str, default: x}")
+    env = call("pack_check", {"dir": "lab"}, root=lab)
+    by = {f["kind"]: f for f in env["findings"] if f["severity"] == "warning"}
+    assert by["unused_decision"]["data"] == {"decision": "set/at/Slow/service"}
+    assert by["attribute_not_passed"]["data"] == {"case": "fast", "definition": "Source", "attribute": "note", "module": "Source",
+                                                  "params": ["period"]}
+    assert "pack_choices" in ops.NEXT["undecided"]
+
+
+def test_the_formats_say_what_shape_the_values_have():
+    """뼈대가 보여 주지 않는 것(자리로 적는 결정, 기본값, 바인딩의 params, 실험)의 값의 모양을 formats 가 낸다."""
+    r = call("formats", {})["result"]
+    known = {"pack": set(r["pack"]["keys"]), "document": set(r["document"]), "decisions": set(r["decisions"]["keys"]),
+             "binding": set(r["binding"]["keys"]), "model": set(r["model"]["fill"])}
+    for name in r["shapes"]:
+        file, key = name.split(".", 1)
+        assert key in known[file], name                      # 문서 쪽은 formats 가 document 아래에 내는 종류의 이름이다
+    assert r["shapes"] == ops.SHAPES and r["checks"] == ops.CHECKS
+    for name, word in (("decisions.choose", "path: [뿌리, 부분, 복제본]"), ("decisions.set", "path 의 값이 그 자리에서 쓰인다"),
+                       ("pack.cases", "defaults: true"), ("binding.map", "params: {모듈의 매개변수: 문서의 속성}"),
+                       ("document.portType", "모델이 내는 값과 견주지 않는다"), ("pack.experiments", "파일이 있는지만 본다")):
+        assert word in r["shapes"][name], name
+
+
 def test_the_document_says_what_the_code_does():
     """21 문서의 표가 코드와 어긋나지 않는가. 연산의 이름, 부호, 한도, 실행기의 상태."""
     with open(os.path.join(ROOT, "docs", "ses-platform", "21_agent_operations.md"), encoding="utf-8") as f:

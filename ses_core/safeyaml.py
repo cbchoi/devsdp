@@ -49,11 +49,39 @@ def unfolded_size(x: Any, limit: int = LIMIT) -> int:
         raise YamlError("값이 너무 깊이 겹쳐 있다") from None
 
 
+_LOADER = None
+
+
+def _loader():
+    """같은 표에 같은 열쇠를 두 번 적은 것을 거부하는 적재기. YAML 은 그것을 받아 뒤의 것만 남긴다. 손으로 고친
+    파일에 남은 줄이 말없이 값을 바꾸거나, 두 번 적은 choose 가운데 앞의 것이 사라진다."""
+    global _LOADER
+    if _LOADER is None:
+        import yaml
+
+        class Loader(yaml.SafeLoader):
+            def construct_mapping(self, node, deep=False):
+                seen: dict = {}
+                for key_node, _ in node.value:
+                    if isinstance(key_node, yaml.ScalarNode) and key_node.tag != "tag:yaml.org,2002:merge":
+                        key = (key_node.tag, key_node.value)
+                        if key in seen:
+                            raise YamlError(f"{key_node.start_mark.line + 1}번째 줄: 열쇠 {key_node.value} 를 같은 표에 두 번 "
+                                            f"적었다. 앞의 것은 {seen[key]}번째 줄에 있다. 하나로 합친다")
+                        seen[key] = key_node.start_mark.line + 1
+                return super().construct_mapping(node, deep)
+
+        _LOADER = Loader
+    return _LOADER
+
+
 def load_text(text: str) -> Any:
     """글을 YAML 로 읽는다."""
     import yaml  # 지연 임포트. 코어 자료구조 자체는 yaml 에 의존하지 않는다
     try:
-        d = yaml.safe_load(text)
+        d = yaml.load(text, Loader=_loader())  # noqa: S506  SafeLoader 의 하위 클래스다
+    except YamlError:
+        raise
     except yaml.YAMLError as e:
         mark = getattr(e, "problem_mark", None)
         where = f"{mark.line + 1}번째 줄 {mark.column + 1}번째 칸: " if mark is not None else ""

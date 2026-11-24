@@ -47,9 +47,9 @@ SKIPPED_NATIVE, VIOLATES, STOPPED = "건너뜀(특정 엔진의 모듈이 들어
 class PackError(Exception):
     """묶음의 선언을 읽을 수 없거나 사례를 돌릴 수 없다. code 는 검사의 부호(P0 에서 P7)다."""
 
-    def __init__(self, message: str, code: str = "P0") -> None:
+    def __init__(self, message: str, code: str = "P0", kind: str = "", data: Optional[dict] = None) -> None:
         super().__init__(message)
-        self.code = code
+        self.code, self.kind, self.data = code, kind, dict(data or {})
 
 
 @dataclass(frozen=True)
@@ -620,7 +620,7 @@ def build_variant(doc, ds, profile, functions, defaults: bool, where: str, say, 
             say("error", "P4", where, f"결정 집합의 set 이 맞지 않다. {shown_key}: {why}", kind="misfit")
             wrong = True
         else:
-            say("warning", "P4", where, f"쓰이지 않은 결정: {shown_key}", kind="unused_decision")
+            say("warning", "P4", where, f"쓰이지 않은 결정: {shown_key}", kind="unused_decision", decision=shown_key)
     return FAILED if wrong else built
 
 
@@ -674,14 +674,22 @@ def _no_such_attribute(built, key: tuple) -> str:
     return f"구성요소 {'/'.join(map(str, key[2]))} 에 속성 {key[3]} 가 없다. 있는 속성은 {have} 다"
 
 
+# 실행 가능성의 조건(14 문서의 B1 에서 B5)마다 할 일이 다르다. 종류를 가른다
+EXECUTION_KINDS = {"B1": "unbound", "B2": "ambiguous_binding", "B3": "port_mismatch", "B4": "param_value", "B5": "off_grid"}
+
+
+def execution_kind(check: str) -> str:
+    return EXECUTION_KINDS.get(check, "not_executable")
+
+
 def violation_data(built, found: list) -> list:
     """위반마다 기계가 읽을 자료: 층, 부호, 구성요소의 경로."""
     from .algebra import ENT
     from .skeleton import component_path
     T = built.layered.ses.tree
-    return [{"layer": layer, "check": code,
+    return [{"layer": layer, "check": code, "detail": str(msg),
              "component": [str(x) for x in (component_path(T, path) if T.kinds.get(path) == ENT else path)]}
-            for layer, code, path, _ in found]
+            for layer, code, path, msg in found]
 
 
 def _line_of(e: BaseException, path: str) -> Optional[int]:
@@ -708,18 +716,48 @@ def _deepest_line(e: BaseException) -> Optional[tuple]:
     return found
 
 
+def binding_params(doc, library, name: str, bind) -> list:
+    """바인딩의 params 가 가리키는 것이 있는가: (줄, 자료)들.
+
+    params 는 모듈의 매개변수 이름에서 문서의 속성 이름으로 간다. 매개변수가 모듈에 없거나 속성이 그 정의에 없으면
+    그 값은 모델에 가지 않고 모델은 자기 기본값으로 돈다. 아무 말 없이 틀린 결과가 된다.
+    """
+    from .direct import _alternatives_under
+    out = []
+    mod = library.get(bind.module) if library is not None else None
+    have = None
+    if name in doc.entities:
+        have = set(doc.all_attributes(name))
+        for alt in _alternatives_under(doc, name):           # 바탕 정의에 묶으면 대안의 속성도 그 모듈에 간다
+            have |= set(doc.all_attributes(alt))
+    for param, attribute in bind.params.items():
+        if mod is not None and param not in mod.params:
+            out.append((f"정의 {name} 의 params 가 모듈 {mod.name} 에 없는 매개변수 {param} 를 적었다. 모듈의 매개변수는 "
+                        f"{sorted(mod.params)} 다. params 는 모듈의 매개변수 이름에서 문서의 속성 이름으로 간다",
+                        {"definition": name, "module": mod.name, "param": param, "params": sorted(mod.params)}))
+        if have is not None and attribute not in have:
+            out.append((f"정의 {name} 의 params 가 문서에 없는 속성 {attribute} 를 적었다. 그 정의의 속성은 {sorted(have)} 다. "
+                        f"params 는 모듈의 매개변수 이름에서 문서의 속성 이름으로 간다",
+                        {"definition": name, "attribute": attribute, "attributes": sorted(have)}))
+    return out
+
+
 def _run_kind(e: BaseException) -> str:
-    from .devs import ModelError
+    from .devs import ModelError, StepLimit
     from .executor import OffGrid
     if isinstance(e, ModelError):
         return "model_error"
     if isinstance(e, OffGrid):
         return "off_grid"
-    return "step_limit" if "정해진 걸음 수" in str(e) else "run_stopped"
+    return "step_limit" if isinstance(e, StepLimit) else "run_stopped"
 
 
 def _run_data(e: BaseException, pack: Pack) -> dict:
-    from .devs import ModelError
+    from .devs import ModelError, StepLimit
+    if isinstance(e, StepLimit):                             # 어느 시각에 누가 움직이다 멈췄는가
+        return {"exception": type(e).__name__, "steps": e.steps, "time": e.time, "components": e.busy[:8]}
+    if hasattr(e, "who") and hasattr(e, "unit"):             # 시간 단위에 어긋난 시간 전진 (executor.OffGrid)
+        return {"exception": type(e).__name__, "component": e.who, "value": e.value, "time_unit": e.unit}
     if not isinstance(e, ModelError):
         return {"exception": type(e).__name__}
     return {"component": e.who, "function": e.function, "time": e.time, "exception": type(e.cause).__name__,
@@ -742,7 +780,8 @@ def _longer(e: BaseException) -> str:
     """걸음 수의 한도에 걸렸을 때와 모델이 프로세스를 끝내려 했을 때 덧붙이는 말."""
     if isinstance(e, SystemExit):
         return ". 모델이 프로세스를 끝내려 했다. 모델 베이스에서 exit 를 부르지 않는다"
-    return ". 더 길게 돌리려면 pack.yaml 의 그 사례에 max_steps 를 적는다" if "정해진 걸음 수" in str(e) else ""
+    return (". 더 길게 돌리려면 pack.yaml 의 그 사례에 max_steps 를 적는다. 결정 집합 파일로 돌릴 때는 max_steps 를 함께 준다"
+            if "정해진 걸음 수" in str(e) else "")
 
 
 def components_of(built) -> int:
@@ -783,8 +822,9 @@ def unconsumed(doc, binding, library: Mapping, plan: dict, atoms: list, told: se
                 if attr in mod.params or attr in renamed or (label, attr) in told:
                     continue
                 told.add((label, attr))
-                out.append(f"정의 {label} 의 속성 {attr} 은 모듈 {mod.name} 의 매개변수가 아니다. 모델에 전해지지 않는다. "
-                           f"모듈의 매개변수는 {sorted(mod.params)} 다")
+                out.append((f"정의 {label} 의 속성 {attr} 은 모듈 {mod.name} 의 매개변수가 아니다. 모델에 전해지지 않는다. "
+                            f"모듈의 매개변수는 {sorted(mod.params)} 다",
+                            {"definition": label, "attribute": attr, "module": mod.name, "params": sorted(mod.params)}))
     return out
 
 
@@ -881,6 +921,8 @@ def _check(root: str, record: bool, executors: Optional[tuple]) -> Report:
         for name, bind in binding.map.items():
             if name not in doc.entities:
                 say("error", "P3", pack.binding, f"문서에 없는 정의 {name} 를 묶었다", kind="unknown_definition", file=pack.binding, definition=name, definitions=sorted(doc.entities))
+            for line, data in binding_params(doc, library, name, bind):
+                say("error", "P3", pack.binding, line, kind="binding_params", file=pack.binding, **data)
             if library is not None and bind.module not in library:
                 say("error", "P3", pack.binding, f"정의 {name} 를 묶은 모듈 {bind.module} 이 라이브러리에 없다", kind="unknown_module", file=pack.binding, definition=name, module=bind.module, modules=sorted(library))
 
@@ -958,7 +1000,7 @@ def _check(root: str, record: bool, executors: Optional[tuple]) -> Report:
         L, ext = X.attach(built.layered, dx, binding, library)
         found = violations(X.alone(L, ext), V)
         for line, data in list(zip(shown(built, found), violation_data(built, found)))[:7]:
-            say("error", "P5", case.name, "이 변이는 실행 가능하지 않다. " + line, kind="not_executable", case=case.name, **data)
+            say("error", "P5", case.name, "이 변이는 실행 가능하지 않다. " + line, kind=execution_kind(data["check"]), case=case.name, **data)
         if len(found) > 7:
             say("error", "P5", case.name, f"같은 종류의 줄이 {len(found) - 7}건 더 있다. 앞의 것을 고치고 다시 본다",
                 kind="not_executable", case=case.name, more=len(found) - 7)
@@ -977,8 +1019,8 @@ def _check(root: str, record: bool, executors: Optional[tuple]) -> Report:
         for (mod_name, port), places in extra.items():
             say("error", "P5", case.name, f"{places[0]}" + (f" 등 {len(places)}곳" if len(places) > 1 else "")
                 + f": 모듈 {mod_name} 의 포트 {port} 가 문서의 그 정의에 없다. 모델의 PORTS 에 적은 포트는 문서의 ports 에도 적는다", kind="model_only_port", case=case.name, module=mod_name, port=port, places=places[:5])
-        for line in unconsumed(doc, binding, library, plan, atoms, told):
-            say("warning", "P5", case.name, line, kind="attribute_not_passed", case=case.name)
+        for line, data in unconsumed(doc, binding, library, plan, atoms, told):
+            say("warning", "P5", case.name, line, kind="attribute_not_passed", case=case.name, **data)
         if extra:
             continue
         if case.until is None:
@@ -1084,7 +1126,7 @@ def _check(root: str, record: bool, executors: Optional[tuple]) -> Report:
 
 
 def run(root: str, case_name: Optional[str] = None, until: Optional[float] = None, *, decisions: Optional[str] = None,
-        change: Optional[dict] = None, defaults: Optional[bool] = None) -> tuple:
+        change: Optional[dict] = None, defaults: Optional[bool] = None, max_steps: Optional[int] = None) -> tuple:
     """묶음의 변이 하나를 참조 시뮬레이터로 돌린다. (사건 기록, 변수 값, 원자 구성요소의 수)를 돌려준다.
 
     무엇을 돌릴지는 사례의 이름(case_name)이나 묶음 안의 결정 집합 파일(decisions) 가운데 하나로 준다.
@@ -1093,17 +1135,17 @@ def run(root: str, case_name: Optional[str] = None, until: Optional[float] = Non
     change 는 그 결정 위에 얹을 것이다. 결정 집합 파일의 variables, choose, set 과 같은 모양의 표다. 같은 변수,
     같은 선택 지점, 같은 속성에 대한 것은 바꾸고 없는 것은 더한다. 값을 바꿔 가며 여러 번 돌리는 실험에 쓴다.
         run(".", "fast", change={"set": [{"at": "Source", "attribute": "seed", "value": 3}]})
-    기록(records.yaml)은 읽지도 적지도 않는다.
+    기록(records.yaml)은 읽지도 적지도 않는다. max_steps 는 걸음 수의 한도다. 주지 않으면 사례의 것(기본 1,000,000)이다.
 
     만들 수 없거나 돌릴 수 없으면 PackError 를 낸다. 그 code 는 막힌 곳의 부호다(P0 선언, P1 문서, P2 모델 베이스,
-    P3 바인딩, P4 결정, P5 실행 가능성, P6 실행).
+    P3 바인딩, P4 결정, P5 실행 가능성, P6 실행). kind 와 data 는 검사가 같은 잘못에 붙이는 종류와 자료다.
     """
     with quiet_bytecode():
-        return _run(root, case_name, until, decisions, change, defaults)
+        return _run(root, case_name, until, decisions, change, defaults, max_steps)
 
 
 def _run(root: str, case_name: Optional[str], until: Optional[float], decisions: Optional[str] = None,
-         change: Optional[dict] = None, defaults: Optional[bool] = None) -> tuple:
+         change: Optional[dict] = None, defaults: Optional[bool] = None, max_steps: Optional[int] = None) -> tuple:
     from . import executor as X
     from .decisions import DecisionError, overlaid
     from .devs import DevsExecutor, simulate
@@ -1120,6 +1162,10 @@ def _run(root: str, case_name: Optional[str], until: Optional[float], decisions:
         case_name = decisions
     if defaults is not None:
         case = replace(case, defaults=bool(defaults))
+    if max_steps is not None:
+        if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
+            raise PackError("max_steps: 걸음 수의 한도는 1 이상의 정수여야 한다")
+        case = replace(case, max_steps=max_steps)
     if not pack.library:
         raise PackError("모델 베이스가 없는 묶음은 돌릴 수 없다")
     until = case.until if until is None else until
@@ -1129,11 +1175,11 @@ def _run(root: str, case_name: Optional[str], until: Optional[float], decisions:
 
     def say(severity: str, code: str, where: str, message: str, kind: str = "", **data) -> None:
         if severity == "error":
-            said.append((code, message))
+            said.append((code, message, kind, data))
 
     def stop() -> None:
-        if said:
-            raise PackError(f"사례 {case_name} 를 돌릴 수 없다. {said[0][1]}", said[0][0])
+        if said:                                             # 검사가 같은 잘못에 붙이는 종류와 자료를 그대로 싣는다
+            raise PackError(f"사례 {case_name} 를 돌릴 수 없다. {said[0][1]}", said[0][0], said[0][2], said[0][3])
 
     library, functions = model_base(pack, say)
     stop()
@@ -1145,27 +1191,33 @@ def _run(root: str, case_name: Optional[str], until: Optional[float], decisions:
         try:
             ds = overlaid(ds, change)
         except DecisionError as e:
-            raise PackError(f"{case_name} 위에 얹을 것(change)의 모양이 틀렸다. {e}", "P4")
+            raise PackError(f"{case_name} 위에 얹을 것(change)의 모양이 틀렸다. {e}", "P4", "decisions_load")
     built = build_variant(doc, ds, profile, functions, case.defaults, case_name, say, pack)
     stop()
     try:
         binding = X.load_binding(pack.path(pack.binding))
     except Exception as e:                                   # noqa: BLE001
-        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. 바인딩을 읽을 수 없다: {type(e).__name__}: {e}", "P3")
+        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. 바인딩을 읽을 수 없다: {type(e).__name__}: {e}", "P3", "binding_load")
+    wrong = [found for name, bind in binding.map.items() for found in binding_params(doc, library, name, bind)]
+    if wrong:
+        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. {wrong[0][0]}", "P3", "binding_params", wrong[0][1])
     dx = DevsExecutor()
     try:
         L, ext = X.attach(built.layered, dx, binding, library)
-        found = violations(built.layered, built.variant) or violations(X.alone(L, ext), built.variant)
+        assembled = violations(built.layered, built.variant)
+        found = assembled or violations(X.alone(L, ext), built.variant)
     except Exception as e:                                   # noqa: BLE001
-        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. {type(e).__name__}: {e}", "P5")
+        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. {type(e).__name__}: {e}", "P5", "not_executable")
     if found:
         raise PackError(f"이 변이는 실행 가능하지 않다. 위반 {len(found)}건. 첫째: {shown(built, found)[0]}. "
-                        "ses pack check 가 모두 알린다", "P5")
+                        "ses pack check 가 모두 알린다", "P5", "not_assembled" if assembled else execution_kind(found[0][1]),
+                        violation_data(built, found)[0])
     try:
         log = simulate(X.realize(L, ext, dx, built.variant), until, max_steps=case.max_steps)
         atoms = len(X.frontier(X.plan(L, ext, built.variant)))
     except (Exception, SystemExit) as e:                     # noqa: BLE001  모델의 코드가 낸 것은 무엇이든 알린다
-        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. 참조 시뮬레이터에서 멈췄다: {type(e).__name__}: {e}" + _longer(e), "P6")
+        raise PackError(f"사례 {case_name} 를 돌릴 수 없다. 참조 시뮬레이터에서 멈췄다: {type(e).__name__}: {e}" + _longer(e), "P6",
+                        _run_kind(e), _run_data(e, pack))
     return log, dict(built.sigma), atoms
 
 
@@ -1176,6 +1228,7 @@ def _run(root: str, case_name: Optional[str], until: Optional[float], decisions:
 TEMPLATE = {
     "pack.yaml": '''# 분야 묶음의 선언. 이 디렉터리에 무엇이 어디 있는지를 적는다.
 # 검사: ses pack check .      사례를 돌려 보기: ses pack run . fast
+# 연산으로는 pack_check 와 pack_run 이다. 연산의 목록과 파일의 형식은 ses ops 와 ses call formats 가 낸다
 pack: "1.0"
 name: {name}
 title: 작업 하나를 받아 처리하는 줄. 처리기는 빠른 것과 느린 것 가운데 하나다

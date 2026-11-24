@@ -48,6 +48,16 @@ class ModelError(RuntimeError):
         super().__init__(f"{who} 의 {function}() 이 시각 {time} 에서 예외를 냈다: {type(cause).__name__}: {cause}{where}")
 
 
+class StepLimit(RuntimeError):
+    """정해진 걸음 수 안에 끝나지 않았다. 멈춘 시각과 마지막 걸음에 움직인 구성요소를 적는다."""
+
+    def __init__(self, steps: int, time: float, busy: list) -> None:
+        self.steps, self.time, self.busy = steps, time, list(busy)
+        super().__init__(f"시뮬레이션이 정해진 걸음 수 안에 끝나지 않았다. 걸음 {steps}개를 돌았고 시각은 {time} 다. "
+                         "시간 전진이 0 인 고리가 있거나 돌릴 시각이 길다"
+                         + (f". 마지막 걸음에 움직인 구성요소는 {self.busy[:8]} 다" if self.busy else ""))
+
+
 def _call(who: str, function: str, time: float, f, *args):
     """모델의 함수 하나를 부른다. 예외가 나면 어디서 났는지를 붙여 다시 낸다."""
     try:
@@ -233,13 +243,12 @@ def simulate(model, until: float, flat: bool = False, max_steps: int = 100000, u
                             ((src, i), v) for i, v in enumerate(values))
         else:
             _route(model, (), emitted, inbox)
-        for p in leaves:
-            if due[p] == n or inbox[p]:
-                _fire(leaves[p], n, u, last, p, due[p] == n, inbox[p], who[p], probe)
-                k = ticks(who[p], _call(who[p], "ta", t, leaves[p].ta), u)
-                due[p] = None if k is None else n + k
-    raise RuntimeError(f"시뮬레이션이 정해진 걸음 수 안에 끝나지 않았다. 걸음 {max_steps}개를 돌았고 시각은 {t} 다. "
-                       "시간 전진이 0 인 고리가 있거나 돌릴 시각이 길다")
+        busy = [p for p in leaves if due[p] == n or inbox[p]]         # 이 걸음에 움직이는 구성요소들
+        for p in busy:
+            _fire(leaves[p], n, u, last, p, due[p] == n, inbox[p], who[p], probe)
+            k = ticks(who[p], _call(who[p], "ta", t, leaves[p].ta), u)
+            due[p] = None if k is None else n + k
+    raise StepLimit(max_steps, t, [who[p] for p in busy])
 
 
 def _route(model, path: tuple, emitted: dict, inbox: dict) -> dict:

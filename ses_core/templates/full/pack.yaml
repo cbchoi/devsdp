@@ -1,5 +1,6 @@
 # 분야 묶음의 선언. 이 디렉터리에 무엇이 어디 있는지를 적는다.
 # 검사: ses pack check .      사례를 돌려 보기: ses pack run . fast
+# 연산으로는 pack_check 와 pack_run 이다. 연산의 목록과 파일의 형식은 ses ops 와 ses call formats 가 낸다
 pack: "1.0"
 name: mylab
 title: 작업 하나를 받아 처리하는 줄. 처리기는 빠른 것과 느린 것 가운데 하나다

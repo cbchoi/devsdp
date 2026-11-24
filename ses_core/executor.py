@@ -185,7 +185,9 @@ def ticks(who: str, ta: float, unit: float) -> Optional[int]:
         raise ValueError(f"{who}: 시간 전진 {ta} 이 음수이거나 수가 아니다")
     n = grid(ta, unit)
     if n is None:
-        raise OffGrid(f"{who}: 시간 전진 {ta} 이 시간 단위 {unit} 의 배수가 아니다")
+        e = OffGrid(f"{who}: 시간 전진 {ta} 이 시간 단위 {unit} 의 배수가 아니다")
+        e.who, e.value, e.unit = who, ta, unit               # 기계가 읽을 자료
+        raise e
     return n
 
 

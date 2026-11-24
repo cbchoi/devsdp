@@ -336,6 +336,18 @@ def check_file(d) -> None:
     for name in ("name", "target"):
         if d.get(name) is not None and not isinstance(d[name], str):
             raise DecisionError(f"{name}: 글로 적는다. 적힌 것은 {d[name]!r} 다")
+    # 같은 곳의 같은 속성을 두 번 적으면 뒤의 것이 말없이 이긴다. 손으로 고친 파일에 남은 줄이 값을 바꾼다
+    seen: dict = {}
+    for i, item in enumerate(d.get("set") or ()):
+        where = item.get("at") if item.get("at") is not None else tuple(map(str, item.get("path") or ()))
+        try:
+            key = (where, item.get("attribute"))
+            if key in seen:
+                raise DecisionError(f"set[{i}]: set[{seen[key]}] 과 같은 곳의 같은 속성 {item.get('attribute')} 을 다시 적었다. "
+                                    "하나만 남긴다")
+            seen[key] = i
+        except TypeError:                                    # 모양이 틀린 항목. 읽을 때 알린다
+            continue
 
 
 def load_decisions(path: str) -> DecisionSet:

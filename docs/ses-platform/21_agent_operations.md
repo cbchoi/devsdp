@@ -90,8 +90,8 @@
 | `pack_show` | 묶음을 처음 볼 때. 선언, 사례와 적어 둔 기록, 파일의 목록 | `dir` | 안 쓴다 |
 | `pack_choices` | 무엇을 고를 수 있는지 볼 때. 결정을 따르는 변이의 수와 선택 지점마다 남은 선택지 | `dir`, 선택 `case` 또는 `decisions` | 안 쓴다 |
 | `pack_build` | 사례가 뜻한 구조인지, 값이 뜻한 대로인지 볼 때. 변이 하나의 구조, 포트, 결합, 속성과 모델이 받는 값 | `dir`, 선택 `case` 또는 `decisions`, `defaults`, `depth`, `limit` | 안 쓴다 |
-| `pack_run` | 모델의 행동을 볼 때. 변이 하나를 참조 시뮬레이터로 돌린 출력 사건 | `dir`, `case` 또는 `decisions`, 선택 `defaults`, `until`, `offset`, `limit` | 안 쓴다 |
-| `formats` | 파일의 형식을 모를 때. 파일마다 쓸 수 있는 항목의 이름 | 없다 | 안 쓴다 |
+| `pack_run` | 모델의 행동을 볼 때. 변이 하나를 참조 시뮬레이터로 돌린 출력 사건 | `dir`, `case` 또는 `decisions`, 선택 `defaults`, `until`, `max_steps`, `offset`, `limit` | 안 쓴다 |
+| `formats` | 파일의 형식을 모를 때. 파일마다 쓸 수 있는 항목의 이름과 값의 모양 | 없다 | 안 쓴다 |
 
 입력의 정확한 모양은 `ses ops`가 낸다. 연산마다 입력의 JSON Schema가 있고, 스키마에 없는 항목은 거부한다.
 
@@ -105,7 +105,7 @@
 | `pack_choices` | `variants`, `core_wellformed`, `points`(선택 지점마다 `owner`, `kind`, `group`, `state`, `remaining`, `remaining_count`, `options`, `options_count`, 잘렸으면 `truncated`) |
 | `pack_build` | `variables`, `components`, `nodes`, `structure`(구조의 지문), `tree`(구성요소마다 `name`, `labels`, `attributes`, `ports`, `absent`, `parts`. 부분이 있으면 `couplings`, 모델에 묶였으면 `module`과 `params`, 잘렸으면 `parts_not_listed`), `truncated` |
 | `pack_run` | `variables`, `atoms`, `until`, `events`, `last`, `digest`, `offset`, `log`(사건마다 `t`, `at`, `port`, `value`), `truncated` |
-| `formats` | `pack`, `document`, `attribute_types`, `decisions`, `binding`, `model`, `templates`, `example` |
+| `formats` | `pack`, `document`, `attribute_types`, `decisions`, `binding`, `model`, `shapes`(항목마다 값의 모양과 본보기), `checks`(줄의 `data.check`에 오는 부호의 뜻), `templates`, `example` |
 
 읽을 때 헷갈리기 쉬운 것.
 
@@ -115,9 +115,12 @@
 - `pack_choices`의 `state`. open, decided, decided_per_place, none_left 가운데 하나다. 표는 정의마다 한 줄이다. decided_per_place는 변이가 하나로 정해졌고 그 정의가 놓인 자리마다 다른 것이 골라졌다는 뜻이다. 더 정할 것은 없다.
 - `pack_choices`는 사례의 `defaults`를 쓰지 않는다. 적힌 결정만 본다. 문서의 기본값이 채우는 것까지 보려면 `pack_build`를 부른다.
 - `pack_build`의 `attributes`와 `params`. `attributes`는 문서의 속성 값이다(식과 사례의 `set`을 거친 것). `params`는 묶인 모델이 실제로 받는 값이다. 속성의 이름이 모델의 매개변수 이름과 다르면 그 값은 모델에 가지 않고, 둘이 달라진다.
+- `pack_build`는 조립은 되지만 실행 가능하지 않은 변이(묶이지 않은 구성요소, 시간 단위에 어긋난 값)를 오류(P5)로 알린다. 그때도 `tree`는 온다. `module`과 `params`는 구할 수 있는 구성요소에만 싣는다.
 - `pack_build`의 `structure`. 구조의 지문이다. 구성요소의 이름과 정의, 빠진 부분, 속성의 값, 포트와 결합이 든다. 속성의 값만 바뀌어도 달라진다.
 - `pack_run`의 `log`. 출력 사건만 있다. 모델 안의 상태는 보이지 않는다. 보려면 모델이 포트로 내게 한다.
-- `pack_run`의 `decisions`. 선언에 없는 결정 집합 파일을 돌린다. 값을 바꿔 가며 여러 번 돌릴 때 쓴다. 파일을 고쳐 적고 부르기를 되풀이한다. 그때는 `until`을 꼭 준다. 기록은 읽지도 적지도 않는다.
+- `pack_run`의 `decisions`. 선언에 없는 결정 집합 파일을 돌린다. 값을 바꿔 가며 여러 번 돌릴 때 쓴다. 파일을 고쳐 적고 부르기를 되풀이한다. 그때는 `until`을 꼭 준다. 긴 실행이면 `max_steps`를 함께 준다. 기록은 읽지도 적지도 않는다.
+- `pack_run`이 실패했을 때의 줄은 `pack_check`가 같은 잘못에 붙이는 `kind`와 `data`를 싣는다. 결정 집합 파일로 돌릴 때는 검사가 그 파일을 보지 않으므로 이 줄이 유일한 자료다.
+- 결정 집합의 `set`에서 같은 속성을 `at`으로도 `path`로도 적으면 그 자리에서는 `path`의 값이 쓰인다. `choose`는 다르다. `at`과 `path`가 둘 다 적용되고 어긋나면 변이가 남지 않는다. 같은 곳의 같은 속성을 두 번 적은 파일과 같은 열쇠를 두 번 적은 파일은 거부한다.
 - 사례의 `set`은 문서가 식(`expr`)으로 정한 속성도 바꾼다. 결정 집합의 형식이 그렇게 정했다. 경고가 없다.
 
 한도.
@@ -126,6 +129,7 @@
 |---|---|---|
 | `pack_build`가 내는 구성요소의 수(`limit`) | 200 | 2,000 |
 | `pack_run`이 한 번에 내는 사건의 수(`limit`) | 50 | 1,000 |
+| `pack_run`의 걸음 수의 한도(`max_steps`) | 사례의 것. 1,000,000 | 100,000,000 |
 | `pack_show`가 늘어놓는 파일의 수 | 200 | 200 |
 | `pack_choices`가 선택 지점 하나에 늘어놓는 선택지의 수 | 200 | 200 |
 | `pack_choices`가 돌아보는 변수 값의 조합 | 200,000 | 200,000 |
@@ -157,7 +161,7 @@
 | P6 | 실행과 기록 | 사례의 이름이나 records.yaml | `kind`를 본다. 아래의 표 |
 | P7 | 실행기 사이의 일치 | 사례나 실행기의 이름 | 모델이 계약을 어긴 곳을 찾는다(20 문서의 1절) |
 
-부호는 어느 파일인지를 가르고 종류는 무엇을 할지를 가른다. 자주 나오는 종류와 그 자료다. 전부는 `ses ops`의 `kinds`에 있고, 줄마다 `next`가 같은 말을 싣는다.
+부호는 어느 파일인지를 가르고 종류는 무엇을 할지를 가른다. 자주 나오는 종류와 그 자료다. 전부는 `ses ops`의 `kinds`에 있고, 줄마다 `next`가 같은 말을 싣는다. `data.check`에 오는 조건의 부호(C1, B5 같은 것)의 뜻은 `ses ops`의 `checks`에 있다.
 
 | 부호 | `kind` | 뜻 | `data` |
 |---|---|---|---|
@@ -167,21 +171,28 @@
 | P2 | lint | 전역 난수나 벽시계를 쓴다. 경고다. 사례는 그대로 돌린다 | `file`, `line` |
 | P2 | initial_state_error | 모델을 기본값으로 만들다가 예외가 났다 | `module`, `exception`, `file`, `line` |
 | P3 | unknown_module | 바인딩이 모델 베이스에 없는 모듈을 가리킨다 | `modules` |
+| P3 | binding_params | 바인딩의 `params`가 모듈에 없는 매개변수나 문서에 없는 속성을 가리킨다 | `definition`, 그리고 `param`과 `params` 또는 `attribute`와 `attributes` |
 | P4 | undecided | 결정이 모자라다 | `at`, `choice`, `group`, `options` |
 | P4 | contradiction | 결정들이 서로 어긋나거나 규칙과 제약에 걸린다. 글이 어긋난 자리와 결정들을 적는다 | 없다 |
 | P4 | misfit | 결정이 문서에 없는 이름을 가리킨다. 자리로 적은 `set`의 속성 이름이 틀린 것 포함 | 없다 |
-| P4 | unused_decision | 쓰이지 않은 결정. 경고다. 그 자리나 정의가 이 변이에 없다 | 없다 |
-| P5 | not_executable | 구성요소가 모델에 묶이지 않았거나 포트와 속성이 맞지 않는다 | `layer`, `check`, `component` |
-| P5 | attribute_not_passed | 문서의 속성이 모델의 매개변수가 아니다. 경고다. 값이 모델에 가지 않는다 | 없다 |
+| P4 | unused_decision | 쓰이지 않은 결정. 경고다. 그 자리나 정의가 이 변이에 없다 | `decision` |
+| P5 | not_assembled | 변이가 조립되지 않는다. 결합이나 포트가 틀렸다 | `layer`, `check`, `detail`, `component` |
+| P5 | unbound | 원자 구성요소에 묶인 모듈이 없다(B1) | `layer`, `check`, `detail`, `component` |
+| P5 | port_mismatch | 문서의 포트와 모듈의 포트가 다르다(B3) | 위와 같다 |
+| P5 | param_value | 모듈의 매개변수에 줄 값이 없거나 타입이 맞지 않다(B4) | 위와 같다 |
+| P5 | off_grid | 시간으로 쓰는 매개변수의 값이 시간 단위의 정수배가 아니다(B5) | 위와 같다 |
+| P5 | attribute_not_passed | 문서의 속성이 모델의 매개변수가 아니다. 경고다. 값이 모델에 가지 않는다 | `definition`, `attribute`, `module`, `params` |
 | P5 | each_too_short | 복제본마다의 값(`each`)이 모자라 값을 받지 못한 자리가 있다 | `component`, `attribute`, `values` |
 | P6 | model_error | 모델의 코드가 예외를 냈다. 만들 때(init)와 돌 때 모두 | `component`, `function`, `time`, `exception`, `file`, `line` |
+| P6 | off_grid | 모델이 돌다가 시간 단위에 어긋난 시간 전진을 냈다 | `component`, `value`, `time_unit` |
+| P6 | step_limit | 걸음 수의 한도 안에 끝나지 않았다 | `steps`, `time`, `components`(마지막 걸음에 움직인 구성요소) |
 | P6 | mutated_input | 모델이 받은 값을 고쳤다 | `component`, `function`, `port` |
 | P6 | not_reproducible | 두 번 돌린 기록이 다르다 | `case` |
 | P6 | no_record | 적어 둔 기록이 없다. 경고다 | 없다 |
 | P6 | record_differs | 기록이 적어 둔 것과 다르다 | `recorded`, `now`, `until_recorded` |
 | P6 | structure_differs | 구조가 적어 둔 것과 다르다(돌리지 않는 사례) | `recorded`, `now` |
 | P6 | records_file | 기록 파일을 읽을 수 없다 | 없다 |
-| P6 | run_failed | `pack_run`이 돌리지 못했다. 같은 잘못을 `pack_check`와 `pack_build`가 더 자세히 알린다 | 없다 |
+| P6 | run_failed | `pack_run`이 돌리지 못했고 더 좁은 종류가 없다 | 없다 |
 | P7 | engine_differs | 다른 실행기의 기록이 참조 시뮬레이터와 다르다 | `executor` |
 
 P6의 record_differs와 structure_differs는 판단이 필요한 줄이다. 모델이나 문서를 뜻대로 고친 결과이면 `record`를 켜고 `pack_check`를 다시 부른다. 뜻하지 않은 변화이면 기록을 다시 적지 말고 원인을 고친다. 검사를 통과시키려고 기록을 다시 적는 것은 검사를 끄는 것과 같다. 이것을 막는 장치는 없다. 누가 언제 기록을 다시 적었는지는 저장소의 이력으로 본다.
@@ -295,7 +306,37 @@ for seed in range(5):
 
 설계로 남긴 것 셋은 3절의 "헷갈리기 쉬운 것"에 적었다. 구조의 지문이 속성의 값을 포함한다는 것, 사례의 `set`이 식으로 정한 속성도 바꾼다는 것, `pack_run`이 출력 사건만 낸다는 것이다.
 
-고친 뒤의 표면을 에이전트에게 다시 맡겨 보지는 않았다.
+### 고친 표면을 다시 맡겨 본 결과
+
+같은 날, 고친 표면을 새 에이전트에게 다시 맡겼다. 사람이 아니다. 하나는 연산만으로 새 분야의 묶음을 만들고 실험까지 하게 했고, 하나는 고쳤다는 것들이 실제로 고쳐졌는지를 깨뜨려 보게 했다.
+
+만드는 쪽의 결과.
+
+- 과제는 주문을 집는 창고다. 복제된 작업자 넷까지, 자리마다 다른 종류(사람과 로봇), 있을 수도 없을 수도 있는 포장대, 문서의 기본값만 쓰는 사례, 선언하지 않은 결정 집합 파일로 돌리는 실험 아홉 번이다.
+- 읽은 것은 이 문서, `ses ops`, `formats`, 두 뼈대의 파일뿐이다. 안내서, 스키마, 본보기 묶음, 소스는 읽지 않았다.
+- 첫 초안이 첫 `pack_check`에서 통과했다. 기록까지 끝내는 데 연산 8번쯤, 실험까지 72번쯤이 들었다. 나머지 360번쯤은 일부러 틀려 보며 줄을 살핀 것이다. 모두 433번이다.
+- 줄의 `kind`, `data`, `next`만으로 움직일 수 있었던 곳이 21가지, 한국어 글을 읽어야 했던 곳이 13가지였다.
+- 첫 초안이 바로 통과한 데에는 운도 있었다고 보고했다. 자리로 적는 결정과 문서의 기본값의 모양을 뼈대가 보여 주지 않아 짐작으로 맞혔다.
+
+거기서 나온 13건과 고친 것이다.
+
+| 찾은 것 | 고친 것 |
+|---|---|
+| 바인딩의 `params`가 없는 속성이나 없는 매개변수를 가리켜도 받았다. 로봇이 모델의 기본값으로 돌았고 검사는 통과했다. 앞의 표에서 고쳤다고 한 것의 절반이 남아 있었다 | P3의 binding_params다. 검사, 조립, 실행이 모두 알린다 |
+| 결정 집합 파일로 돌리다 실패하면 줄이 run_failed뿐이고 자료가 없었다. `next`가 가리킨 두 연산은 아무것도 알리지 않았다 | 돌린 쪽이 검사와 같은 `kind`와 `data`를 싣는다 |
+| `pack_build`가 실행 가능하지 않은 변이에 ok를 내고 묶인 모델을 모두 뺐다 | P5로 알리고, 구할 수 있는 데까지 싣는다 |
+| 범위 밖의 변수 값을 문서의 탓(P1)이라 했다. `pack_choices`는 결정의 탓(P4)이라 했다 | 네 연산이 P4의 misfit으로 알린다 |
+| not_executable 하나가 조치가 다른 여러 조건을 덮었고 `data.check`의 부호는 설명이 없었다 | 조건마다 종류를 가른다(unbound, port_mismatch, param_value, off_grid). 부호의 뜻은 `ses ops`의 `checks`에 있다 |
+| 결정 집합 파일로 돌릴 때 걸음 수의 한도를 올릴 길이 없었다 | `pack_run`이 `max_steps`를 받는다 |
+| `formats`와 뼈대가 자리로 적는 결정, 기본값, 바인딩의 `params`, 실험의 모양을 보여 주지 않았다 | `formats`가 항목마다 값의 모양과 본보기를 낸다(`shapes`) |
+| 여러 종류의 줄이 틀린 항목을 글에만 실었다 | unused_decision, attribute_not_passed, off_grid, step_limit에 자료를 싣는다. 나머지는 R5에 남겼다 |
+| 걸음 수의 한도에 걸리면 어느 구성요소가 언제 돌고 있었는지 알 수 없었다 | 멈춘 시각과 마지막 걸음에 움직인 구성요소를 싣는다 |
+| "결정이 모자라다"가 한 번에 한 곳만 알린다 | 그대로 두었다. `next`가 `pack_choices`로 모두 보라고 적는다 |
+| 같은 속성의 `set`을 두 번 적으면 뒤의 것이 말없이 이겼다. 같은 열쇠를 두 번 적은 YAML도 뒤의 것만 남았다 | 둘 다 거부한다 |
+| 뼈대의 파일 머리말이 명령줄의 명령만 적었다 | 선언의 머리말에 연산의 이름을 함께 적는다 |
+| 포트 타입의 `fields`를 모델이 내는 값과 견주지 않는다 | 고치지 않았다(20 문서의 K9). `formats`의 `shapes`가 그렇다고 적는다 |
+
+이 수정들을 다시 맡겨 보지는 않았다. 맡길 때마다 새 결함이 나왔다. 첫 판에서 19건, 다시 맡긴 판의 만드는 쪽에서 13건이다. 표면이 안정되었다고 볼 근거는 아직 없다.
 
 ## 9. 한계와 남은 것
 
@@ -305,8 +346,8 @@ for seed in range(5):
 | R2 | 실제 에이전트 틀에 올려 보지 않았다. 도구 정의의 모양은 흔한 형식을 따랐으나 어떤 API에도 보내 보지 않았다 |
 | R3 | 묶음의 코드를 가두지 않는다(1절). 표준 출력은 파이썬 수준에서만 가로챈다. 파이썬 밖의 코드가 직접 찍는 글은 `ses call`의 출력 앞쪽에 섞일 수 있다. 봉투는 마지막 줄이고 `--out`의 파일은 온전하다 |
 | R4 | 시간 제한이 없다(1절). 부르는 쪽이 제한을 건다 |
-| R5 | 줄의 `message`는 한국어다. 기계가 읽을 것은 `code`, `kind`, `data`다. `data`가 없는 종류(contradiction, misfit, document_load)는 어긋난 자리와 이름이 글 속에만 있다 |
-| R6 | `formats`는 항목의 이름만 낸다. 항목의 뜻과 값의 모양은 `schema/`의 스키마와 full 뼈대의 파일이 알린다. 스키마는 저장소에 있고 설치된 꾸러미에는 들어 있지 않다 |
+| R5 | 줄의 `message`는 한국어다. 기계가 읽을 것은 `code`, `kind`, `data`다. `data`가 없거나 파일 이름뿐인 종류(contradiction, misfit, document_load, decisions_load, binding_load, declaration)는 어긋난 자리와 이름이 글 속에만 있다. 문서의 틀린 줄의 번호도 글에만 있다 |
+| R6 | `formats`의 `shapes`는 사람이 적은 한 줄 설명이다. 스키마에서 만든 것이 아니어서 스키마와 어긋날 수 있다. 시험은 항목의 이름이 맞는지만 본다. 스키마는 저장소에 있고 설치된 꾸러미에는 들어 있지 않다 |
 | R7 | 묶음 밖의 문서 하나를 다루는 연산이 없다. 단위는 묶음이다. 구조만 가진 묶음(모델 베이스 없음)이 그 경우를 받는다 |
 | R8 | 뜻에 대한 결정 셋이 열려 있다(ROADMAP의 정해야 할 것 1, 4, 5). 정해지면 우선순위를 쓰는 문서, 자리를 가리킨 분해의 결정, extends로 물려받는 포트에 대한 `pack_choices`와 `pack_build`의 답이 달라진다 |
 | R9 | 판은 1.0으로 두었다. 첫 판(2026-11-23)과 견주어 깨지는 것이 셋 있다. `pack_new`의 입력 잘못이 P0에서 A0가 되었고, `pack_choices`의 `wellformed`가 `core_wellformed`가 되었고, `pack_run`의 `case`가 꼭 주는 항목이 아니게 되었다. 밖에서 쓰는 쪽이 아직 없어 판을 올리지 않았다. 밖에서 쓰기 시작하면 그때의 표면을 굳히고 그 뒤로는 판을 올린다 |

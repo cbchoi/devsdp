@@ -77,3 +77,18 @@ def test_every_reader_of_the_platform_goes_this_way(tmp_path):
     (tmp_path / "pack.yaml").write_text(BOMB, encoding="utf-8")
     with pytest.raises(pack.PackError, match="부풀린다"):
         pack.load(str(tmp_path))
+
+
+def test_the_same_key_twice_in_one_table_is_refused():
+    """YAML 은 같은 열쇠를 두 번 적어도 받고 뒤의 것만 남긴다. 손으로 고친 파일에 남은 줄이 말없이 값을 바꾼다."""
+    for text, word in (("a: 1\nb: 2\na: 3\n", "3번째 줄: 열쇠 a 를 같은 표에 두 번 적었다. 앞의 것은 1번째 줄에 있다"),
+                       ("x: {p: 1, q: 2, p: 3}\n", "열쇠 p 를 같은 표에 두 번"),
+                       ("choose:\n  - {at: A}\nset: []\nchoose:\n  - {at: B}\n", "4번째 줄: 열쇠 choose 를"),
+                       ("1: x\n1: y\n", "열쇠 1 를")):
+        with pytest.raises(safeyaml.YamlError, match=word) as e:
+            safeyaml.load_text(text)
+        assert "YAML 문법이 틀렸다" not in str(e.value)        # 문법은 맞다. 뜻이 정해지지 않을 뿐이다
+    # 다른 표의 같은 열쇠, 합치는 열쇠(<<), 글자와 수로 다른 열쇠는 받는다
+    assert safeyaml.load_text("- {a: 1}\n- {a: 2}\n") == [{"a": 1}, {"a": 2}]
+    assert safeyaml.load_text("a: &a {k: 1}\nb: {<<: *a, k: 2}\nc: {<<: *a}\n") == {"a": {"k": 1}, "b": {"k": 2}, "c": {"k": 1}}
+    assert safeyaml.load_text("'1': x\n1: y\n") == {"1": "x", 1: "y"}
