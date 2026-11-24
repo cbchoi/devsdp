@@ -981,3 +981,25 @@ def test_a_value_that_cannot_even_be_printed_does_not_break_the_check(line):
     assert all(isinstance(f.message, str) for f in report.findings) and "fast" in report.cases
     assert re.fullmatch(r"[0-9a-f]{16}", P.digest([(1.0, ("A",), "out", type("E", (), {"__str__": lambda s: 1 / 0})())]))
     assert P._shown_value(type("E", (), {"__repr__": lambda s: 1 / 0})()) == "(E)"
+
+
+def test_a_failed_write_of_the_records_keeps_the_old_ones(line, monkeypatch):
+    """기록은 옆에 적은 뒤 바꿔 놓는다. 바꿔 놓지 못하면 옛 기록이 그대로 남고 줄로 알린다."""
+    path = os.path.join(line, "records.yaml")
+    with open(path, encoding="utf-8") as f:
+        before = f.read()
+    edit(line, "line.ses.yaml", "service: {type: float, default: 1.0, doc: 작업 하나를 처리하는 시간}", "service: {type: float, default: 2.0}")
+    real = os.replace
+
+    def refuse(src, dst):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    report = P.check(line, record=True)
+    monkeypatch.setattr(os, "replace", real)
+    assert [(f.code, f.kind) for f in report.errors] == [("P6", "records_file")] and "적을 수 없다" in said(report, "P6")
+    with open(path, encoding="utf-8") as f:
+        assert f.read() == before                            # 옛 기록이 남았다
+    assert P.check(line, record=True).ok                     # 다시 적으면 된다
+    with open(path, encoding="utf-8") as f:
+        assert f.read() != before
