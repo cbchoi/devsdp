@@ -943,3 +943,21 @@ def test_a_wrong_decision_says_what_there_is(line, tmp_path):
     assert "Line/Workers: 남는 분해가 없다. multi-aspect pool 의 개수는 문서와 변수 값으로 [2] 인데 결정 at/Workers 는 [3] 를 남긴다" in text
     edit(root, "cases/pair.decisions.yaml", "count: 3}", "count: 9}")
     assert "남기려는 선택지가 대상에 없다: ['9']. 있는 것은 [1, 2, 3] 다" in said(P.check(root), "P4")
+
+
+def test_the_full_template_ignores_what_an_installation_leaves_beside_it(tmp_path, monkeypatch):
+    """꾸러미를 설치하면 뼈대의 model_base.py 가 번역되어 그 옆에 바이트코드 캐시가 생긴다. 뼈대를 읽을 때 그것을 글로
+    읽으려다 죽었다. 저장소에서 돌리는 시험에는 캐시가 없어 드러나지 않았고, 설치된 꾸러미를 쓰는 검사가 잡았다."""
+    installed = tmp_path / "templates" / "full"
+    shutil.copytree(P._FULL, str(installed))
+    cache = installed / "__pycache__"
+    cache.mkdir()
+    (cache / "model_base.cpython-311.pyc").write_bytes(b"\xa7\r\r\n\x00\x00\x00\x00binary")
+    (installed / "cases" / "__pycache__").mkdir()
+    (installed / "cases" / "__pycache__" / "x.pyc").write_bytes(b"\xf3\x00")
+    (installed / "notes.bin").write_bytes(b"\xff\xfe")
+    monkeypatch.setattr(P, "_FULL", str(installed))
+    root = str(tmp_path / "mylab")
+    written = P.scaffold(root, template="full")
+    assert len(written) == 10 and not os.path.exists(os.path.join(root, "__pycache__"))
+    assert not os.path.exists(os.path.join(root, "notes.bin")) and P.check(root, record=True).ok

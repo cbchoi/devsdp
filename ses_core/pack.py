@@ -1417,7 +1417,11 @@ def _template(kind: str, name: str) -> dict:
         return {relative.format(name=name): text.format(name=name) for relative, text in TEMPLATE.items()}
     out = {}
     for base, _, files in sorted(os.walk(_FULL)):
+        if "__pycache__" in base.split(os.sep):              # 설치하면 뼈대의 model_base.py 가 번역되어 캐시가 생긴다
+            continue
         for file in sorted(files):
+            if not file.endswith((".yaml", ".py")):          # 뼈대는 글 파일뿐이다. 그 밖의 것은 뼈대가 아니다
+                continue
             path = os.path.join(base, file)
             with open(path, encoding="utf-8") as f:
                 out[os.path.relpath(path, _FULL).replace("mylab", name)] = f.read().replace("mylab", name)
